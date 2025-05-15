@@ -1,0 +1,74 @@
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    environment {
+        CCACHE_PATH = "/home/administrator/.cache/ccache"
+    }
+
+    stages {
+        stage('Build AOSP') {
+            steps {
+                script {
+                    docker.image('aosp-builder').inside("-v ${CCACHE_PATH}:/ccache") {
+                        sshagent(['gerrit-ssh-maksonlee']) {
+                            sh '''#!/bin/bash
+                                mkdir -p ~/.ssh
+                                chmod 700 ~/.ssh
+                                ssh-keyscan -p 29418 -H gerrit.maksonlee.com >> ~/.ssh/known_hosts
+                                
+                                repo init -u ssh://maksonlee@gerrit.maksonlee.com:29418/platform/manifest -b android-15.0.0_r30
+                                repo sync -c -j1
+                                
+                                source build/envsetup.sh
+                                lunch aosp_arm64-trunk_staging-userdebug
+                                m
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Artifactory') {
+            steps {
+                script {
+                    def timestamp = new Date().format("yyyyMMdd.HHmmss", TimeZone.getTimeZone('UTC'))
+                    def buildNum = env.BUILD_NUMBER
+                    def fileItegRev = "${timestamp}-${buildNum}"
+                    def orgPath = "com/maksonlee"
+                    def module = "1234"
+                    def baseRev = "003-vanilla-continuous"
+                    def folderItegRev = "SNAPSHOT"
+                    def repo = "product-snapshots"
+
+                    def targetBasePath = "${repo}/${orgPath}/${module}/${baseRev}-${folderItegRev}"
+
+                    def spec = """{
+                        "files": [
+                            {
+                                "pattern": "out/target/product/generic_arm64/system.img",
+                                "target": "${targetBasePath}/${module}-${baseRev}-${fileItegRev}-system.img"
+                            },
+                            {
+                                "pattern": "out/target/product/generic_arm64/vbmeta.img",
+                                "target": "${targetBasePath}/${module}-${baseRev}-${fileItegRev}-vbmeta.img"
+                            },
+                            {
+                                "pattern": "out/target/product/generic_arm64/ramdisk.img",
+                                "target": "${targetBasePath}/${module}-${baseRev}-${fileItegRev}-ramdisk.img"
+                            }
+                        ]
+                    }"""
+
+                    echo "Uploading artifacts to: ${targetBasePath}"
+
+                    rtUpload(
+                            serverId: "artifactory",
+                            spec: spec,
+                            failNoOp: true
+                    )
+                }
+            }
+        }
+    }
+}
