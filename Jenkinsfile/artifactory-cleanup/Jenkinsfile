@@ -1,0 +1,25 @@
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    stages {
+        stage('Artifactory Cleanup') {
+            steps {
+                withVault([
+                    vaultSecrets: [[
+                        path: 'secret/jenkins/artifactory/maksonlee',
+                        engineVersion: 2,
+                        secretValues: [[envVar: 'ARTIFACTORY_PASSWORD', vaultKey: 'password']]
+                    ]]
+                ]) {
+                    sh '''#!/bin/bash
+echo "[INFO] Cleaning up old artifacts..."
+python3 pipeline-code/Jenkinsfile/artifactory-cleanup/cleanup_old_artifacts.py
+
+echo "[INFO] Cleaning up empty folders..."
+python3 pipeline-code/Jenkinsfile/artifactory-cleanup/cleanup_empty_folders.py
+'''
+                }
+            }
+        }
+    }
+}
