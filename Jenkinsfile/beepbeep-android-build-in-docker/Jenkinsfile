@@ -1,3 +1,4 @@
+@Library('jenkins-shared-lib') _
 pipeline {
     agent { label 'ssh-agent-with-docker' }
 
@@ -5,85 +6,44 @@ pipeline {
         stage('Fetch code') {
             steps {
                 deleteDir()
-                git changelog: false, credentialsId: 'vault-github-ssh', poll: false, url: 'git@github.com:maksonlee/beepbeep.git'
+                git changelog: false,
+                        credentialsId: 'vault-github-ssh',
+                        poll: false,
+                        url: 'git@github.com:maksonlee/beepbeep.git'
             }
         }
+
         stage('Build & Sign (AAB)') {
             steps {
                 script {
-                    def ws = pwd()
-                    docker.image('cdlee/android-build-env:latest').inside() {
-                        withVault([vaultSecrets: [[
-                                                          path        : 'secret/jenkins/mobile/app/com.maksonlee.beepbeep', engineVersion: 2,
-                                                          secretValues: [
-                                                                  [envVar: 'UPLOAD_JKS_B64', vaultKey: 'upload_jks_b64'],
-                                                                  [envVar: 'STORE_PASSWORD', vaultKey: 'store_password'],
-                                                                  [envVar: 'KEY_PASSWORD', vaultKey: 'key_password'],
-                                                                  [envVar: 'KEY_ALIAS', vaultKey: 'key_alias'],
-                                                          ]
-                                                  ],
-                                                  [
-                                                          path         : 'secret/jenkins/mobile/shared/play-service',
-                                                          engineVersion: 2,
-                                                          secretValues : [
-                                                                  [envVar: 'PLAY_SERVICE_JSON_B64', vaultKey: 'json_b64']
-                                                          ]
-                                                  ]
-                        ]]) {
-                            sh '''#!/bin/bash
-echo "$UPLOAD_JKS_B64" | base64 -d > /tmp/beepbeep-upload.jks
-
-./gradlew :app:bundleRelease \
-  -Psigning.storeFile=/tmp/beepbeep-upload.jks \
-  -Psigning.storePassword="$STORE_PASSWORD" \
-  -Psigning.keyAlias="$KEY_ALIAS" \
-  -Psigning.keyPassword="$KEY_PASSWORD"
-'''
-                            // keep artifacts for the next stage
-                            stash name: 'aab',
-                                    includes: 'app/build/outputs/bundle/release/*.aab, app/build/outputs/mapping/release/**'
-                        }
-                    }
+                    gradleRelease(':app:bundleRelease', [
+                            image            : 'cdlee/android-build-env:latest',
+                            keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.beepbeep',
+                            jksPath          : '/tmp/beepbeep-upload.jks'
+                    ])
+                    stash name: 'aab',
+                            includes: 'app/build/outputs/bundle/release/*.aab, app/build/outputs/mapping/release/**'
                 }
             }
         }
 
         stage('Approve publish?') {
-            when { expression { return true } } // remove if you want auto-publish
+            when { expression { true } } // remove if you want auto-publish
             steps { input message: 'Publish this build to Internal?' }
         }
 
         stage('Publish to Google Play (GPP)') {
             steps {
                 script {
-                    docker.image('cdlee/android-build-env:latest').inside() {
-                        withVault([vaultSecrets: [[
-                                                          path        : 'secret/jenkins/mobile/shared/play-service', engineVersion: 2,
-                                                          secretValues: [[envVar: 'PLAY_SERVICE_JSON_B64', vaultKey: 'json_b64']]
-                                                  ], [
-                                                          path        : 'secret/jenkins/mobile/app/com.maksonlee.beepbeep', engineVersion: 2,
-                                                          secretValues: [
-                                                                  [envVar: 'UPLOAD_JKS_B64', vaultKey: 'upload_jks_b64'],
-                                                                  [envVar: 'STORE_PASSWORD', vaultKey: 'store_password'],
-                                                                  [envVar: 'KEY_PASSWORD', vaultKey: 'key_password'],
-                                                                  [envVar: 'KEY_ALIAS', vaultKey: 'key_alias'],
-                                                          ]
-                                                  ]]]) {
-                            unstash 'aab'
-                            sh '''#!/bin/bash
-echo "$PLAY_SERVICE_JSON_B64" | base64 -d > /tmp/play-service.json
-echo "$UPLOAD_JKS_B64"       | base64 -d > /tmp/beepbeep-upload.jks
-
-./gradlew :app:publishReleaseBundle \
-  -Pplay.serviceAccountCredentials=/tmp/play-service.json \
-  -Ptrack=internal \
-  -Psigning.storeFile=/tmp/beepbeep-upload.jks \
-  -Psigning.storePassword="$STORE_PASSWORD" \
-  -Psigning.keyAlias="$KEY_ALIAS" \
-  -Psigning.keyPassword="$KEY_PASSWORD"
-'''
-                        }
-                    }
+                    unstash 'aab'
+                    gradleRelease(':app:publishReleaseBundle', [
+                            image               : 'cdlee/android-build-env:latest',
+                            keystoreVaultPath   : 'secret/jenkins/mobile/app/com.maksonlee.beepbeep',
+                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service',
+                            jksPath             : '/tmp/beepbeep-upload.jks',
+                            playJsonPath        : '/tmp/play-service.json',
+                            track               : 'internal'
+                    ])
                 }
             }
         }
