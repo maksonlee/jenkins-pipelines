@@ -1,0 +1,38 @@
+@Library('jenkins-shared-lib') _
+
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    triggers {
+        githubPush()
+    }
+
+    stages {
+        stage('Fetch code') {
+            steps {
+                deleteDir()
+                git credentialsId: 'vault-github-ssh', url: 'git@github.com:maksonlee/beepbeep.git'
+            }
+        }
+
+        stage('Build & Sign (AAB)') {
+            steps {
+                script {
+                    gradleRelease(':app:bundleRelease', [
+                            image            : 'cdlee/android-build-env:latest',
+                            keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.beepbeep',
+                            jksPath          : '/tmp/beepbeep-upload.jks'
+                    ])
+                    stash name: 'aab',
+                            includes: 'app/build/outputs/bundle/release/*.aab, app/build/outputs/mapping/release/**'
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}
