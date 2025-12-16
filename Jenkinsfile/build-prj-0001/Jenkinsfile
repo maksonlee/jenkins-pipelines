@@ -1,0 +1,65 @@
+pipeline {
+    agent {
+        label 'ssh-agent-with-docker'
+    }
+
+    environment {
+        CCACHE_PATH = "/home/administrator/.cache/ccache"
+        MIRROR_PATH = "/home/administrator/mirror"
+    }
+
+    triggers {
+        gerrit(
+                serverName: 'gerrit',
+                gerritProjects: [[
+                                         compareType: 'ANT', pattern: '**',
+                                         branches   : [[compareType: 'PLAIN', pattern: 'prj-0001-15-vanilla']]
+                                 ]],
+                triggerOnEvents: [
+                        patchsetCreated(excludeNoCodeChange: true, excludeWipState: true, excludeDrafts: true),
+                        wipStateChanged()
+                ]
+        )
+    }
+
+    stages {
+        stage('Clean Workspace') {
+            steps {
+                deleteDir()
+            }
+        }
+
+        stage('Build AOSP') {
+            steps {
+                script {
+                    docker.image('harbor.maksonlee.com/library/aosp-builder').inside("-v ${CCACHE_PATH}:/ccache -v ${MIRROR_PATH}:/mirror") {
+                        sshagent(['ssh-agent-jenkins']) {
+                            sh '''#!/bin/bash
+                            pwd
+                            mkdir -p ~/.ssh
+                            chmod 700 ~/.ssh
+                            ssh-keyscan -p 29418 -H gerrit.maksonlee.com >> ~/.ssh/known_hosts
+                          
+                            repo init -u ssh://jenkins@gerrit.maksonlee.com:29418/platform/manifest -b prj-0001-15-vanilla --reference=/mirror
+                            repo sync -c -j1
+                            
+                            p=$(repo list $GERRIT_PROJECT -p)
+                            cd $p
+                            git config --global user.email "jenkins@maksonlee.com"
+                            git config --global user.name "jenkins"
+                            git fetch ssh://jenkins@$GERRIT_HOST:29418/$GERRIT_PROJECT $GERRIT_REFSPEC
+                            git cherry-pick --allow-empty --no-edit --strategy=recursive --strategy-option=theirs FETCH_HEAD
+                            tail -n 10 init/init.cpp
+                            cd $WORKSPACE
+                            pwd
+                          
+                            source build/envsetup.sh
+                            lunch aosp_arm64-trunk_staging-userdebug
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

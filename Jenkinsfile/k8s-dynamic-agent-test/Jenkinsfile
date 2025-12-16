@@ -1,0 +1,19 @@
+pipeline {
+    agent { label 'k8s-agent' }
+
+    stages {
+        stage('Hello from Kubernetes') {
+            steps {
+                container('ubuntu') {
+                    sh '''
+                        echo "Hello from a dynamic Jenkins agent on the bare-metal HA cluster!"
+                        echo "Hostname:"
+                        hostname
+                        echo "Current directory:"
+                        pwd
+                    '''
+                }
+            }
+        }
+    }
+}
