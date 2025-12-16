@@ -13,10 +13,10 @@ pipeline {
                 ]) {
                     sh '''#!/bin/bash
 echo "[INFO] Cleaning up old artifacts..."
-python3 pipeline-code/Jenkinsfile/artifactory-cleanup/cleanup_old_artifacts.py
+python3 pipeline-code/Jenkinsfile/artifactory/artifactory-cleanup/cleanup_old_artifacts.py
 
 echo "[INFO] Cleaning up empty folders..."
-python3 pipeline-code/Jenkinsfile/artifactory-cleanup/cleanup_empty_folders.py
+python3 pipeline-code/Jenkinsfile/artifactory/artifactory-cleanup/cleanup_empty_folders.py
 '''
                 }
             }
