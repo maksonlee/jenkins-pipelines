@@ -28,6 +28,18 @@ pipeline {
                 }
             }
         }
+
+        stage('Upload to Artifactory') {
+            steps {
+                script {
+                    uploadAndroidSnapshotToArtifactory(
+                            repo: 'android-snapshots',
+                            orgPath: 'com/maksonlee',
+                            module: 'beepbeep'
+                    )
+                }
+            }
+        }
     }
 
     post {
