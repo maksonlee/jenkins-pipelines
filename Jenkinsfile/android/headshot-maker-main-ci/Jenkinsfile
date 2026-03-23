@@ -1,0 +1,49 @@
+@Library('jenkins-shared-lib') _
+
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    triggers {
+        githubPush()
+    }
+
+    stages {
+        stage('Fetch code') {
+            steps {
+                deleteDir()
+                git credentialsId: 'vault-github-ssh', url: 'git@github.com:maksonlee/headshot-maker-android.git', branch: 'main'            }
+        }
+
+        stage('Build & Sign (AAB)') {
+            steps {
+                script {
+                    gradleRelease(':app:bundleRelease', [
+                            image            : 'cdlee/android-build-env:latest',
+                            keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.headshotmaker',
+                            jksPath          : '/tmp/headshot-maker-upload.jks'
+                    ])
+                    stash name: 'aab',
+                            includes: 'app/build/outputs/bundle/release/*.aab, app/build/outputs/mapping/release/**'
+                }
+            }
+        }
+
+        stage('Upload to Artifactory') {
+            steps {
+                script {
+                    uploadAndroidSnapshotToArtifactory(
+                            repo: 'android-snapshots',
+                            orgPath: 'com/maksonlee',
+                            module: 'headshotmaker'
+                    )
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}
