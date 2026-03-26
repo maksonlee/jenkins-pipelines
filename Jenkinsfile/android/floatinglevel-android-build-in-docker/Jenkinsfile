@@ -1,0 +1,57 @@
+@Library('jenkins-shared-lib') _
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    stages {
+        stage('Fetch code') {
+            steps {
+                deleteDir()
+                git changelog: false,
+                        credentialsId: 'vault-github-ssh',
+                        poll: false,
+                        url: 'git@github.com:maksonlee/float-level.git', branch: 'main'
+            }
+        }
+
+        stage('Build & Sign (AAB)') {
+            steps {
+                script {
+                    gradleRelease(':app:bundleRelease', [
+                            image            : 'cdlee/android-build-env:latest',
+                            keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.floatinglevel',
+                            jksPath          : '/tmp/floatinglevel-upload.jks'
+                    ])
+                    stash name: 'aab',
+                            includes: 'app/build/outputs/bundle/release/*.aab, app/build/outputs/mapping/release/**'
+                }
+            }
+        }
+
+        stage('Approve publish?') {
+            when { expression { true } } // remove if you want auto-publish
+            steps { input message: 'Publish this build to Internal?' }
+        }
+
+        stage('Publish to Google Play (GPP)') {
+            steps {
+                script {
+                    unstash 'aab'
+                    gradleRelease(':app:publishReleaseBundle', [
+                            image               : 'cdlee/android-build-env:latest',
+                            keystoreVaultPath   : 'secret/jenkins/mobile/app/com.maksonlee.floatinglevel',
+                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service',
+                            jksPath             : '/tmp/floatinglevel-upload.jks',
+                            playJsonPath        : '/tmp/play-service.json',
+                            track               : 'internal'
+                    ])
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}
