@@ -13,43 +13,15 @@ pipeline {
         stage('Resolve project') {
             steps {
                 script {
-                    def projects = [
-                        'taiwan-bus-app': [
-                            branch: 'main',
-                            credentialsId: 'vault-github-ssh',
-                            image: 'harbor.maksonlee.com/library/flutter-android-build-env:3.44.0',
-                            artifactoryRepo: 'android-snapshots',
-                            orgPath: 'com/maksonlee',
-                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service'
-                        ],
-                        'classic-calculator': [
-                            branch: 'main',
-                            credentialsId: 'vault-github-ssh',
-                            image: 'harbor.maksonlee.com/library/flutter-android-build-env:3.44.0',
-                            artifactoryRepo: 'android-snapshots',
-                            orgPath: 'com/maksonlee',
-                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service'
-                        ],
-                        'kids-calculator': [
-                            branch: 'main',
-                            credentialsId: 'vault-github-ssh',
-                            image: 'harbor.maksonlee.com/library/flutter-android-build-env:3.44.0',
-                            artifactoryRepo: 'android-snapshots',
-                            orgPath: 'com/maksonlee',
-                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service'
-                        ]
-                    ]
-                    if (!projects.containsKey(params.PROJECT)) error "Unknown PROJECT: ${params.PROJECT}"
-                    def project = projects[params.PROJECT]
                     env.PROJECT_REPO = "git@github.com:maksonlee/${params.PROJECT}.git"
-                    env.PROJECT_BRANCH = params.BRANCH?.trim() ? params.BRANCH.trim() : project.branch
-                    env.PROJECT_CREDENTIALS_ID = project.credentialsId
-                    env.FLUTTER_IMAGE = project.image
+                    env.PROJECT_BRANCH = params.BRANCH?.trim() ? params.BRANCH.trim() : 'main'
+                    env.PROJECT_CREDENTIALS_ID = 'vault-github-ssh'
+                    env.FLUTTER_IMAGE = 'harbor.maksonlee.com/library/flutter-android-build-env:3.44.0'
                     env.FLUTTER_CACHE_ROOT = "/home/administrator/jenkins/flutter-cache/${params.PROJECT}"
-                    env.ARTIFACTORY_REPO = project.artifactoryRepo
-                    env.ARTIFACTORY_ORG_PATH = project.orgPath
+                    env.ARTIFACTORY_REPO = 'android-snapshots'
+                    env.ARTIFACTORY_ORG_PATH = 'com/maksonlee'
                     env.ARTIFACTORY_MODULE = params.PROJECT
-                    env.PLAY_SERVICE_VAULT_PATH = project.playServiceVaultPath
+                    env.PLAY_SERVICE_VAULT_PATH = 'secret/jenkins/mobile/shared/play-service'
                 }
             }
         }
