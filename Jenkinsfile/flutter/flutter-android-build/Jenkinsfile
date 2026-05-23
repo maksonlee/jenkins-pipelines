@@ -160,7 +160,8 @@ uid=$(id -u)
 gid=$(id -g)
 cache_root="${FLUTTER_CACHE_ROOT}"
 android_cache="${cache_root}/android-sdk"
-mkdir -p "${android_cache}" "${cache_root}/gradle" "${cache_root}/pub-cache"
+flutter_bin_cache="${cache_root}/flutter-bin-cache"
+mkdir -p "${android_cache}" "${cache_root}/gradle" "${cache_root}/pub-cache" "${flutter_bin_cache}"
 
 if [ ! -d "${android_cache}/cmdline-tools/latest" ]; then
   echo "Seeding Android command-line tools into ${android_cache}"
@@ -190,6 +191,7 @@ docker run --rm \
   -e ANDROID_SDK_ROOT=/home/ubuntu/Android \
   -e PUB_CACHE=/home/ubuntu/.pub-cache \
   -v "${android_cache}:/home/ubuntu/Android" \
+  -v "${flutter_bin_cache}:/home/ubuntu/flutter/bin/cache" \
   -v "${cache_root}/gradle:/home/ubuntu/.gradle" \
   -v "${cache_root}/pub-cache:/home/ubuntu/.pub-cache" \
   -v "$PWD/source:/workspace" \
