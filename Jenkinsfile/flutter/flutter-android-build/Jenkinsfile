@@ -15,46 +15,28 @@ pipeline {
                 script {
                     def projects = [
                         'taiwan-bus-app': [
-                            repo: 'git@github.com:maksonlee/taiwan-bus-app.git',
                             branch: 'main',
                             credentialsId: 'vault-github-ssh',
-                            workDir: 'mobile',
                             image: 'harbor.maksonlee.com/library/flutter-android-build-env:3.44.0',
                             artifactoryRepo: 'android-snapshots',
                             orgPath: 'com/maksonlee',
-                            module: 'taiwan-bus-app',
-                            versionFile: 'mobile/pubspec.yaml',
-                            keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.taipeiareabus',
-                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service',
-                            packageName: 'com.maksonlee.taipeiareabus'
+                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service'
                         ],
                         'classic-calculator': [
-                            repo: 'git@github.com:maksonlee/classic-calculator.git',
                             branch: 'main',
                             credentialsId: 'vault-github-ssh',
-                            workDir: '.',
                             image: 'harbor.maksonlee.com/library/flutter-android-build-env:3.44.0',
                             artifactoryRepo: 'android-snapshots',
                             orgPath: 'com/maksonlee',
-                            module: 'classic-calculator',
-                            versionFile: 'pubspec.yaml',
-                            keystoreVaultPath: '',
-                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service',
-                            packageName: 'com.maksonlee.classiccalculator'
+                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service'
                         ],
                         'kids-calculator': [
-                            repo: 'git@github.com:maksonlee/kids-calculator.git',
                             branch: 'main',
                             credentialsId: 'vault-github-ssh',
-                            workDir: '.',
                             image: 'harbor.maksonlee.com/library/flutter-android-build-env:3.44.0',
                             artifactoryRepo: 'android-snapshots',
                             orgPath: 'com/maksonlee',
-                            module: 'kids-calculator',
-                            versionFile: 'pubspec.yaml',
-                            keystoreVaultPath: '',
-                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service',
-                            packageName: 'com.maksonlee.kids_calculator'
+                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service'
                         ]
                     ]
                     if (!projects.containsKey(params.PROJECT)) error "Unknown PROJECT: ${params.PROJECT}"
@@ -62,16 +44,12 @@ pipeline {
                     env.PROJECT_REPO = "git@github.com:maksonlee/${params.PROJECT}.git"
                     env.PROJECT_BRANCH = params.BRANCH?.trim() ? params.BRANCH.trim() : project.branch
                     env.PROJECT_CREDENTIALS_ID = project.credentialsId
-                    env.PROJECT_WORKDIR = project.workDir
                     env.FLUTTER_IMAGE = project.image
                     env.FLUTTER_CACHE_ROOT = "/home/administrator/jenkins/flutter-cache/${params.PROJECT}"
                     env.ARTIFACTORY_REPO = project.artifactoryRepo
                     env.ARTIFACTORY_ORG_PATH = project.orgPath
                     env.ARTIFACTORY_MODULE = params.PROJECT
-                    env.PROJECT_VERSION_FILE = project.versionFile
-                    env.KEYSTORE_VAULT_PATH = project.keystoreVaultPath
                     env.PLAY_SERVICE_VAULT_PATH = project.playServiceVaultPath
-                    env.PLAY_PACKAGE_NAME = project.packageName
                 }
             }
         }
