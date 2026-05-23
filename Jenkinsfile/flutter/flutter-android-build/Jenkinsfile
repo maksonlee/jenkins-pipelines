@@ -2,6 +2,21 @@
 pipeline {
     agent { label 'ssh-agent-with-docker' }
     options { timestamps() }
+    triggers {
+        GenericTrigger(
+            genericVariables: [
+                [key: 'WEBHOOK_PROJECT', value: '$.repository.name'],
+                [key: 'WEBHOOK_REF', value: '$.ref']
+            ],
+            causeString: 'GitHub push: $WEBHOOK_PROJECT $WEBHOOK_REF',
+            token: 'flutter-android-build',
+            printContributedVariables: false,
+            printPostContent: false,
+            silentResponse: false,
+            regexpFilterText: '$WEBHOOK_REF',
+            regexpFilterExpression: '^refs/heads/main$'
+        )
+    }
     parameters {
         string(name: 'PROJECT', defaultValue: 'taiwan-bus-app', description: 'GitHub repository slug to build')
         string(name: 'BRANCH', defaultValue: '', description: 'Git branch. Empty uses the project default branch.')
@@ -14,14 +29,19 @@ pipeline {
         stage('Resolve project') {
             steps {
                 script {
-                    env.PROJECT_REPO = "git@github.com:maksonlee/${params.PROJECT}.git"
-                    env.PROJECT_BRANCH = params.BRANCH?.trim() ? params.BRANCH.trim() : 'main'
+                    def projectSlug = env.WEBHOOK_PROJECT?.trim() ?: params.PROJECT?.trim()
+                    if (!projectSlug) {
+                        error 'PROJECT is required'
+                    }
+                    def webhookBranch = env.WEBHOOK_REF?.trim()?.replaceFirst('^refs/heads/', '')
+                    env.PROJECT_REPO = "git@github.com:maksonlee/${projectSlug}.git"
+                    env.PROJECT_BRANCH = params.BRANCH?.trim() ?: webhookBranch ?: 'main'
                     env.PROJECT_CREDENTIALS_ID = 'vault-github-ssh'
                     env.FLUTTER_IMAGE = 'harbor.maksonlee.com/library/flutter-android-build-env:3.44.0'
-                    env.FLUTTER_CACHE_ROOT = "/home/administrator/jenkins/flutter-cache/${params.PROJECT}"
+                    env.FLUTTER_CACHE_ROOT = "/home/administrator/jenkins/flutter-cache/${projectSlug}"
                     env.ARTIFACTORY_REPO = 'android-snapshots'
                     env.ARTIFACTORY_ORG_PATH = 'com/maksonlee'
-                    env.ARTIFACTORY_MODULE = params.PROJECT
+                    env.ARTIFACTORY_MODULE = projectSlug
                     env.PLAY_SERVICE_VAULT_PATH = 'secret/jenkins/mobile/shared/play-service'
                 }
             }
