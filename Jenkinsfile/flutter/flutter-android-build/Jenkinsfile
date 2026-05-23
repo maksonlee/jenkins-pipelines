@@ -2,7 +2,7 @@ pipeline {
     agent { label 'ssh-agent-with-docker' }
     options { timestamps() }
     parameters {
-        choice(name: 'PROJECT', choices: ['taiwan-bus-app', 'classic-calculator', 'kids-calculator'], description: 'Flutter project to build')
+        string(name: 'PROJECT', defaultValue: 'taiwan-bus-app', description: 'GitHub repository slug to build')
         string(name: 'BRANCH', defaultValue: '', description: 'Git branch. Empty uses the project default branch.')
         choice(name: 'BUILD_TARGET', choices: ['appbundle-debug', 'appbundle-release', 'apk-debug', 'apk-release'], description: 'Flutter Android build target')
         booleanParam(name: 'PUBLISH_TO_PLAY', defaultValue: false, description: 'Upload release AAB to Google Play')
