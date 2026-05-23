@@ -1,3 +1,4 @@
+@Library('jenkins-shared-lib') _
 pipeline {
     agent { label 'ssh-agent-with-docker' }
     options { timestamps() }
@@ -47,15 +48,9 @@ docker image inspect "${FLUTTER_IMAGE}" --format 'IMAGE_ID={{.Id}}'
         stage('Resolve Flutter workdir') {
             steps {
                 script {
-                    if (fileExists('source/pubspec.yaml')) {
-                        env.PROJECT_WORKDIR = '.'
-                        env.PROJECT_VERSION_FILE = 'pubspec.yaml'
-                    } else if (fileExists('source/mobile/pubspec.yaml')) {
-                        env.PROJECT_WORKDIR = 'mobile'
-                        env.PROJECT_VERSION_FILE = 'mobile/pubspec.yaml'
-                    } else {
-                        error "Cannot find Flutter pubspec.yaml in source/ or source/mobile/ for PROJECT=${params.PROJECT}"
-                    }
+                    def flutterProject = resolveFlutterWorkdir(sourceDir: 'source')
+                    env.PROJECT_WORKDIR = flutterProject.workDir
+                    env.PROJECT_VERSION_FILE = flutterProject.versionFile
                     echo "Flutter workdir: ${env.PROJECT_WORKDIR}"
                     echo "Version file: ${env.PROJECT_VERSION_FILE}"
                 }
@@ -64,31 +59,14 @@ docker image inspect "${FLUTTER_IMAGE}" --format 'IMAGE_ID={{.Id}}'
         stage('Resolve Android applicationId') {
             steps {
                 script {
-                    def flutterRoot = env.PROJECT_WORKDIR == '.' ? 'source' : "source/${env.PROJECT_WORKDIR}"
-                    def candidates = [
-                        "${flutterRoot}/android/app/build.gradle",
-                        "${flutterRoot}/android/app/build.gradle.kts"
-                    ]
-                    def applicationId = null
-                    def applicationIdFile = null
-                    for (candidate in candidates) {
-                        if (fileExists(candidate)) {
-                            def gradleText = readFile(candidate)
-                            def matcher = gradleText =~ /(?m)^\s*applicationId\s*(?:=)?\s*["']([^"']+)["']/
-                            if (matcher.find()) {
-                                applicationId = matcher.group(1)
-                                applicationIdFile = candidate
-                                break
-                            }
-                        }
-                    }
-                    if (!applicationId) {
-                        error "Cannot find Android applicationId in ${candidates.join(', ')}"
-                    }
-                    env.PLAY_PACKAGE_NAME = applicationId
-                    env.KEYSTORE_VAULT_PATH = "secret/jenkins/mobile/app/${applicationId}"
+                    def androidApp = resolveAndroidApplicationId(
+                        sourceDir: 'source',
+                        workDir: env.PROJECT_WORKDIR
+                    )
+                    env.PLAY_PACKAGE_NAME = androidApp.playPackageName
+                    env.KEYSTORE_VAULT_PATH = androidApp.keystoreVaultPath
                     echo "Android applicationId: ${env.PLAY_PACKAGE_NAME}"
-                    echo "applicationId file: ${applicationIdFile}"
+                    echo "applicationId file: ${androidApp.applicationIdFile}"
                     echo "Keystore Vault path: ${env.KEYSTORE_VAULT_PATH}"
                 }
             }
