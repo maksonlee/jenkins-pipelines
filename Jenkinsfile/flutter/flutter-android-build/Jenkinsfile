@@ -1,0 +1,428 @@
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+    options { timestamps() }
+    parameters {
+        choice(name: 'PROJECT', choices: ['taiwan-bus-app', 'classic-calculator', 'kids-calculator'], description: 'Flutter project to build')
+        string(name: 'BRANCH', defaultValue: '', description: 'Git branch. Empty uses the project default branch.')
+        choice(name: 'BUILD_TARGET', choices: ['appbundle-debug', 'appbundle-release', 'apk-debug', 'apk-release'], description: 'Flutter Android build target')
+        booleanParam(name: 'PUBLISH_TO_PLAY', defaultValue: false, description: 'Upload release AAB to Google Play')
+        choice(name: 'PLAY_TRACK', choices: ['internal', 'closed', 'open', 'production'], description: 'Google Play release track')
+        choice(name: 'PLAY_RELEASE_STATUS', choices: ['draft', 'completed'], description: 'Google Play release status')
+    }
+    stages {
+        stage('Resolve project') {
+            steps {
+                script {
+                    def projects = [
+                        'taiwan-bus-app': [
+                            repo: 'git@github.com:maksonlee/taiwan-bus-app.git',
+                            branch: 'main',
+                            credentialsId: 'vault-github-ssh',
+                            workDir: 'mobile',
+                            image: 'harbor.maksonlee.com/library/flutter-android-build-env:3.44.0',
+                            artifactoryRepo: 'android-snapshots',
+                            orgPath: 'com/maksonlee',
+                            module: 'taiwan-bus-app',
+                            versionFile: 'mobile/pubspec.yaml',
+                            keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.taipeiareabus',
+                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service',
+                            packageName: 'com.maksonlee.taipeiareabus'
+                        ],
+                        'classic-calculator': [
+                            repo: 'git@github.com:maksonlee/classic-calculator.git',
+                            branch: 'main',
+                            credentialsId: 'vault-github-ssh',
+                            workDir: '.',
+                            image: 'harbor.maksonlee.com/library/flutter-android-build-env:3.44.0',
+                            artifactoryRepo: 'android-snapshots',
+                            orgPath: 'com/maksonlee',
+                            module: 'classic-calculator',
+                            versionFile: 'pubspec.yaml',
+                            keystoreVaultPath: '',
+                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service',
+                            packageName: 'com.maksonlee.classiccalculator'
+                        ],
+                        'kids-calculator': [
+                            repo: 'git@github.com:maksonlee/kids-calculator.git',
+                            branch: 'main',
+                            credentialsId: 'vault-github-ssh',
+                            workDir: '.',
+                            image: 'harbor.maksonlee.com/library/flutter-android-build-env:3.44.0',
+                            artifactoryRepo: 'android-snapshots',
+                            orgPath: 'com/maksonlee',
+                            module: 'kids-calculator',
+                            versionFile: 'pubspec.yaml',
+                            keystoreVaultPath: '',
+                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service',
+                            packageName: 'com.maksonlee.kids_calculator'
+                        ]
+                    ]
+                    if (!projects.containsKey(params.PROJECT)) error "Unknown PROJECT: ${params.PROJECT}"
+                    def project = projects[params.PROJECT]
+                    env.PROJECT_REPO = "git@github.com:maksonlee/${params.PROJECT}.git"
+                    env.PROJECT_BRANCH = params.BRANCH?.trim() ? params.BRANCH.trim() : project.branch
+                    env.PROJECT_CREDENTIALS_ID = project.credentialsId
+                    env.PROJECT_WORKDIR = project.workDir
+                    env.FLUTTER_IMAGE = project.image
+                    env.FLUTTER_CACHE_ROOT = "/home/administrator/jenkins/flutter-cache/${params.PROJECT}"
+                    env.ARTIFACTORY_REPO = project.artifactoryRepo
+                    env.ARTIFACTORY_ORG_PATH = project.orgPath
+                    env.ARTIFACTORY_MODULE = params.PROJECT
+                    env.PROJECT_VERSION_FILE = project.versionFile
+                    env.KEYSTORE_VAULT_PATH = project.keystoreVaultPath
+                    env.PLAY_SERVICE_VAULT_PATH = project.playServiceVaultPath
+                    env.PLAY_PACKAGE_NAME = project.packageName
+                }
+            }
+        }
+        stage('Fetch image') {
+            steps {
+                sh '''#!/bin/bash
+set -euo pipefail
+docker pull "${FLUTTER_IMAGE}"
+docker image inspect "${FLUTTER_IMAGE}" --format 'IMAGE_ID={{.Id}}'
+'''
+            }
+        }
+        stage('Fetch code') {
+            steps {
+                deleteDir()
+                dir('source') {
+                    git branch: env.PROJECT_BRANCH,
+                        credentialsId: env.PROJECT_CREDENTIALS_ID,
+                        url: env.PROJECT_REPO
+                }
+            }
+        }
+        stage('Resolve Flutter workdir') {
+            steps {
+                script {
+                    if (fileExists('source/pubspec.yaml')) {
+                        env.PROJECT_WORKDIR = '.'
+                        env.PROJECT_VERSION_FILE = 'pubspec.yaml'
+                    } else if (fileExists('source/mobile/pubspec.yaml')) {
+                        env.PROJECT_WORKDIR = 'mobile'
+                        env.PROJECT_VERSION_FILE = 'mobile/pubspec.yaml'
+                    } else {
+                        error "Cannot find Flutter pubspec.yaml in source/ or source/mobile/ for PROJECT=${params.PROJECT}"
+                    }
+                    echo "Flutter workdir: ${env.PROJECT_WORKDIR}"
+                    echo "Version file: ${env.PROJECT_VERSION_FILE}"
+                }
+            }
+        }
+        stage('Resolve Android applicationId') {
+            steps {
+                script {
+                    def flutterRoot = env.PROJECT_WORKDIR == '.' ? 'source' : "source/${env.PROJECT_WORKDIR}"
+                    def candidates = [
+                        "${flutterRoot}/android/app/build.gradle",
+                        "${flutterRoot}/android/app/build.gradle.kts"
+                    ]
+                    def applicationId = null
+                    def applicationIdFile = null
+                    for (candidate in candidates) {
+                        if (fileExists(candidate)) {
+                            def gradleText = readFile(candidate)
+                            def matcher = gradleText =~ /(?m)^\s*applicationId\s*(?:=)?\s*["']([^"']+)["']/
+                            if (matcher.find()) {
+                                applicationId = matcher.group(1)
+                                applicationIdFile = candidate
+                                break
+                            }
+                        }
+                    }
+                    if (!applicationId) {
+                        error "Cannot find Android applicationId in ${candidates.join(', ')}"
+                    }
+                    env.PLAY_PACKAGE_NAME = applicationId
+                    env.KEYSTORE_VAULT_PATH = "secret/jenkins/mobile/app/${applicationId}"
+                    echo "Android applicationId: ${env.PLAY_PACKAGE_NAME}"
+                    echo "applicationId file: ${applicationIdFile}"
+                    echo "Keystore Vault path: ${env.KEYSTORE_VAULT_PATH}"
+                }
+            }
+        }
+        stage('Prepare release signing') {
+            when {
+                expression { params.BUILD_TARGET.contains('release') }
+            }
+            steps {
+                script {
+                    if (!env.KEYSTORE_VAULT_PATH) {
+                        error "No keystoreVaultPath configured for PROJECT=${params.PROJECT}"
+                    }
+                    withVault([vaultSecrets: [[
+                        path: env.KEYSTORE_VAULT_PATH,
+                        engineVersion: 2,
+                        secretValues: [
+                            [envVar: 'UPLOAD_JKS_B64', vaultKey: 'upload_jks_b64'],
+                            [envVar: 'STORE_PASSWORD', vaultKey: 'store_password'],
+                            [envVar: 'KEY_PASSWORD', vaultKey: 'key_password'],
+                            [envVar: 'KEY_ALIAS', vaultKey: 'key_alias']
+                        ]
+                    ]]]) {
+                        sh '''#!/bin/bash
+set -euo pipefail
+umask 077
+signing_dir="source/${PROJECT_WORKDIR}/android"
+mkdir -p "${signing_dir}"
+: "${UPLOAD_JKS_B64:?ERROR: UPLOAD_JKS_B64 is empty or unset}"
+: "${STORE_PASSWORD:?ERROR: STORE_PASSWORD is empty or unset}"
+: "${KEY_PASSWORD:?ERROR: KEY_PASSWORD is empty or unset}"
+: "${KEY_ALIAS:?ERROR: KEY_ALIAS is empty or unset}"
+printf %s "${UPLOAD_JKS_B64}" | sed 's/^data:[^,]*,//' | tr -d '\r\n ' | base64 -d > "${signing_dir}/upload-keystore.jks"
+chmod 600 "${signing_dir}/upload-keystore.jks"
+cat > "${signing_dir}/key.properties" <<EOF
+storePassword=${STORE_PASSWORD}
+keyPassword=${KEY_PASSWORD}
+keyAlias=${KEY_ALIAS}
+storeFile=upload-keystore.jks
+EOF
+chmod 600 "${signing_dir}/key.properties"
+echo "Release signing files prepared. JKS bytes: $(wc -c < "${signing_dir}/upload-keystore.jks")"
+'''
+                    }
+                }
+            }
+        }
+        stage('Build') {
+            steps {
+                script {
+                    def commandByTarget = [
+                        'appbundle-debug': 'flutter pub get && flutter build appbundle --debug',
+                        'appbundle-release': 'flutter pub get && flutter build appbundle --release',
+                        'apk-debug': 'flutter pub get && flutter build apk --debug',
+                        'apk-release': 'flutter pub get && flutter build apk --release'
+                    ]
+                    def artifactBase = env.PROJECT_WORKDIR == '.' ? 'source' : 'source/' + env.PROJECT_WORKDIR
+                    def artifactByTarget = [
+                        'appbundle-debug': artifactBase + '/build/app/outputs/bundle/debug/*.aab',
+                        'appbundle-release': artifactBase + '/build/app/outputs/bundle/release/*.aab',
+                        'apk-debug': artifactBase + '/build/app/outputs/flutter-apk/*.apk',
+                        'apk-release': artifactBase + '/build/app/outputs/flutter-apk/*.apk'
+                    ]
+                    env.FLUTTER_BUILD_COMMAND = commandByTarget[params.BUILD_TARGET]
+                    env.FLUTTER_ARTIFACTS = artifactByTarget[params.BUILD_TARGET]
+                    if (!env.FLUTTER_BUILD_COMMAND) error "Unknown BUILD_TARGET: ${params.BUILD_TARGET}"
+                }
+                sh '''#!/bin/bash
+set -euo pipefail
+uid=$(id -u)
+gid=$(id -g)
+cache_root="${FLUTTER_CACHE_ROOT}"
+android_cache="${cache_root}/android-sdk"
+mkdir -p "${android_cache}" "${cache_root}/gradle" "${cache_root}/pub-cache"
+
+if [ ! -d "${android_cache}/cmdline-tools/latest" ]; then
+  echo "Seeding Android command-line tools into ${android_cache}"
+  seed_container=$(docker create "${FLUTTER_IMAGE}")
+  trap 'docker rm -f "${seed_container}" >/dev/null 2>&1 || true' EXIT
+  docker cp "${seed_container}:/home/ubuntu/Android/cmdline-tools" "${android_cache}/"
+  docker rm "${seed_container}" >/dev/null
+  trap - EXIT
+fi
+
+mkdir -p \
+  "${android_cache}/platforms" \
+  "${android_cache}/build-tools" \
+  "${android_cache}/platform-tools" \
+  "${android_cache}/ndk" \
+  "${android_cache}/cmake" \
+  "${android_cache}/licenses"
+
+echo "CACHE_ROOT=${cache_root}"
+echo "CACHE_SIZE_BEFORE=$(du -sh "${cache_root}" 2>/dev/null | cut -f1)"
+start=$(date +%s)
+
+docker run --rm \
+  -u ${uid}:${gid} \
+  -e HOME=/home/ubuntu \
+  -e ANDROID_HOME=/home/ubuntu/Android \
+  -e ANDROID_SDK_ROOT=/home/ubuntu/Android \
+  -e PUB_CACHE=/home/ubuntu/.pub-cache \
+  -v "${android_cache}:/home/ubuntu/Android" \
+  -v "${cache_root}/gradle:/home/ubuntu/.gradle" \
+  -v "${cache_root}/pub-cache:/home/ubuntu/.pub-cache" \
+  -v "$PWD/source:/workspace" \
+  -w "/workspace/${PROJECT_WORKDIR}" \
+  "${FLUTTER_IMAGE}" \
+  bash -lc "yes | sdkmanager --licenses && ${FLUTTER_BUILD_COMMAND}"
+
+end=$(date +%s)
+echo "TOTAL_SECONDS=$((end-start))"
+echo "CACHE_SIZE_AFTER=$(du -sh "${cache_root}" 2>/dev/null | cut -f1)"
+for d in "${cache_root}"/*; do
+  if [ -d "$d" ]; then du -sh "$d"; fi
+done | sort -h || true
+ls -lh ${FLUTTER_ARTIFACTS}
+'''
+            }
+        }
+        stage('Archive artifacts') {
+            steps {
+                archiveArtifacts artifacts: env.FLUTTER_ARTIFACTS, fingerprint: true
+            }
+        }
+        stage('Upload to Artifactory') {
+            steps {
+                script {
+                    def versionText = readFile("source/${env.PROJECT_VERSION_FILE}")
+                    def baseRev = null
+                    versionText.readLines().each { line ->
+                        def trimmed = line.trim()
+                        if (baseRev == null && trimmed.startsWith('version:')) {
+                            baseRev = trimmed.substring('version:'.length()).trim().split('\\+')[0]
+                        }
+                    }
+                    if (!baseRev) {
+                        error "Cannot find version in source/${env.PROJECT_VERSION_FILE}"
+                    }
+
+                    def extByTarget = [
+                        'appbundle-debug': 'aab',
+                        'appbundle-release': 'aab',
+                        'apk-debug': 'apk',
+                        'apk-release': 'apk'
+                    ]
+                    def ext = extByTarget[params.BUILD_TARGET]
+                    if (!ext) error "Unknown BUILD_TARGET: ${params.BUILD_TARGET}"
+
+                    def timestamp = new Date().format('yyyyMMdd.HHmmss', TimeZone.getTimeZone('UTC'))
+                    def fileItegRev = "${timestamp}-${env.BUILD_NUMBER}"
+                    def targetBase = "${env.ARTIFACTORY_REPO}/${env.ARTIFACTORY_ORG_PATH}/${env.ARTIFACTORY_MODULE}/${baseRev}-SNAPSHOT"
+                    def targetFile = "${env.ARTIFACTORY_MODULE}-${baseRev}-${fileItegRev}.${ext}"
+                    def spec = """{
+  "files": [
+    {
+      "pattern": "${env.FLUTTER_ARTIFACTS}",
+      "target": "${targetBase}/${targetFile}",
+      "flat": true
+    }
+  ]
+}"""
+
+                    echo "Uploading artifacts to: ${targetBase}"
+                    echo "Artifactory file: ${targetFile}"
+                    rtUpload(serverId: 'artifactory', spec: spec, failNoOp: true)
+                }
+            }
+        }
+        stage('Upload to Google Play') {
+            when {
+                expression { params.PUBLISH_TO_PLAY && params.BUILD_TARGET == 'appbundle-release' }
+            }
+            steps {
+                script {
+                    if (!env.PLAY_SERVICE_VAULT_PATH) {
+                        error "No playServiceVaultPath configured for PROJECT=${params.PROJECT}"
+                    }
+                    if (!env.PLAY_PACKAGE_NAME) {
+                        error "No packageName configured for PROJECT=${params.PROJECT}"
+                    }
+                    withVault([vaultSecrets: [[
+                        path: env.PLAY_SERVICE_VAULT_PATH,
+                        engineVersion: 2,
+                        secretValues: [[envVar: 'PLAY_SERVICE_JSON_B64', vaultKey: 'json_b64']]
+                    ]]]) {
+                        sh '''#!/bin/bash
+set -euo pipefail
+umask 077
+: "${PLAY_SERVICE_JSON_B64:?ERROR: PLAY_SERVICE_JSON_B64 is empty or unset}"
+play_json="$PWD/play-service.json"
+aab_path=$(ls ${FLUTTER_ARTIFACTS} | head -n 1)
+printf %s "${PLAY_SERVICE_JSON_B64}" | sed 's/^data:[^,]*,//' | tr -d '\r\n ' | base64 -d > "$play_json"
+python3 - "$play_json" "$aab_path" "$PLAY_PACKAGE_NAME" "$PLAY_TRACK" "$PLAY_RELEASE_STATUS" <<'PY'
+import base64
+import json
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+service_json, aab_path, package_name, track, release_status = sys.argv[1:]
+with open(service_json, 'r', encoding='utf-8') as f:
+    svc = json.load(f)
+
+def b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b'=').decode('ascii')
+
+now = int(time.time())
+header = {'alg': 'RS256', 'typ': 'JWT'}
+payload = {
+    'iss': svc['client_email'],
+    'scope': 'https://www.googleapis.com/auth/androidpublisher',
+    'aud': 'https://oauth2.googleapis.com/token',
+    'iat': now,
+    'exp': now + 3600,
+}
+signing_input = f"{b64url(json.dumps(header, separators=(',', ':')).encode())}.{b64url(json.dumps(payload, separators=(',', ':')).encode())}"
+with tempfile.NamedTemporaryFile('w', delete=False) as key_file:
+    key_file.write(svc['private_key'])
+    key_path = key_file.name
+signature = subprocess.check_output(['openssl', 'dgst', '-sha256', '-sign', key_path], input=signing_input.encode('ascii'))
+assertion = signing_input + '.' + b64url(signature)
+
+def request_json(method, url, token=None, data=None, content_type='application/json'):
+    body = None
+    headers = {}
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+    if data is not None:
+        if isinstance(data, (dict, list)):
+            body = json.dumps(data).encode('utf-8')
+            headers['Content-Type'] = content_type
+        else:
+            body = data
+            headers['Content-Type'] = content_type
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            raw = resp.read().decode('utf-8')
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        err = e.read().decode('utf-8', errors='replace')
+        raise SystemExit(f'HTTP {e.code} {method} {url}\n{err}')
+
+token_resp = request_json('POST', 'https://oauth2.googleapis.com/token', data=urllib.parse.urlencode({
+    'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+    'assertion': assertion,
+}).encode('utf-8'), content_type='application/x-www-form-urlencoded')
+token = token_resp['access_token']
+base = f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{urllib.parse.quote(package_name, safe="")}'
+edit = request_json('POST', base + '/edits', token=token)
+edit_id = edit['id']
+print(f'Created Google Play edit: {edit_id}')
+with open(aab_path, 'rb') as f:
+    bundle = f.read()
+upload_url = f'https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/{urllib.parse.quote(package_name, safe="")}/edits/{edit_id}/bundles?uploadType=media'
+bundle_resp = request_json('POST', upload_url, token=token, data=bundle, content_type='application/octet-stream')
+version_code = str(bundle_resp['versionCode'])
+print(f'Uploaded bundle versionCode: {version_code}')
+track_body = {
+    'track': track,
+    'releases': [{
+        'versionCodes': [version_code],
+        'status': release_status,
+    }]
+}
+request_json('PUT', base + f'/edits/{edit_id}/tracks/{urllib.parse.quote(track, safe="")}', token=token, data=track_body)
+request_json('POST', base + f'/edits/{edit_id}:commit', token=token)
+print(f'Committed Google Play {track} release as {release_status}.')
+PY
+rm -f "$play_json"
+'''
+                    }
+                }
+            }
+        }
+    }
+    post {
+        always {
+            cleanWs()
+        }
+    }
+}
