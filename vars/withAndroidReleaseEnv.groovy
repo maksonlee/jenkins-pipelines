@@ -4,12 +4,22 @@ def call(Map cfg = [:], Closure body) {
     }
 
     def image = (cfg.image ?: 'cdlee/android-build-env:latest') as String
-    def insideArgs = (cfg.insideArgs ?: '') as String
     def keystoreVP = cfg.keystoreVaultPath as String
     def playVP = (cfg.playServiceVaultPath ?: null) as String
     def jksPath = (cfg.jksPath ?: '/tmp/upload.jks') as String
     def playJsonPath = (cfg.playJsonPath ?: '/tmp/play-service.json') as String
     def extraVaults = (cfg.extraVaults ?: []) as List
+    def jobCacheName = (env.JOB_NAME ?: 'android-build').replaceAll(/[^A-Za-z0-9_.-]+/, '-')
+    def cacheRoot = (cfg.cacheRoot ?: "/home/administrator/jenkins/android-cache/${jobCacheName}") as String
+    def cacheArgs = [
+            "-v ${cacheRoot}/gradle:/home/ubuntu/.gradle",
+            "-v ${cacheRoot}/android-sdk/platforms:/home/ubuntu/Android/platforms",
+            "-v ${cacheRoot}/android-sdk/build-tools:/home/ubuntu/Android/build-tools",
+            "-v ${cacheRoot}/android-sdk/platform-tools:/home/ubuntu/Android/platform-tools",
+            "-v ${cacheRoot}/android-sdk/ndk:/home/ubuntu/Android/ndk",
+            "-v ${cacheRoot}/android-sdk/cmake:/home/ubuntu/Android/cmake"
+    ]
+    def insideArgs = (cacheArgs + [cfg.insideArgs ?: '']).findAll { it.toString().trim() }.join(' ')
 
     def vaults = [[
                           path: keystoreVP, engineVersion: 2,
@@ -27,6 +37,19 @@ def call(Map cfg = [:], Closure body) {
         ]
     }
     vaults.addAll(extraVaults)
+
+    sh """#!/bin/bash
+set -euo pipefail
+mkdir -p \\
+  "${cacheRoot}/gradle" \\
+  "${cacheRoot}/android-sdk/platforms" \\
+  "${cacheRoot}/android-sdk/build-tools" \\
+  "${cacheRoot}/android-sdk/platform-tools" \\
+  "${cacheRoot}/android-sdk/ndk" \\
+  "${cacheRoot}/android-sdk/cmake"
+echo "ANDROID_CACHE_ROOT=${cacheRoot}"
+du -sh "${cacheRoot}" 2>/dev/null || true
+"""
 
     docker.image(image).inside(insideArgs) {
         withVault([vaultSecrets: vaults]) {
