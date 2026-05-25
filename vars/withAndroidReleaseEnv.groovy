@@ -15,7 +15,6 @@ def call(Map cfg = [:], Closure body) {
             "-v ${cacheRoot}/gradle:/home/ubuntu/.gradle",
             "-v ${cacheRoot}/android-sdk/platforms:/home/ubuntu/Android/platforms",
             "-v ${cacheRoot}/android-sdk/build-tools:/home/ubuntu/Android/build-tools",
-            "-v ${cacheRoot}/android-sdk/platform-tools:/home/ubuntu/Android/platform-tools",
             "-v ${cacheRoot}/android-sdk/ndk:/home/ubuntu/Android/ndk",
             "-v ${cacheRoot}/android-sdk/cmake:/home/ubuntu/Android/cmake"
     ]
@@ -44,7 +43,6 @@ mkdir -p \\
   "${cacheRoot}/gradle" \\
   "${cacheRoot}/android-sdk/platforms" \\
   "${cacheRoot}/android-sdk/build-tools" \\
-  "${cacheRoot}/android-sdk/platform-tools" \\
   "${cacheRoot}/android-sdk/ndk" \\
   "${cacheRoot}/android-sdk/cmake"
 echo "ANDROID_CACHE_ROOT=${cacheRoot}"
