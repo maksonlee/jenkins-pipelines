@@ -14,7 +14,7 @@ pipeline {
             printPostContent: false,
             silentResponse: false,
             regexpFilterText: '$WEBHOOK_REF',
-            regexpFilterExpression: '^refs/heads/main$'
+            regexpFilterExpression: '^refs/heads/(main|master)$'
         )
     }
     parameters {
