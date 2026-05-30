@@ -37,8 +37,10 @@ pipeline {
                     env.PROJECT_REPO = "git@github.com:maksonlee/${projectSlug}.git"
                     env.PROJECT_BRANCH = params.BRANCH?.trim() ?: webhookBranch ?: 'main'
                     env.PROJECT_CREDENTIALS_ID = 'vault-github-ssh'
-                    env.FLUTTER_IMAGE = 'harbor.maksonlee.com/library/flutter-android-build-env:3.44.0'
-                    env.FLUTTER_CACHE_ROOT = "/home/administrator/jenkins/flutter-cache/${projectSlug}"
+                    env.FLUTTER_VERSION = '3.44.0'
+                    env.FLUTTER_IMAGE = "harbor.maksonlee.com/library/flutter-android-build-env:${env.FLUTTER_VERSION}-fvm"
+                    env.FLUTTER_CACHE_ROOT = '/home/administrator/jenkins/flutter-cache'
+                    env.ANDROID_CACHE_ROOT = '/home/administrator/jenkins/android-cache'
                     env.ARTIFACTORY_REPO = 'android-snapshots'
                     env.ARTIFACTORY_ORG_PATH = 'com/maksonlee'
                     env.ARTIFACTORY_MODULE = projectSlug
@@ -137,11 +139,12 @@ echo "Release signing files prepared. JKS bytes: $(wc -c < "${signing_dir}/uploa
         stage('Build') {
             steps {
                 script {
+                    def flutterBin = "/home/ubuntu/fvm/versions/${env.FLUTTER_VERSION}/bin/flutter"
                     def commandByTarget = [
-                        'appbundle-debug': 'flutter pub get && flutter build appbundle --debug --no-pub',
-                        'appbundle-release': 'flutter pub get && flutter build appbundle --release --no-pub',
-                        'apk-debug': 'flutter pub get && flutter build apk --debug --no-pub',
-                        'apk-release': 'flutter pub get && flutter build apk --release --no-pub'
+                        'appbundle-debug': "${flutterBin} pub get && ${flutterBin} build appbundle --debug --no-pub",
+                        'appbundle-release': "${flutterBin} pub get && ${flutterBin} build appbundle --release --no-pub",
+                        'apk-debug': "${flutterBin} pub get && ${flutterBin} build apk --debug --no-pub",
+                        'apk-release': "${flutterBin} pub get && ${flutterBin} build apk --release --no-pub"
                     ]
                     def artifactBase = env.PROJECT_WORKDIR == '.' ? 'source' : 'source/' + env.PROJECT_WORKDIR
                     def artifactByTarget = [
@@ -158,10 +161,13 @@ echo "Release signing files prepared. JKS bytes: $(wc -c < "${signing_dir}/uploa
 set -euo pipefail
 uid=$(id -u)
 gid=$(id -g)
-cache_root="${FLUTTER_CACHE_ROOT}"
-android_cache="${cache_root}/android-sdk"
-flutter_bin_cache="${cache_root}/flutter-bin-cache"
-mkdir -p "${android_cache}" "${cache_root}/gradle" "${cache_root}/pub-cache" "${flutter_bin_cache}"
+flutter_cache_root="${FLUTTER_CACHE_ROOT}"
+android_cache_root="${ANDROID_CACHE_ROOT}"
+android_cache="${android_cache_root}/flutter-android-sdk"
+fvm_cache="${flutter_cache_root}/fvm"
+gradle_cache="${android_cache_root}/gradle"
+pub_cache="${flutter_cache_root}/pub-cache"
+mkdir -p "${android_cache}" "${gradle_cache}" "${pub_cache}" "${fvm_cache}"
 
 if [ ! -d "${android_cache}/cmdline-tools/latest" ]; then
   echo "Seeding Android command-line tools into ${android_cache}"
@@ -180,8 +186,10 @@ mkdir -p \
   "${android_cache}/cmake" \
   "${android_cache}/licenses"
 
-echo "CACHE_ROOT=${cache_root}"
-echo "CACHE_SIZE_BEFORE=$(du -sh "${cache_root}" 2>/dev/null | cut -f1)"
+echo "FLUTTER_CACHE_ROOT=${flutter_cache_root}"
+echo "ANDROID_CACHE_ROOT=${android_cache_root}"
+echo "FLUTTER_CACHE_SIZE_BEFORE=$(du -sh "${flutter_cache_root}" 2>/dev/null | cut -f1)"
+echo "ANDROID_CACHE_SIZE_BEFORE=$(du -sh "${android_cache_root}" 2>/dev/null | cut -f1)"
 start=$(date +%s)
 
 docker run --rm \
@@ -189,20 +197,22 @@ docker run --rm \
   -e HOME=/home/ubuntu \
   -e ANDROID_HOME=/home/ubuntu/Android \
   -e ANDROID_SDK_ROOT=/home/ubuntu/Android \
-  -e PUB_CACHE=/home/ubuntu/.pub-cache \
+  -e FVM_CACHE_PATH=/home/ubuntu/fvm \
+  -e PUB_CACHE=/home/ubuntu/pub-cache \
   -v "${android_cache}:/home/ubuntu/Android" \
-  -v "${flutter_bin_cache}:/home/ubuntu/flutter/bin/cache" \
-  -v "${cache_root}/gradle:/home/ubuntu/.gradle" \
-  -v "${cache_root}/pub-cache:/home/ubuntu/.pub-cache" \
+  -v "${fvm_cache}:/home/ubuntu/fvm" \
+  -v "${gradle_cache}:/home/ubuntu/.gradle" \
+  -v "${pub_cache}:/home/ubuntu/pub-cache" \
   -v "$PWD/source:/workspace" \
   -w "/workspace/${PROJECT_WORKDIR}" \
   "${FLUTTER_IMAGE}" \
-  bash -lc "yes | sdkmanager --licenses && ${FLUTTER_BUILD_COMMAND}"
+  bash -lc "yes | sdkmanager --licenses && fvm install ${FLUTTER_VERSION} && /home/ubuntu/fvm/versions/${FLUTTER_VERSION}/bin/flutter config --no-analytics && /home/ubuntu/fvm/versions/${FLUTTER_VERSION}/bin/flutter --version && ${FLUTTER_BUILD_COMMAND}"
 
 end=$(date +%s)
 echo "TOTAL_SECONDS=$((end-start))"
-echo "CACHE_SIZE_AFTER=$(du -sh "${cache_root}" 2>/dev/null | cut -f1)"
-for d in "${cache_root}"/*; do
+echo "FLUTTER_CACHE_SIZE_AFTER=$(du -sh "${flutter_cache_root}" 2>/dev/null | cut -f1)"
+echo "ANDROID_CACHE_SIZE_AFTER=$(du -sh "${android_cache_root}" 2>/dev/null | cut -f1)"
+for d in "${flutter_cache_root}"/* "${android_cache_root}"/*; do
   if [ -d "$d" ]; then du -sh "$d"; fi
 done | sort -h || true
 ls -lh ${FLUTTER_ARTIFACTS}

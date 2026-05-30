@@ -26,7 +26,7 @@ $.repository.name -> WEBHOOK_PROJECT
 $.ref             -> WEBHOOK_REF
 ```
 
-Only pushes to `refs/heads/main` are accepted by the trigger.
+Only pushes to `refs/heads/main` and `refs/heads/master` are accepted by the trigger.
 
 ## Project Rules
 
@@ -98,28 +98,30 @@ The version is read from `pubspec.yaml` and strips the `+build` suffix.
 
 ## Cache
 
-The Jenkins build agent keeps per-project caches under:
+The Jenkins build agent keeps shared caches under:
 
 ```text
-/home/administrator/jenkins/flutter-cache/${PROJECT}
+/home/administrator/jenkins/flutter-cache
+/home/administrator/jenkins/android-cache
 ```
 
 Cached directories:
 
 ```text
-android-sdk
-flutter-bin-cache
-gradle
-pub-cache
+flutter-cache/fvm
+flutter-cache/pub-cache
+android-cache/flutter-android-sdk
+android-cache/gradle
 ```
 
-`flutter-bin-cache` is mounted to:
+Flutter SDK versions are installed and selected by FVM from:
 
 ```text
-/home/ubuntu/flutter/bin/cache
+/home/administrator/jenkins/flutter-cache/fvm
 ```
 
-This avoids repeatedly downloading Flutter Android engine artifacts.
+This keeps complete Flutter SDK versions in one FVM cache root instead of manually
+mounting `flutter/bin/cache`.
 
 ## Add A New Flutter Project
 
