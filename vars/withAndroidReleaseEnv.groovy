@@ -9,8 +9,7 @@ def call(Map cfg = [:], Closure body) {
     def jksPath = (cfg.jksPath ?: '/tmp/upload.jks') as String
     def playJsonPath = (cfg.playJsonPath ?: '/tmp/play-service.json') as String
     def extraVaults = (cfg.extraVaults ?: []) as List
-    def jobCacheName = (env.JOB_NAME ?: 'android-build').replaceAll(/[^A-Za-z0-9_.-]+/, '-')
-    def cacheRoot = (cfg.cacheRoot ?: "/home/administrator/jenkins/android-cache/${jobCacheName}") as String
+    def cacheRoot = (cfg.cacheRoot ?: '/home/administrator/jenkins/android-cache') as String
     def cacheArgs = [
             "-v ${cacheRoot}/gradle:/home/ubuntu/.gradle",
             "-v ${cacheRoot}/android-sdk/platforms:/home/ubuntu/Android/platforms",
