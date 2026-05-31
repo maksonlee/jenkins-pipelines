@@ -141,10 +141,10 @@ echo "Release signing files prepared. JKS bytes: $(wc -c < "${signing_dir}/uploa
                 script {
                     def flutterBin = "/home/ubuntu/fvm/versions/${env.FLUTTER_VERSION}/bin/flutter"
                     def commandByTarget = [
-                        'appbundle-debug': "${flutterBin} pub get && ${flutterBin} build appbundle --debug --no-pub",
-                        'appbundle-release': "${flutterBin} pub get && ${flutterBin} build appbundle --release --no-pub",
-                        'apk-debug': "${flutterBin} pub get && ${flutterBin} build apk --debug --no-pub",
-                        'apk-release': "${flutterBin} pub get && ${flutterBin} build apk --release --no-pub"
+                        'appbundle-debug': "${flutterBin} pub get && ${flutterBin} build appbundle --debug --no-pub --no-android-gradle-daemon",
+                        'appbundle-release': "${flutterBin} pub get && ${flutterBin} build appbundle --release --no-pub --no-android-gradle-daemon",
+                        'apk-debug': "${flutterBin} pub get && ${flutterBin} build apk --debug --no-pub --no-android-gradle-daemon",
+                        'apk-release': "${flutterBin} pub get && ${flutterBin} build apk --release --no-pub --no-android-gradle-daemon"
                     ]
                     def artifactBase = env.PROJECT_WORKDIR == '.' ? 'source' : 'source/' + env.PROJECT_WORKDIR
                     def artifactByTarget = [

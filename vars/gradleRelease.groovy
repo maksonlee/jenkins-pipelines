@@ -10,7 +10,7 @@ def call(String task, Map cfg = [:]) {
     def gradleCmd = (cfg.gradleCmd ?: './gradlew') as String
     def stacktrace = (cfg.get('stacktrace', true)) as boolean
     def extraProps = (cfg.get('extraProps', [:])) as Map   // e.g. [android.injected.signing.store.type:'jks']
-    def extraArgs = (cfg.get('extraArgs', [])) as List    // e.g. ['--no-daemon']
+    def extraArgs = (["--no-daemon"] + (cfg.get('extraArgs', []) as List)).unique()
     def workDir = (cfg.get('workDir', '')) as String    // e.g. 'android' if gradlew在子目錄
 
     withAndroidReleaseEnv(
