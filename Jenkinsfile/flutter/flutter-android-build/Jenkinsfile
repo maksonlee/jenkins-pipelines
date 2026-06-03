@@ -345,7 +345,7 @@ def request_json(method, url, token=None, data=None, content_type='application/j
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as e:
         err = e.read().decode('utf-8', errors='replace')
-        raise SystemExit(f'HTTP {e.code} {method} {url}\n{err}')
+        raise SystemExit(f'HTTP {e.code} {method} {url}\\n{err}')
 
 token_resp = request_json('POST', 'https://oauth2.googleapis.com/token', data=urllib.parse.urlencode({
     'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer',
