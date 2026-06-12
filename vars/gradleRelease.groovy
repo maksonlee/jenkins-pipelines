@@ -43,6 +43,8 @@ def call(String task, Map cfg = [:]) {
                 'GRADLE_RELEASE_LOCK_PATH=' + lockPath,
                 'GRADLE_RELEASE_HAS_PLAY=' + (envs.hasPlay ? 'true' : 'false'),
                 'GRADLE_RELEASE_TRACK=' + (track ?: ''),
+                'GRADLE_RELEASE_JKS_PATH=' + envs.jksPath,
+                'GRADLE_RELEASE_PLAY_JSON_PATH=' + envs.playJsonPath,
                 'GRADLE_RELEASE_ARGS=' + plainArgs.join('\n')
         ]) {
             sh '''#!/bin/bash
@@ -62,14 +64,14 @@ fi
 
 args=("${GRADLE_RELEASE_TASK}")
 if [ "${GRADLE_RELEASE_HAS_PLAY:-}" = "true" ]; then
-  args+=("-Pplay.serviceAccountCredentials=${PLAY_JSON_PATH}")
+  args+=("-Pplay.serviceAccountCredentials=${GRADLE_RELEASE_PLAY_JSON_PATH}")
   if [ -n "${GRADLE_RELEASE_TRACK:-}" ]; then
     args+=("-Ptrack=${GRADLE_RELEASE_TRACK}")
   fi
 fi
 
 args+=(
-  "-Psigning.storeFile=${JKS_PATH}"
+  "-Psigning.storeFile=${GRADLE_RELEASE_JKS_PATH}"
   "-Psigning.storePassword=${STORE_PASSWORD}"
   "-Psigning.keyAlias=${KEY_ALIAS}"
   "-Psigning.keyPassword=${KEY_PASSWORD}"
