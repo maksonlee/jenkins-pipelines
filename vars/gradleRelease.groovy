@@ -10,8 +10,16 @@ def call(String task, Map cfg = [:]) {
     def gradleCmd = (cfg.gradleCmd ?: './gradlew') as String
     def stacktrace = (cfg.get('stacktrace', true)) as boolean
     def extraProps = (cfg.get('extraProps', [:])) as Map   // e.g. [android.injected.signing.store.type:'jks']
-    def extraArgs = (["--no-daemon"] + (cfg.get('extraArgs', []) as List)).unique()
+    def userExtraArgs = (cfg.get('extraArgs', []) as List)
+    def maxWorkers = (cfg.get('maxWorkers', 2)) as int
+    def defaultArgs = ['--no-daemon']
+    if (!userExtraArgs.any { it.toString().startsWith('--max-workers') }) {
+        defaultArgs << "--max-workers=${maxWorkers}"
+    }
+    def extraArgs = (defaultArgs + userExtraArgs).unique()
     def workDir = (cfg.get('workDir', '')) as String    // e.g. 'android' if gradlew在子目錄
+    def lockBuild = (cfg.get('lockBuild', true)) as boolean
+    def lockPath = (cfg.get('lockPath', '/home/ubuntu/.gradle/android-release-build.lock')) as String
 
     withAndroidReleaseEnv(
             image: image,
@@ -41,10 +49,17 @@ def call(String task, Map cfg = [:]) {
         if (stacktrace) args << "--stacktrace"
 
         def cdPrefix = workDir?.trim() ? "cd ${workDir}\n" : ""
+        def lockPrefix = lockBuild ? """lock_file='${lockPath}'
+mkdir -p "\$(dirname "\$lock_file")"
+exec 9>"\$lock_file"
+echo "Waiting for Android release Gradle lock: \$lock_file"
+flock 9
+echo "Acquired Android release Gradle lock"
+""" : ''
 
         sh """#!/bin/bash
 set -euo pipefail
-${cdPrefix}${gradleCmd} ${task} \\
+${cdPrefix}${lockPrefix}${gradleCmd} ${task} \\
   ${args.join(' ')}
 """
     }
