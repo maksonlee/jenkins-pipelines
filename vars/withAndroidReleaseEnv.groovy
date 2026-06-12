@@ -50,7 +50,7 @@ du -sh "${cacheRoot}" 2>/dev/null || true
 
     docker.image(image).inside(insideArgs) {
         withVault([vaultSecrets: vaults]) {
-            withEnv(["JKS_PATH=${jksPath}", "PLAY_JSON_PATH=${playJsonPath}"]) {
+            withEnv(['JKS_PATH=' + jksPath, 'PLAY_JSON_PATH=' + playJsonPath]) {
                 sh '''#!/bin/bash
 set -euo pipefail
 umask 077

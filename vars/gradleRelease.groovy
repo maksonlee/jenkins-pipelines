@@ -36,22 +36,22 @@ def call(String task, Map cfg = [:]) {
         if (stacktrace) plainArgs << "--stacktrace"
 
         withEnv([
-                "GRADLE_RELEASE_CMD=${gradleCmd}",
-                "GRADLE_RELEASE_TASK=${task}",
-                "GRADLE_RELEASE_WORK_DIR=${workDir ?: ''}",
-                "GRADLE_RELEASE_LOCK=${lockBuild ? 'true' : 'false'}",
-                "GRADLE_RELEASE_LOCK_PATH=${lockPath}",
-                "GRADLE_RELEASE_HAS_PLAY=${envs.hasPlay ? 'true' : 'false'}",
-                "GRADLE_RELEASE_TRACK=${track ?: ''}",
-                "GRADLE_RELEASE_ARGS=${plainArgs.join('\n')}"
+                'GRADLE_RELEASE_CMD=' + gradleCmd,
+                'GRADLE_RELEASE_TASK=' + task,
+                'GRADLE_RELEASE_WORK_DIR=' + (workDir ?: ''),
+                'GRADLE_RELEASE_LOCK=' + (lockBuild ? 'true' : 'false'),
+                'GRADLE_RELEASE_LOCK_PATH=' + lockPath,
+                'GRADLE_RELEASE_HAS_PLAY=' + (envs.hasPlay ? 'true' : 'false'),
+                'GRADLE_RELEASE_TRACK=' + (track ?: ''),
+                'GRADLE_RELEASE_ARGS=' + plainArgs.join('\n')
         ]) {
             sh '''#!/bin/bash
 set -euo pipefail
-if [ -n "${GRADLE_RELEASE_WORK_DIR}" ]; then
+if [ -n "${GRADLE_RELEASE_WORK_DIR:-}" ]; then
   cd "${GRADLE_RELEASE_WORK_DIR}"
 fi
 
-if [ "${GRADLE_RELEASE_LOCK}" = "true" ]; then
+if [ "${GRADLE_RELEASE_LOCK:-}" = "true" ]; then
   lock_file="${GRADLE_RELEASE_LOCK_PATH}"
   mkdir -p "$(dirname "$lock_file")"
   exec 9>"$lock_file"
@@ -61,9 +61,9 @@ if [ "${GRADLE_RELEASE_LOCK}" = "true" ]; then
 fi
 
 args=("${GRADLE_RELEASE_TASK}")
-if [ "${GRADLE_RELEASE_HAS_PLAY}" = "true" ]; then
+if [ "${GRADLE_RELEASE_HAS_PLAY:-}" = "true" ]; then
   args+=("-Pplay.serviceAccountCredentials=${PLAY_JSON_PATH}")
-  if [ -n "${GRADLE_RELEASE_TRACK}" ]; then
+  if [ -n "${GRADLE_RELEASE_TRACK:-}" ]; then
     args+=("-Ptrack=${GRADLE_RELEASE_TRACK}")
   fi
 fi
@@ -79,7 +79,7 @@ while IFS= read -r extra_arg; do
   if [ -n "$extra_arg" ]; then
     args+=("$extra_arg")
   fi
-done <<< "${GRADLE_RELEASE_ARGS}"
+done <<< "${GRADLE_RELEASE_ARGS:-}"
 
 "${GRADLE_RELEASE_CMD}" "${args[@]}"
 '''
