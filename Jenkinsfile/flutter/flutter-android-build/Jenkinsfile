@@ -95,6 +95,38 @@ docker image inspect "${FLUTTER_IMAGE}" --format 'IMAGE_ID={{.Id}}'
                 }
             }
         }
+        stage('Resolve Google Play metadata') {
+            steps {
+                script {
+                    def projectBase = env.PROJECT_WORKDIR == '.' ? 'source' : "source/${env.PROJECT_WORKDIR}"
+                    def releaseNoteCandidates = [
+                        "${projectBase}/android/app/src/main/play/release-notes/en-US/${params.PLAY_TRACK}.txt",
+                        "${projectBase}/android/app/src/main/play/release-notes/en-US/default.txt"
+                    ]
+                    def releaseNotesPath = releaseNoteCandidates.find { fileExists(it) }
+                    if (releaseNotesPath) {
+                        def releaseNotes = readFile(releaseNotesPath).trim()
+                        if (!releaseNotes) {
+                            error "Google Play release notes are empty: ${releaseNotesPath}"
+                        }
+                        if (releaseNotes.length() > 500) {
+                            error "Google Play release notes exceed 500 characters: ${releaseNotes.length()}"
+                        }
+                        env.PLAY_RELEASE_NOTES_PATH = releaseNotesPath
+                        env.PLAY_RELEASE_NOTES = releaseNotes
+                        writeFile file: '.play-release-notes', text: releaseNotes + '\n'
+                        echo "PLAY_RELEASE_NOTES_SOURCE=${releaseNotesPath}"
+                        echo "PLAY_RELEASE_NOTES<<EOF\n${releaseNotes}\nEOF"
+                    } else if (params.PUBLISH_TO_PLAY && params.BUILD_TARGET == 'appbundle-release') {
+                        error "Missing Google Play release notes metadata. Expected ${releaseNoteCandidates.join(' or ')}"
+                    } else {
+                        env.PLAY_RELEASE_NOTES_PATH = ''
+                        env.PLAY_RELEASE_NOTES = ''
+                        echo "No Google Play release notes metadata found for non-publish build."
+                    }
+                }
+            }
+        }
         stage('Prepare release signing') {
             when {
                 expression { params.BUILD_TARGET.contains('release') }
@@ -280,7 +312,7 @@ ls -lh ${FLUTTER_ARTIFACTS}
                 }
             }
             steps {
-                input message: "Publish ${env.PLAY_PACKAGE_NAME} to Google Play production as ${params.PLAY_RELEASE_STATUS}?"
+                input message: "Publish ${env.PLAY_PACKAGE_NAME} to Google Play production as ${params.PLAY_RELEASE_STATUS}? ${env.PLAY_RELEASE_NOTES}"
             }
         }
         stage('Upload to Google Play') {
@@ -295,6 +327,9 @@ ls -lh ${FLUTTER_ARTIFACTS}
                     if (!env.PLAY_PACKAGE_NAME) {
                         error "No packageName configured for PROJECT=${params.PROJECT}"
                     }
+                    if (!env.PLAY_RELEASE_NOTES?.trim()) {
+                        error "No Google Play release notes loaded for PROJECT=${params.PROJECT}"
+                    }
                     withVault([vaultSecrets: [[
                         path: env.PLAY_SERVICE_VAULT_PATH,
                         engineVersion: 2,
@@ -307,8 +342,13 @@ umask 077
 play_json="$PWD/play-service.json"
 trap 'rm -f "$play_json"' EXIT
 aab_path=$(ls ${FLUTTER_ARTIFACTS} | head -n 1)
+release_notes_path="$PWD/.play-release-notes"
+if [ ! -s "$release_notes_path" ]; then
+  echo "Missing Google Play release notes file: $release_notes_path" >&2
+  exit 1
+fi
 printf %s "${PLAY_SERVICE_JSON_B64}" | sed 's/^data:[^,]*,//' | tr -d '\r\n ' | base64 -d > "$play_json"
-python3 - "$play_json" "$aab_path" "$PLAY_PACKAGE_NAME" "$PLAY_TRACK" "$PLAY_RELEASE_STATUS" "${PLAY_ROLLOUT_FRACTION:-}" <<'PY'
+python3 - "$play_json" "$aab_path" "$PLAY_PACKAGE_NAME" "$PLAY_TRACK" "$PLAY_RELEASE_STATUS" "${PLAY_ROLLOUT_FRACTION:-}" "$release_notes_path" <<'PY'
 import base64
 import json
 import os
@@ -320,9 +360,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-service_json, aab_path, package_name, track, release_status, rollout_fraction = sys.argv[1:]
+service_json, aab_path, package_name, track, release_status, rollout_fraction, release_notes_path = sys.argv[1:]
 with open(service_json, 'r', encoding='utf-8') as f:
     svc = json.load(f)
+with open(release_notes_path, 'r', encoding='utf-8') as f:
+    release_notes = f.read().strip()
+if not release_notes:
+    raise SystemExit('Google Play release notes are required')
+if len(release_notes) > 500:
+    raise SystemExit(f'Google Play release notes exceed 500 characters: {len(release_notes)}')
 
 def b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b'=').decode('ascii')
@@ -388,6 +434,10 @@ print(f'Uploaded bundle versionCode: {version_code}')
 release = {
     'versionCodes': [version_code],
     'status': release_status,
+    'releaseNotes': [{
+        'language': 'en-US',
+        'text': release_notes,
+    }],
 }
 if release_status == 'inProgress':
     if not rollout_fraction.strip():
