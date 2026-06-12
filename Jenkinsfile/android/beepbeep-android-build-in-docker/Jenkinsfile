@@ -2,14 +2,52 @@
 pipeline {
     agent { label 'ssh-agent-with-docker' }
 
+    parameters {
+        string(name: 'GIT_REF', defaultValue: 'master', description: 'Branch, tag, or commit SHA to publish')
+    }
+
     stages {
+        stage('Resolve release commit') {
+            steps {
+                script {
+                    def gitRef = params.GIT_REF?.trim()
+                    if (!gitRef) {
+                        error 'GIT_REF is required for Google Play publishing'
+                    }
+                    if (!(gitRef ==~ /^[A-Za-z0-9._\/-]+$/)) {
+                        error "Invalid GIT_REF: ${gitRef}"
+                    }
+                    env.GIT_REF = gitRef
+                    echo "Publishing Git ref: ${env.GIT_REF}"
+                }
+            }
+        }
+
         stage('Fetch code') {
             steps {
                 deleteDir()
-                git changelog: false,
-                        credentialsId: 'vault-github-ssh',
-                        poll: false,
-                        url: 'git@github.com:maksonlee/beepbeep.git'
+                checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: env.GIT_REF]],
+                        doGenerateSubmoduleConfigurations: false,
+                        extensions: [],
+                        userRemoteConfigs: [[
+                                credentialsId: 'vault-github-ssh',
+                                url: 'git@github.com:maksonlee/beepbeep.git'
+                        ]]
+                ])
+                sh '''#!/bin/bash
+set -euo pipefail
+git rev-parse HEAD > .release-commit
+git log -1 --pretty=%s > .release-subject
+git log -1 --pretty=%B > .release-message
+echo "CHECKED_OUT_COMMIT=$(cat .release-commit)"
+echo "CHECKED_OUT_SUBJECT=$(cat .release-subject)"
+'''
+                script {
+                    env.RELEASE_COMMIT = readFile('.release-commit').trim()
+                    env.RELEASE_SUBJECT = readFile('.release-subject').trim()
+                }
             }
         }
 
@@ -29,7 +67,9 @@ pipeline {
 
         stage('Approve publish?') {
             when { expression { true } } // remove if you want auto-publish
-            steps { input message: 'Publish this build to Internal?' }
+            steps {
+                input message: "Publish ${env.RELEASE_COMMIT} to Internal? ${env.RELEASE_SUBJECT}"
+            }
         }
 
         stage('Publish to Google Play (GPP)') {
