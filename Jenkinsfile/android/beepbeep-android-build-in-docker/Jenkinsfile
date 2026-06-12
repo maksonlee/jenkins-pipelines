@@ -43,10 +43,24 @@ git log -1 --pretty=%s > .release-subject
 git log -1 --pretty=%B > .release-message
 echo "CHECKED_OUT_COMMIT=$(cat .release-commit)"
 echo "CHECKED_OUT_SUBJECT=$(cat .release-subject)"
+release_notes="app/src/main/play/release-notes/en-US/internal.txt"
+if [ ! -f "$release_notes" ]; then
+  release_notes="app/src/main/play/release-notes/en-US/default.txt"
+fi
+if [ ! -f "$release_notes" ]; then
+  echo "Missing Google Play release notes metadata." >&2
+  echo "Expected app/src/main/play/release-notes/en-US/internal.txt or default.txt" >&2
+  exit 1
+fi
+cp "$release_notes" .release-notes
+echo "PLAY_RELEASE_NOTES<<EOF"
+cat .release-notes
+echo "EOF"
 '''
                 script {
                     env.RELEASE_COMMIT = readFile('.release-commit').trim()
                     env.RELEASE_SUBJECT = readFile('.release-subject').trim()
+                    env.RELEASE_NOTES = readFile('.release-notes').trim()
                 }
             }
         }
@@ -68,7 +82,7 @@ echo "CHECKED_OUT_SUBJECT=$(cat .release-subject)"
         stage('Approve publish?') {
             when { expression { true } } // remove if you want auto-publish
             steps {
-                input message: "Publish ${env.RELEASE_COMMIT} to Internal? ${env.RELEASE_SUBJECT}"
+                input message: "Publish ${env.RELEASE_COMMIT} to Internal? ${env.RELEASE_NOTES}"
             }
         }
 
