@@ -30,37 +30,59 @@ def call(String task, Map cfg = [:]) {
             playJsonPath: playJsonPath,
             extraVaults: cfg.get('extraVaults', [])
     ) { envs ->
-        def args = []
-        if (envs.hasPlay) {
-            args << "-Pplay.serviceAccountCredentials=${envs.playJsonPath}"
-            if (track) args << "-Ptrack=${track}"
-        }
-        // signing props
-        args += [
-                "-Psigning.storeFile=${envs.jksPath}",
-                '-Psigning.storePassword="$STORE_PASSWORD"',
-                '-Psigning.keyAlias="$KEY_ALIAS"',
-                '-Psigning.keyPassword="$KEY_PASSWORD"'
-        ]
-        // extra -P props
-        extraProps.each { k, v -> args << "-P${k}=${v}" }
-        // extra gradle args
-        args.addAll(extraArgs)
-        if (stacktrace) args << "--stacktrace"
+        def plainArgs = []
+        extraProps.each { k, v -> plainArgs << "-P${k}=${v}" }
+        plainArgs.addAll(extraArgs)
+        if (stacktrace) plainArgs << "--stacktrace"
 
-        def cdPrefix = workDir?.trim() ? "cd ${workDir}\n" : ""
-        def lockPrefix = lockBuild ? """lock_file='${lockPath}'
-mkdir -p "\$(dirname "\$lock_file")"
-exec 9>"\$lock_file"
-echo "Waiting for Android release Gradle lock: \$lock_file"
-flock 9
-echo "Acquired Android release Gradle lock"
-""" : ''
-
-        sh """#!/bin/bash
+        withEnv([
+                "GRADLE_RELEASE_CMD=${gradleCmd}",
+                "GRADLE_RELEASE_TASK=${task}",
+                "GRADLE_RELEASE_WORK_DIR=${workDir ?: ''}",
+                "GRADLE_RELEASE_LOCK=${lockBuild ? 'true' : 'false'}",
+                "GRADLE_RELEASE_LOCK_PATH=${lockPath}",
+                "GRADLE_RELEASE_HAS_PLAY=${envs.hasPlay ? 'true' : 'false'}",
+                "GRADLE_RELEASE_TRACK=${track ?: ''}",
+                "GRADLE_RELEASE_ARGS=${plainArgs.join('\n')}"
+        ]) {
+            sh '''#!/bin/bash
 set -euo pipefail
-${cdPrefix}${lockPrefix}${gradleCmd} ${task} \\
-  ${args.join(' ')}
-"""
+if [ -n "${GRADLE_RELEASE_WORK_DIR}" ]; then
+  cd "${GRADLE_RELEASE_WORK_DIR}"
+fi
+
+if [ "${GRADLE_RELEASE_LOCK}" = "true" ]; then
+  lock_file="${GRADLE_RELEASE_LOCK_PATH}"
+  mkdir -p "$(dirname "$lock_file")"
+  exec 9>"$lock_file"
+  echo "Waiting for Android release Gradle lock: $lock_file"
+  flock 9
+  echo "Acquired Android release Gradle lock"
+fi
+
+args=("${GRADLE_RELEASE_TASK}")
+if [ "${GRADLE_RELEASE_HAS_PLAY}" = "true" ]; then
+  args+=("-Pplay.serviceAccountCredentials=${PLAY_JSON_PATH}")
+  if [ -n "${GRADLE_RELEASE_TRACK}" ]; then
+    args+=("-Ptrack=${GRADLE_RELEASE_TRACK}")
+  fi
+fi
+
+args+=(
+  "-Psigning.storeFile=${JKS_PATH}"
+  "-Psigning.storePassword=${STORE_PASSWORD}"
+  "-Psigning.keyAlias=${KEY_ALIAS}"
+  "-Psigning.keyPassword=${KEY_PASSWORD}"
+)
+
+while IFS= read -r extra_arg; do
+  if [ -n "$extra_arg" ]; then
+    args+=("$extra_arg")
+  fi
+done <<< "${GRADLE_RELEASE_ARGS}"
+
+"${GRADLE_RELEASE_CMD}" "${args[@]}"
+'''
+        }
     }
 }
