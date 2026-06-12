@@ -23,7 +23,9 @@ pipeline {
         choice(name: 'BUILD_TARGET', choices: ['appbundle-debug', 'appbundle-release', 'apk-debug', 'apk-release'], description: 'Flutter Android build target')
         booleanParam(name: 'PUBLISH_TO_PLAY', defaultValue: false, description: 'Upload release AAB to Google Play')
         choice(name: 'PLAY_TRACK', choices: ['internal', 'closed', 'open', 'production'], description: 'Google Play release track')
-        choice(name: 'PLAY_RELEASE_STATUS', choices: ['draft', 'completed'], description: 'Google Play release status')
+        choice(name: 'PLAY_RELEASE_STATUS', choices: ['draft', 'completed', 'inProgress'], description: 'Google Play release status')
+        string(name: 'PLAY_ROLLOUT_FRACTION', defaultValue: '', description: 'Required for inProgress staged rollout, for example 0.05')
+        booleanParam(name: 'PLAY_REQUIRE_PRODUCTION_APPROVAL', defaultValue: true, description: 'Require manual confirmation before production publish')
     }
     stages {
         stage('Resolve project') {
@@ -268,6 +270,19 @@ ls -lh ${FLUTTER_ARTIFACTS}
                 }
             }
         }
+        stage('Approve production publish?') {
+            when {
+                expression {
+                    params.PUBLISH_TO_PLAY &&
+                        params.BUILD_TARGET == 'appbundle-release' &&
+                        params.PLAY_TRACK == 'production' &&
+                        params.PLAY_REQUIRE_PRODUCTION_APPROVAL
+                }
+            }
+            steps {
+                input message: "Publish ${env.PLAY_PACKAGE_NAME} to Google Play production as ${params.PLAY_RELEASE_STATUS}?"
+            }
+        }
         stage('Upload to Google Play') {
             when {
                 expression { params.PUBLISH_TO_PLAY && params.BUILD_TARGET == 'appbundle-release' }
@@ -290,11 +305,13 @@ set -euo pipefail
 umask 077
 : "${PLAY_SERVICE_JSON_B64:?ERROR: PLAY_SERVICE_JSON_B64 is empty or unset}"
 play_json="$PWD/play-service.json"
+trap 'rm -f "$play_json"' EXIT
 aab_path=$(ls ${FLUTTER_ARTIFACTS} | head -n 1)
 printf %s "${PLAY_SERVICE_JSON_B64}" | sed 's/^data:[^,]*,//' | tr -d '\r\n ' | base64 -d > "$play_json"
-python3 - "$play_json" "$aab_path" "$PLAY_PACKAGE_NAME" "$PLAY_TRACK" "$PLAY_RELEASE_STATUS" <<'PY'
+python3 - "$play_json" "$aab_path" "$PLAY_PACKAGE_NAME" "$PLAY_TRACK" "$PLAY_RELEASE_STATUS" "${PLAY_ROLLOUT_FRACTION:-}" <<'PY'
 import base64
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -303,7 +320,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-service_json, aab_path, package_name, track, release_status = sys.argv[1:]
+service_json, aab_path, package_name, track, release_status, rollout_fraction = sys.argv[1:]
 with open(service_json, 'r', encoding='utf-8') as f:
     svc = json.load(f)
 
@@ -323,7 +340,13 @@ signing_input = f"{b64url(json.dumps(header, separators=(',', ':')).encode())}.{
 with tempfile.NamedTemporaryFile('w', delete=False) as key_file:
     key_file.write(svc['private_key'])
     key_path = key_file.name
-signature = subprocess.check_output(['openssl', 'dgst', '-sha256', '-sign', key_path], input=signing_input.encode('ascii'))
+try:
+    signature = subprocess.check_output(['openssl', 'dgst', '-sha256', '-sign', key_path], input=signing_input.encode('ascii'))
+finally:
+    try:
+        os.remove(key_path)
+    except OSError:
+        pass
 assertion = signing_input + '.' + b64url(signature)
 
 def request_json(method, url, token=None, data=None, content_type='application/json'):
@@ -362,12 +385,25 @@ upload_url = f'https://androidpublisher.googleapis.com/upload/androidpublisher/v
 bundle_resp = request_json('POST', upload_url, token=token, data=bundle, content_type='application/octet-stream')
 version_code = str(bundle_resp['versionCode'])
 print(f'Uploaded bundle versionCode: {version_code}')
+release = {
+    'versionCodes': [version_code],
+    'status': release_status,
+}
+if release_status == 'inProgress':
+    if not rollout_fraction.strip():
+        raise SystemExit('PLAY_ROLLOUT_FRACTION is required when PLAY_RELEASE_STATUS=inProgress')
+    try:
+        user_fraction = float(rollout_fraction)
+    except ValueError:
+        raise SystemExit(f'Invalid PLAY_ROLLOUT_FRACTION: {rollout_fraction!r}')
+    if not 0 < user_fraction < 1:
+        raise SystemExit('PLAY_ROLLOUT_FRACTION must be greater than 0 and less than 1')
+    release['userFraction'] = user_fraction
+elif rollout_fraction.strip():
+    print(f'Ignoring PLAY_ROLLOUT_FRACTION because release status is {release_status}.')
 track_body = {
     'track': track,
-    'releases': [{
-        'versionCodes': [version_code],
-        'status': release_status,
-    }]
+    'releases': [release]
 }
 request_json('PUT', base + f'/edits/{edit_id}/tracks/{urllib.parse.quote(track, safe="")}', token=token, data=track_body)
 request_json('POST', base + f'/edits/{edit_id}:commit', token=token)

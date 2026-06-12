@@ -80,6 +80,42 @@ key_password
 key_alias
 ```
 
+## Google Play Publishing
+
+First-time Play Console setup is still manual:
+
+1. Create the app in Play Console.
+2. Complete store listing and app content declarations.
+3. Upload the first AAB manually if Google Play API upload is not yet available for the app.
+4. Create or select the Google Play service account and grant it access to the app.
+
+Subsequent releases can be published by this Jenkins job. The shared Play
+service account JSON is read from Vault:
+
+```text
+secret/jenkins/mobile/shared/play-service
+```
+
+Required Vault key:
+
+```text
+json_b64
+```
+
+Manual release parameters:
+
+```text
+BUILD_TARGET = appbundle-release
+PUBLISH_TO_PLAY = true
+PLAY_TRACK = internal | closed | open | production
+PLAY_RELEASE_STATUS = draft | completed | inProgress
+PLAY_ROLLOUT_FRACTION = 0.05
+```
+
+Use `PLAY_RELEASE_STATUS=inProgress` only for staged rollouts and set
+`PLAY_ROLLOUT_FRACTION` to a value greater than 0 and less than 1. Production
+publishing asks for manual confirmation by default.
+
 ## Artifactory
 
 Artifacts are uploaded to:
@@ -135,4 +171,7 @@ mounting `flutter/bin/cache`.
 secret/jenkins/mobile/app/${applicationId}
 ```
 
-6. Run the Jenkins job manually once if you want to validate before relying on webhook triggers.
+6. Create the shared Google Play service-account Vault secret if it does not already exist.
+7. Run the Jenkins job with `PUBLISH_TO_PLAY=false` once to validate build and signing.
+8. Run the Jenkins job with `PUBLISH_TO_PLAY=true` and `PLAY_TRACK=internal`.
+9. After internal testing passes, promote through closed/open/production as needed.
