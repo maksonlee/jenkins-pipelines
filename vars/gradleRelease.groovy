@@ -1,3 +1,80 @@
+def playPublishAppsTask(String task) {
+    def segments = task.tokenize(':')
+    def taskName = segments ? segments[-1] : task
+    if (!(taskName ==~ /^publish.*Bundle$/)) {
+        return null
+    }
+
+    def taskStart = task.lastIndexOf(taskName)
+    return task.substring(0, taskStart) + taskName.replaceFirst(/Bundle$/, 'Apps')
+}
+
+def playPublishVariantSourceSet(String task) {
+    def segments = task.tokenize(':')
+    def taskName = segments ? segments[-1] : task
+    def matcher = taskName =~ /^publish(.*)Bundle$/
+    if (!matcher.matches() || !matcher[0][1]) {
+        return null
+    }
+
+    def variantName = matcher[0][1] as String
+    return variantName[0].toLowerCase() + variantName.substring(1)
+}
+
+def playPublishModuleDir(String task) {
+    def segments = task.tokenize(':')
+    if (segments.size() <= 1) {
+        return ''
+    }
+    return segments[0..-2].join('/')
+}
+
+def joinPath(List parts) {
+    return parts.findAll { it != null && it.toString().trim() }.join('/')
+}
+
+def hasPlayStoreListingMetadata(String task, String workDir) {
+    def moduleDir = playPublishModuleDir(task)
+    def sourceSets = ['main']
+    def variantSourceSet = playPublishVariantSourceSet(task)
+    if (variantSourceSet) {
+        sourceSets << variantSourceSet
+    }
+
+    def metadataPaths = []
+    sourceSets.unique().each { sourceSet ->
+        def playDir = joinPath([workDir, moduleDir, 'src', sourceSet, 'play'])
+        metadataPaths.addAll([
+                "${playDir}/listings",
+                "${playDir}/contact-email.txt",
+                "${playDir}/contact-phone.txt",
+                "${playDir}/contact-website.txt",
+                "${playDir}/default-language.txt"
+        ])
+    }
+
+    return metadataPaths.any { fileExists(it) }
+}
+
+def effectiveGradleReleaseTask(String task, String workDir, Map cfg) {
+    def appsTask = playPublishAppsTask(task)
+    if (!appsTask) {
+        return task
+    }
+
+    def publishPlayListings = cfg.get('publishPlayListings', 'auto')
+    if (publishPlayListings == false) {
+        return task
+    }
+
+    if (publishPlayListings == true || hasPlayStoreListingMetadata(task, workDir)) {
+        echo "gradleRelease: Play listing metadata detected; using ${appsTask} instead of ${task}"
+        return appsTask
+    }
+
+    return task
+}
+
 def call(String task, Map cfg = [:]) {
     if (!task?.trim()) error "gradleRelease: 'task' is required"
     if (!cfg.keystoreVaultPath) error "gradleRelease: 'keystoreVaultPath' is required"
@@ -20,6 +97,7 @@ def call(String task, Map cfg = [:]) {
     def workDir = (cfg.get('workDir', '')) as String    // e.g. 'android' if gradlew在子目錄
     def lockBuild = (cfg.get('lockBuild', true)) as boolean
     def lockPath = (cfg.get('lockPath', '/home/ubuntu/.gradle/android-release-build.lock')) as String
+    def releaseTask = effectiveGradleReleaseTask(task, workDir, cfg)
 
     withAndroidReleaseEnv(
             image: image,
@@ -37,7 +115,7 @@ def call(String task, Map cfg = [:]) {
 
         withEnv([
                 'GRADLE_RELEASE_CMD=' + gradleCmd,
-                'GRADLE_RELEASE_TASK=' + task,
+                'GRADLE_RELEASE_TASK=' + releaseTask,
                 'GRADLE_RELEASE_WORK_DIR=' + (workDir ?: ''),
                 'GRADLE_RELEASE_LOCK=' + (lockBuild ? 'true' : 'false'),
                 'GRADLE_RELEASE_LOCK_PATH=' + lockPath,
