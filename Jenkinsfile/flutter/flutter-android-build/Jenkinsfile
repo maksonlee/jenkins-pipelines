@@ -99,6 +99,13 @@ docker image inspect "${FLUTTER_IMAGE}" --format 'IMAGE_ID={{.Id}}'
             steps {
                 script {
                     def projectBase = env.PROJECT_WORKDIR == '.' ? 'source' : "source/${env.PROJECT_WORKDIR}"
+                    def playMetadataRoot = "${projectBase}/android/app/src/main/play"
+                    env.PLAY_METADATA_ROOT = playMetadataRoot
+                    if (fileExists("${playMetadataRoot}/listings")) {
+                        echo "PLAY_LISTINGS_ROOT=${playMetadataRoot}/listings"
+                    } else {
+                        echo "No Google Play listing metadata found at ${playMetadataRoot}/listings"
+                    }
                     def releaseNoteCandidates = [
                         "${projectBase}/android/app/src/main/play/release-notes/en-US/${params.PLAY_TRACK}.txt",
                         "${projectBase}/android/app/src/main/play/release-notes/en-US/default.txt"
@@ -352,6 +359,7 @@ python3 - "$play_json" "$aab_path" "$PLAY_PACKAGE_NAME" "$PLAY_TRACK" "$PLAY_REL
 import base64
 import json
 import os
+import pathlib
 import subprocess
 import sys
 import tempfile
@@ -416,21 +424,136 @@ def request_json(method, url, token=None, data=None, content_type='application/j
         err = e.read().decode('utf-8', errors='replace')
         raise SystemExit(f'HTTP {e.code} {method} {url}\\n{err}')
 
+def read_required_text(path):
+    if not path.is_file():
+        raise SystemExit(f'Missing Play listing metadata file: {path}')
+    text = path.read_text(encoding='utf-8').strip()
+    if not text:
+        raise SystemExit(f'Play listing metadata file is empty: {path}')
+    return text
+
+def content_type_for_image(path):
+    suffix = path.suffix.lower()
+    if suffix == '.png':
+        return 'image/png'
+    if suffix in ('.jpg', '.jpeg'):
+        return 'image/jpeg'
+    raise SystemExit(f'Unsupported Play listing image type: {path}')
+
+def validate_listing_lengths(language, title, short_description, full_description):
+    limits = {
+        'title': (title, 50),
+        'short description': (short_description, 80),
+        'full description': (full_description, 4000),
+    }
+    for name, (value, limit) in limits.items():
+        if len(value) > limit:
+            raise SystemExit(
+                f'Play {name} for {language} exceeds {limit} characters: {len(value)}'
+            )
+
+def sync_play_listing_metadata(token, api_base, upload_api_base, edit_id, metadata_root):
+    listings_root = pathlib.Path(metadata_root) / 'listings'
+    if not listings_root.is_dir():
+        print(f'No Play listing metadata found at {listings_root}; skipping listing sync.')
+        return
+
+    image_types = {
+        'icon': 'icon',
+        'feature-graphic': 'featureGraphic',
+        'phone-screenshots': 'phoneScreenshots',
+        'seven-inch-screenshots': 'sevenInchScreenshots',
+        'ten-inch-screenshots': 'tenInchScreenshots',
+    }
+    language_count = 0
+    image_count = 0
+
+    for language_dir in sorted(path for path in listings_root.iterdir() if path.is_dir()):
+        language = language_dir.name
+        text_files = [
+            language_dir / 'title.txt',
+            language_dir / 'short-description.txt',
+            language_dir / 'full-description.txt',
+        ]
+        if any(path.exists() for path in text_files):
+            title = read_required_text(text_files[0])
+            short_description = read_required_text(text_files[1])
+            full_description = read_required_text(text_files[2])
+            validate_listing_lengths(language, title, short_description, full_description)
+            request_json(
+                'PUT',
+                api_base + f'/edits/{edit_id}/listings/{urllib.parse.quote(language, safe="")}',
+                token=token,
+                data={
+                    'title': title,
+                    'shortDescription': short_description,
+                    'fullDescription': full_description,
+                },
+            )
+            language_count += 1
+            print(f'Updated Play listing text for {language}.')
+
+        graphics_root = language_dir / 'graphics'
+        if not graphics_root.is_dir():
+            continue
+        for local_dir_name, image_type in image_types.items():
+            image_dir = graphics_root / local_dir_name
+            if not image_dir.is_dir():
+                continue
+            image_paths = sorted(
+                path for path in image_dir.iterdir()
+                if path.is_file() and path.suffix.lower() in ('.png', '.jpg', '.jpeg')
+            )
+            if not image_paths:
+                continue
+
+            image_url = (
+                api_base +
+                f'/edits/{edit_id}/listings/{urllib.parse.quote(language, safe="")}' +
+                f'/{urllib.parse.quote(image_type, safe="")}'
+            )
+            request_json('DELETE', image_url, token=token)
+            for image_path in image_paths:
+                upload_url = (
+                    upload_api_base +
+                    f'/edits/{edit_id}/listings/{urllib.parse.quote(language, safe="")}' +
+                    f'/{urllib.parse.quote(image_type, safe="")}?uploadType=media'
+                )
+                request_json(
+                    'POST',
+                    upload_url,
+                    token=token,
+                    data=image_path.read_bytes(),
+                    content_type=content_type_for_image(image_path),
+                )
+                image_count += 1
+            print(f'Uploaded {len(image_paths)} Play {image_type} image(s) for {language}.')
+
+    print(f'Play listing metadata sync complete: {language_count} language(s), {image_count} image(s).')
+
 token_resp = request_json('POST', 'https://oauth2.googleapis.com/token', data=urllib.parse.urlencode({
     'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer',
     'assertion': assertion,
 }).encode('utf-8'), content_type='application/x-www-form-urlencoded')
 token = token_resp['access_token']
 base = f'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{urllib.parse.quote(package_name, safe="")}'
+upload_base = f'https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/{urllib.parse.quote(package_name, safe="")}'
 edit = request_json('POST', base + '/edits', token=token)
 edit_id = edit['id']
 print(f'Created Google Play edit: {edit_id}')
 with open(aab_path, 'rb') as f:
     bundle = f.read()
-upload_url = f'https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/{urllib.parse.quote(package_name, safe="")}/edits/{edit_id}/bundles?uploadType=media'
+upload_url = f'{upload_base}/edits/{edit_id}/bundles?uploadType=media'
 bundle_resp = request_json('POST', upload_url, token=token, data=bundle, content_type='application/octet-stream')
 version_code = str(bundle_resp['versionCode'])
 print(f'Uploaded bundle versionCode: {version_code}')
+sync_play_listing_metadata(
+    token,
+    base,
+    upload_base,
+    edit_id,
+    os.environ.get('PLAY_METADATA_ROOT', ''),
+)
 release = {
     'versionCodes': [version_code],
     'status': release_status,

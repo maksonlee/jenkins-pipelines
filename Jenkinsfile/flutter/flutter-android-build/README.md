@@ -89,7 +89,10 @@ First-time Play Console setup is still manual:
 3. Upload the first AAB manually if Google Play API upload is not yet available for the app.
 4. Create or select the Google Play service account and grant it access to the app.
 
-Subsequent releases can be published by this Jenkins job. The shared Play
+Subsequent releases can be published by this Jenkins job. The job uploads the
+release AAB, applies release notes from `android/app/src/main/play/release-notes`,
+and, when `android/app/src/main/play/listings` is present, syncs Play Store
+listing text and graphics before committing the Play edit. The shared Play
 service account JSON is read from Vault:
 
 ```text
@@ -115,6 +118,22 @@ PLAY_ROLLOUT_FRACTION = 0.05
 Use `PLAY_RELEASE_STATUS=inProgress` only for staged rollouts and set
 `PLAY_ROLLOUT_FRACTION` to a value greater than 0 and less than 1. Production
 publishing asks for manual confirmation by default.
+
+Supported listing metadata:
+
+```text
+android/app/src/main/play/listings/<language>/title.txt
+android/app/src/main/play/listings/<language>/short-description.txt
+android/app/src/main/play/listings/<language>/full-description.txt
+android/app/src/main/play/listings/<language>/graphics/icon/
+android/app/src/main/play/listings/<language>/graphics/feature-graphic/
+android/app/src/main/play/listings/<language>/graphics/phone-screenshots/
+android/app/src/main/play/listings/<language>/graphics/seven-inch-screenshots/
+android/app/src/main/play/listings/<language>/graphics/ten-inch-screenshots/
+```
+
+When a graphics directory exists, the job replaces that image type in Play with
+the local PNG/JPEG files from the directory.
 
 ## Artifactory
 
