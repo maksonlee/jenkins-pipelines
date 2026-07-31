@@ -191,6 +191,10 @@ Flutter SDK versions are installed and selected by FVM from:
 This keeps complete Flutter SDK versions in one FVM cache root instead of manually
 mounting `flutter/bin/cache`.
 
+The job uses the Flutter version from the project's `.fvmrc` when present, so
+different projects can select different SDK versions. Projects without an FVM pin
+use the pipeline's backward-compatible `DEFAULT_FLUTTER_VERSION` fallback.
+
 ## Add A New Flutter Project
 
 1. Create the GitHub repository under `maksonlee`.

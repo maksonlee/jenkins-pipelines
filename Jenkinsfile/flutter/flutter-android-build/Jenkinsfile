@@ -42,8 +42,12 @@ pipeline {
                     env.PROJECT_REPO = "git@github.com:maksonlee/${projectSlug}.git"
                     env.PROJECT_BRANCH = params.BRANCH?.trim() ?: webhookBranch ?: 'main'
                     env.PROJECT_CREDENTIALS_ID = 'vault-github-ssh'
-                    env.FLUTTER_VERSION = '3.44.0'
-                    env.FLUTTER_IMAGE = "harbor.maksonlee.com/library/flutter-android-build-env:${env.FLUTTER_VERSION}-fvm"
+                    // Keep the historical fallback for projects that have not
+                    // pinned Flutter yet. A project's .fvmrc takes precedence.
+                    env.DEFAULT_FLUTTER_VERSION = '3.44.0'
+                    // This image contains Android, Dart, and FVM. The project
+                    // Flutter SDK is installed into the mounted FVM cache.
+                    env.FLUTTER_IMAGE = 'harbor.maksonlee.com/library/flutter-android-build-env:3.44.0-fvm'
                     env.PYTHON_TEST_IMAGE = 'python:3.13-bookworm'
                     env.POSTGIS_TEST_IMAGE = 'postgis/postgis:18-3.6'
                     env.FLUTTER_CACHE_ROOT = '/home/administrator/jenkins/flutter-cache'
@@ -80,8 +84,26 @@ docker image inspect "${FLUTTER_IMAGE}" --format 'IMAGE_ID={{.Id}}'
                     def flutterProject = resolveFlutterWorkdir(sourceDir: 'source')
                     env.PROJECT_WORKDIR = flutterProject.workDir
                     env.PROJECT_VERSION_FILE = flutterProject.versionFile
+                    def projectBase = env.PROJECT_WORKDIR == '.' ? 'source' : 'source/' + env.PROJECT_WORKDIR
+                    def fvmConfigFile = projectBase + '/.fvmrc'
+                    env.FLUTTER_VERSION = env.DEFAULT_FLUTTER_VERSION
+                    if (fileExists(fvmConfigFile)) {
+                        def fvmConfig = readFile(file: fvmConfigFile)
+                        def flutterKey = '"flutter"'
+                        def keyOffset = fvmConfig.indexOf(flutterKey)
+                        def colonOffset = keyOffset < 0
+                            ? -1
+                            : fvmConfig.indexOf(':', keyOffset + flutterKey.length())
+                        def valueStart = colonOffset < 0 ? -1 : fvmConfig.indexOf('"', colonOffset + 1)
+                        def valueEnd = valueStart < 0 ? -1 : fvmConfig.indexOf('"', valueStart + 1)
+                        if (valueStart < 0 || valueEnd <= valueStart + 1) {
+                            error "Invalid FVM configuration: ${fvmConfigFile}"
+                        }
+                        env.FLUTTER_VERSION = fvmConfig.substring(valueStart + 1, valueEnd).trim()
+                    }
                     echo "Flutter workdir: ${env.PROJECT_WORKDIR}"
                     echo "Version file: ${env.PROJECT_VERSION_FILE}"
+                    echo "Flutter version: ${env.FLUTTER_VERSION}"
                 }
             }
         }
