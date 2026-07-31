@@ -41,6 +41,8 @@ pipeline {
                     env.PROJECT_CREDENTIALS_ID = 'vault-github-ssh'
                     env.FLUTTER_VERSION = '3.44.0'
                     env.FLUTTER_IMAGE = "harbor.maksonlee.com/library/flutter-android-build-env:${env.FLUTTER_VERSION}-fvm"
+                    env.PYTHON_TEST_IMAGE = 'python:3.13-bookworm'
+                    env.POSTGIS_TEST_IMAGE = 'postgis/postgis:18-3.6'
                     env.FLUTTER_CACHE_ROOT = '/home/administrator/jenkins/flutter-cache'
                     env.ANDROID_CACHE_ROOT = '/home/administrator/jenkins/android-cache'
                     env.ARTIFACTORY_REPO = 'android-snapshots'
@@ -134,6 +136,100 @@ docker image inspect "${FLUTTER_IMAGE}" --format 'IMAGE_ID={{.Id}}'
                 }
             }
         }
+        stage('Backend and metadata tests') {
+            steps {
+                script {
+                    if (fileExists('source/tests') && fileExists('source/requirements-dev.txt')) {
+                        sh '''#!/bin/bash
+set -euo pipefail
+test_id=$(printf %s "quality-${BUILD_TAG}" | tr -c 'A-Za-z0-9_.-' '-')
+test_network=""
+test_db=""
+
+cleanup() {
+  if [ -n "${test_db}" ]; then
+    docker rm -f "${test_db}" >/dev/null 2>&1 || true
+  fi
+  if [ -n "${test_network}" ]; then
+    docker network rm "${test_network}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+docker pull "${PYTHON_TEST_IMAGE}"
+docker_args=(
+  --rm
+  -e PYTHONDONTWRITEBYTECODE=1
+  -e COVERAGE_FILE=/tmp/.coverage
+  -v "$PWD/source:/workspace:ro"
+  -w /workspace
+)
+
+if [ -f source/tests/test_database_integration.py ]; then
+  docker pull "${POSTGIS_TEST_IMAGE}"
+  test_network="${test_id}-network"
+  test_db="${test_id}-db"
+  docker network create "${test_network}" >/dev/null
+  docker run -d --rm \
+    --name "${test_db}" \
+    --network "${test_network}" \
+    -e POSTGRES_PASSWORD=test-password \
+    -e POSTGRES_DB=taiwan_bus_test \
+    "${POSTGIS_TEST_IMAGE}" >/dev/null
+  ready=false
+  ready_checks=0
+  for _ in $(seq 1 60); do
+    if docker exec "${test_db}" pg_isready -U postgres -d taiwan_bus_test >/dev/null 2>&1; then
+      ready_checks=$((ready_checks + 1))
+      if [ "${ready_checks}" -ge 3 ]; then
+        ready=true
+        break
+      fi
+    else
+      ready_checks=0
+    fi
+    sleep 1
+  done
+  if [ "${ready}" != true ]; then
+    docker logs "${test_db}" >&2
+    echo "PostgreSQL/PostGIS test database did not become ready." >&2
+    exit 1
+  fi
+  docker_args+=(
+    --network "${test_network}"
+    -e "TEST_DATABASE_URL=postgresql://postgres:test-password@${test_db}:5432/taiwan_bus_test"
+  )
+fi
+
+docker run "${docker_args[@]}" "${PYTHON_TEST_IMAGE}" bash -lc '
+  set -euo pipefail
+  apt-get update >/dev/null
+  apt-get install -y --no-install-recommends postgresql-client >/dev/null
+  python -m pip install --disable-pip-version-check -r requirements-dev.txt
+  if [ -f scripts/validate_play_metadata.py ]; then
+    python scripts/validate_play_metadata.py
+  fi
+  python -m coverage run --branch -m unittest discover -s tests -v
+  python -m coverage report --fail-under=35
+'
+'''
+                    } else if (fileExists('source/scripts/validate_play_metadata.py')) {
+                        sh '''#!/bin/bash
+set -euo pipefail
+docker pull "${PYTHON_TEST_IMAGE}"
+docker run --rm \
+  -e PYTHONDONTWRITEBYTECODE=1 \
+  -v "$PWD/source:/workspace:ro" \
+  -w /workspace \
+  "${PYTHON_TEST_IMAGE}" \
+  python scripts/validate_play_metadata.py
+'''
+                    } else {
+                        echo 'No Python tests or Play metadata validator found; skipping backend checks.'
+                    }
+                }
+            }
+        }
         stage('Prepare release signing') {
             when {
                 expression { params.BUILD_TARGET.contains('release') }
@@ -181,11 +277,26 @@ echo "Release signing files prepared. JKS bytes: $(wc -c < "${signing_dir}/uploa
             steps {
                 script {
                     def flutterBin = "/home/ubuntu/fvm/versions/${env.FLUTTER_VERSION}/bin/flutter"
+                    def projectBase = env.PROJECT_WORKDIR == '.' ? 'source' : 'source/' + env.PROJECT_WORKDIR
+                    def qualityCommands = [
+                        "${flutterBin} pub get",
+                        "${flutterBin} analyze --no-pub"
+                    ]
+                    if (fileExists("${projectBase}/test")) {
+                        qualityCommands.add("${flutterBin} test --coverage --no-pub")
+                    } else {
+                        echo "No Flutter tests found at ${projectBase}/test"
+                    }
+                    if (fileExists("${projectBase}/android/app/src/test")) {
+                        qualityCommands.add("./android/gradlew -p android :app:testDebugUnitTest --no-daemon")
+                    } else {
+                        echo "No Android app unit tests found at ${projectBase}/android/app/src/test"
+                    }
                     def commandByTarget = [
-                        'appbundle-debug': "${flutterBin} pub get && ${flutterBin} build appbundle --debug --no-pub --no-android-gradle-daemon",
-                        'appbundle-release': "${flutterBin} pub get && ${flutterBin} build appbundle --release --no-pub --no-android-gradle-daemon",
-                        'apk-debug': "${flutterBin} pub get && ${flutterBin} build apk --debug --no-pub --no-android-gradle-daemon",
-                        'apk-release': "${flutterBin} pub get && ${flutterBin} build apk --release --no-pub --no-android-gradle-daemon"
+                        'appbundle-debug': "${flutterBin} build appbundle --debug --no-pub --no-android-gradle-daemon",
+                        'appbundle-release': "${flutterBin} build appbundle --release --no-pub --no-android-gradle-daemon",
+                        'apk-debug': "${flutterBin} build apk --debug --no-pub --no-android-gradle-daemon",
+                        'apk-release': "${flutterBin} build apk --release --no-pub --no-android-gradle-daemon"
                     ]
                     def artifactBase = env.PROJECT_WORKDIR == '.' ? 'source' : 'source/' + env.PROJECT_WORKDIR
                     def artifactByTarget = [
@@ -194,7 +305,9 @@ echo "Release signing files prepared. JKS bytes: $(wc -c < "${signing_dir}/uploa
                         'apk-debug': artifactBase + '/build/app/outputs/flutter-apk/*.apk',
                         'apk-release': artifactBase + '/build/app/outputs/flutter-apk/*.apk'
                     ]
-                    env.FLUTTER_BUILD_COMMAND = commandByTarget[params.BUILD_TARGET]
+                    env.FLUTTER_BUILD_COMMAND = (
+                        qualityCommands + [commandByTarget[params.BUILD_TARGET]]
+                    ).join(' && ')
                     env.FLUTTER_ARTIFACTS = artifactByTarget[params.BUILD_TARGET]
                     if (!env.FLUTTER_BUILD_COMMAND) error "Unknown BUILD_TARGET: ${params.BUILD_TARGET}"
                 }
@@ -249,6 +362,29 @@ docker run --rm \
   "${FLUTTER_IMAGE}" \
   bash -lc "yes | sdkmanager --licenses && fvm install ${FLUTTER_VERSION} && /home/ubuntu/fvm/versions/${FLUTTER_VERSION}/bin/flutter config --no-analytics && /home/ubuntu/fvm/versions/${FLUTTER_VERSION}/bin/flutter --version && ${FLUTTER_BUILD_COMMAND}"
 
+coverage_file="source/${PROJECT_WORKDIR}/coverage/lcov.info"
+coverage_minimum_file="source/${PROJECT_WORKDIR}/coverage-minimum.txt"
+if [ -f "${coverage_file}" ]; then
+  minimum=0
+  if [ -s "${coverage_minimum_file}" ]; then
+    minimum=$(tr -d '[:space:]' < "${coverage_minimum_file}")
+    if ! [[ "${minimum}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+      echo "Invalid Flutter coverage minimum: ${minimum}" >&2
+      exit 1
+    fi
+  fi
+  awk -F: -v minimum="${minimum}" '
+    /^LF:/ { lines_found += $2 }
+    /^LH:/ { lines_hit += $2 }
+    END {
+      percentage = lines_found ? (100 * lines_hit / lines_found) : 0
+      printf "FLUTTER_LINE_COVERAGE=%.2f%% (%d/%d), minimum=%.2f%%\\n",
+        percentage, lines_hit, lines_found, minimum
+      if (!lines_found || percentage + 0.00001 < minimum) exit 1
+    }
+  ' "${coverage_file}"
+fi
+
 end=$(date +%s)
 echo "TOTAL_SECONDS=$((end-start))"
 echo "FLUTTER_CACHE_SIZE_AFTER=$(du -sh "${flutter_cache_root}" 2>/dev/null | cut -f1)"
@@ -258,6 +394,18 @@ for d in "${flutter_cache_root}"/* "${android_cache_root}"/*; do
 done | sort -h || true
 ls -lh ${FLUTTER_ARTIFACTS}
 '''
+                script {
+                    def projectBase = env.PROJECT_WORKDIR == '.' ? 'source' : 'source/' + env.PROJECT_WORKDIR
+                    archiveArtifacts(
+                        artifacts: "${projectBase}/coverage/lcov.info",
+                        allowEmptyArchive: true,
+                        fingerprint: false
+                    )
+                    junit(
+                        testResults: "${projectBase}/build/app/test-results/testDebugUnitTest/TEST-*.xml",
+                        allowEmptyResults: true
+                    )
+                }
             }
         }
         stage('Archive artifacts') {
