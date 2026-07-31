@@ -1,7 +1,10 @@
 @Library('jenkins-shared-lib') _
 pipeline {
     agent { label 'ssh-agent-with-docker' }
-    options { timestamps() }
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
     triggers {
         GenericTrigger(
             genericVariables: [
@@ -22,7 +25,7 @@ pipeline {
         string(name: 'BRANCH', defaultValue: '', description: 'Git branch. Empty uses the project default branch.')
         choice(name: 'BUILD_TARGET', choices: ['appbundle-debug', 'appbundle-release', 'apk-debug', 'apk-release'], description: 'Flutter Android build target')
         booleanParam(name: 'PUBLISH_TO_PLAY', defaultValue: false, description: 'Upload release AAB to Google Play')
-        choice(name: 'PLAY_TRACK', choices: ['internal', 'closed', 'open', 'production'], description: 'Google Play release track')
+        choice(name: 'PLAY_TRACK', choices: ['internal', 'alpha', 'beta', 'production'], description: 'Google Play API track ID')
         choice(name: 'PLAY_RELEASE_STATUS', choices: ['draft', 'completed', 'inProgress'], description: 'Google Play release status')
         string(name: 'PLAY_ROLLOUT_FRACTION', defaultValue: '', description: 'Required for inProgress staged rollout, for example 0.05')
         booleanParam(name: 'PLAY_REQUIRE_PRODUCTION_APPROVAL', defaultValue: true, description: 'Require manual confirmation before production publish')
@@ -108,30 +111,225 @@ docker image inspect "${FLUTTER_IMAGE}" --format 'IMAGE_ID={{.Id}}'
                     } else {
                         echo "No Google Play listing metadata found at ${playMetadataRoot}/listings"
                     }
-                    def releaseNoteCandidates = [
-                        "${projectBase}/android/app/src/main/play/release-notes/en-US/${params.PLAY_TRACK}.txt",
-                        "${projectBase}/android/app/src/main/play/release-notes/en-US/default.txt"
-                    ]
-                    def releaseNotesPath = releaseNoteCandidates.find { fileExists(it) }
-                    if (releaseNotesPath) {
-                        def releaseNotes = readFile(releaseNotesPath).trim()
-                        if (!releaseNotes) {
-                            error "Google Play release notes are empty: ${releaseNotesPath}"
+                    def releaseNotesRoot = "${projectBase}/android/app/src/main/play/release-notes"
+                    def releaseNotesByLanguage = [:]
+                    def releaseNoteSources = []
+                    if (fileExists(releaseNotesRoot)) {
+                        def languageOutput = sh(
+                            returnStdout: true,
+                            script: """#!/bin/bash
+set -euo pipefail
+find "${releaseNotesRoot}" -mindepth 1 -maxdepth 1 -type d -printf '%f\\n' | sort
+"""
+                        ).trim()
+                        def languages = languageOutput ? languageOutput.readLines() : []
+                        languages.each { language ->
+                            if (!(language ==~ /^[a-z]{2,3}(?:-[A-Z][A-Za-z0-9]{1,7})?$/)) {
+                                error "Invalid Google Play release note language: ${language}"
+                            }
+                            def candidates = [
+                                "${releaseNotesRoot}/${language}/${params.PLAY_TRACK}.txt",
+                                "${releaseNotesRoot}/${language}/default.txt"
+                            ]
+                            def releaseNotesPath = candidates.find { fileExists(it) }
+                            if (releaseNotesPath) {
+                                def releaseNotes = readFile(releaseNotesPath).trim()
+                                if (!releaseNotes) {
+                                    error "Google Play release notes are empty: ${releaseNotesPath}"
+                                }
+                                if (releaseNotes.length() > 500) {
+                                    error "Google Play release notes exceed 500 characters for ${language}: ${releaseNotes.length()}"
+                                }
+                                releaseNotesByLanguage[language] = releaseNotes
+                                releaseNoteSources.add(releaseNotesPath)
+                            }
                         }
-                        if (releaseNotes.length() > 500) {
-                            error "Google Play release notes exceed 500 characters: ${releaseNotes.length()}"
-                        }
-                        env.PLAY_RELEASE_NOTES_PATH = releaseNotesPath
-                        env.PLAY_RELEASE_NOTES = releaseNotes
-                        writeFile file: '.play-release-notes', text: releaseNotes + '\n'
-                        echo "PLAY_RELEASE_NOTES_SOURCE=${releaseNotesPath}"
-                        echo "PLAY_RELEASE_NOTES<<EOF\n${releaseNotes}\nEOF"
+                    }
+                    if (releaseNotesByLanguage) {
+                        def previewLanguage = releaseNotesByLanguage.containsKey('en-US') ?
+                            'en-US' : releaseNotesByLanguage.keySet().toList().sort()[0]
+                        env.PLAY_RELEASE_NOTES = releaseNotesByLanguage[previewLanguage]
+                        writeFile(
+                            file: '.play-release-notes.json',
+                            text: groovy.json.JsonOutput.prettyPrint(
+                                groovy.json.JsonOutput.toJson(releaseNotesByLanguage)
+                            ) + '\n'
+                        )
+                        echo "PLAY_RELEASE_NOTES_LANGUAGES=${releaseNotesByLanguage.keySet().toList().sort().join(',')}"
+                        echo "PLAY_RELEASE_NOTES_SOURCES=${releaseNoteSources.join(',')}"
                     } else if (params.PUBLISH_TO_PLAY && params.BUILD_TARGET == 'appbundle-release') {
-                        error "Missing Google Play release notes metadata. Expected ${releaseNoteCandidates.join(' or ')}"
+                        error "Missing Google Play release notes metadata in ${releaseNotesRoot}"
                     } else {
-                        env.PLAY_RELEASE_NOTES_PATH = ''
                         env.PLAY_RELEASE_NOTES = ''
                         echo "No Google Play release notes metadata found for non-publish build."
+                    }
+                }
+            }
+        }
+        stage('Google Play version preflight') {
+            when {
+                expression {
+                    params.PUBLISH_TO_PLAY &&
+                        params.BUILD_TARGET == 'appbundle-release'
+                }
+            }
+            steps {
+                script {
+                    if (!env.PLAY_SERVICE_VAULT_PATH) {
+                        error "No playServiceVaultPath configured for PROJECT=${params.PROJECT}"
+                    }
+                    if (!env.PLAY_PACKAGE_NAME) {
+                        error "No packageName configured for PROJECT=${params.PROJECT}"
+                    }
+                    def versionFile = "source/${env.PROJECT_VERSION_FILE}"
+                    def versionLine = readFile(versionFile)
+                        .readLines()
+                        .collect { it.trim() }
+                        .find { it.startsWith('version:') }
+                    if (!versionLine) {
+                        error "Cannot find Flutter version in ${versionFile}"
+                    }
+                    def versionValue = versionLine.substring('version:'.length()).trim()
+                    def versionParts = versionValue.split('\\+', -1)
+                    if (
+                        versionParts.size() != 2 ||
+                        !(versionParts[0] ==~ /^[0-9]+\.[0-9]+\.[0-9]+$/) ||
+                        !(versionParts[1] ==~ /^[0-9]+$/) ||
+                        versionParts[1].toInteger() <= 0
+                    ) {
+                        error "Flutter version must use semanticVersion+positiveVersionCode: ${versionValue}"
+                    }
+                    env.PLAY_VERSION_NAME = versionParts[0]
+                    env.PLAY_VERSION_CODE = versionParts[1]
+                    echo "Google Play preflight version: ${env.PLAY_VERSION_NAME}+${env.PLAY_VERSION_CODE}"
+
+                    withVault([vaultSecrets: [[
+                        path: env.PLAY_SERVICE_VAULT_PATH,
+                        engineVersion: 2,
+                        secretValues: [[envVar: 'PLAY_SERVICE_JSON_B64', vaultKey: 'json_b64']]
+                    ]]]) {
+                        sh '''#!/bin/bash
+set -euo pipefail
+umask 077
+: "${PLAY_SERVICE_JSON_B64:?ERROR: PLAY_SERVICE_JSON_B64 is empty or unset}"
+play_json="$PWD/play-preflight-service.json"
+trap 'rm -f "$play_json"' EXIT
+printf %s "${PLAY_SERVICE_JSON_B64}" | sed 's/^data:[^,]*,//' | tr -d '\r\n ' | base64 -d > "$play_json"
+python3 - "$play_json" "$PLAY_PACKAGE_NAME" "$PLAY_VERSION_NAME" "$PLAY_VERSION_CODE" <<'PY'
+import base64
+import json
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+service_json, package_name, version_name, expected_version_code_text = sys.argv[1:]
+expected_version_code = int(expected_version_code_text)
+with open(service_json, 'r', encoding='utf-8') as file:
+    service = json.load(file)
+
+def b64url(data):
+    return base64.urlsafe_b64encode(data).rstrip(b'=').decode('ascii')
+
+now = int(time.time())
+header = {'alg': 'RS256', 'typ': 'JWT'}
+payload = {
+    'iss': service['client_email'],
+    'scope': 'https://www.googleapis.com/auth/androidpublisher',
+    'aud': 'https://oauth2.googleapis.com/token',
+    'iat': now,
+    'exp': now + 3600,
+}
+signing_input = (
+    b64url(json.dumps(header, separators=(',', ':')).encode('utf-8'))
+    + '.'
+    + b64url(json.dumps(payload, separators=(',', ':')).encode('utf-8'))
+)
+with tempfile.NamedTemporaryFile('w', encoding='utf-8') as key_file:
+    key_file.write(service['private_key'])
+    key_file.flush()
+    signature = subprocess.check_output(
+        ['openssl', 'dgst', '-sha256', '-sign', key_file.name],
+        input=signing_input.encode('ascii'),
+    )
+assertion = signing_input + '.' + b64url(signature)
+
+def request_json(method, url, token=None, data=None, content_type='application/json'):
+    headers = {}
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+    body = data
+    if isinstance(data, (dict, list)):
+        body = json.dumps(data).encode('utf-8')
+        headers['Content-Type'] = content_type
+    elif data is not None:
+        headers['Content-Type'] = content_type
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers=headers,
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            raw = response.read().decode('utf-8')
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode('utf-8', errors='replace')
+        raise SystemExit(
+            f'Google Play API {method} failed: HTTP {error.code}\\n{detail}'
+        )
+
+token_response = request_json(
+    'POST',
+    'https://oauth2.googleapis.com/token',
+    data=urllib.parse.urlencode({
+        'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        'assertion': assertion,
+    }).encode('utf-8'),
+    content_type='application/x-www-form-urlencoded',
+)
+token = token_response['access_token']
+base = (
+    'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/'
+    + urllib.parse.quote(package_name, safe='')
+)
+edit = request_json('POST', base + '/edits', token=token, data={})
+edit_id = edit['id']
+try:
+    bundles = request_json(
+        'GET',
+        base + f'/edits/{urllib.parse.quote(edit_id, safe="")}/bundles',
+        token=token,
+    ).get('bundles', [])
+    existing_version_codes = sorted(
+        int(bundle['versionCode'])
+        for bundle in bundles
+        if bundle.get('versionCode') is not None
+    )
+finally:
+    request_json(
+        'DELETE',
+        base + f'/edits/{urllib.parse.quote(edit_id, safe="")}',
+        token=token,
+    )
+
+highest_version_code = max(existing_version_codes, default=0)
+print(
+    f'Google Play highest versionCode: {highest_version_code}; '
+    f'candidate: {version_name}+{expected_version_code}'
+)
+if expected_version_code <= highest_version_code:
+    raise SystemExit(
+        f'Google Play versionCode must be greater than {highest_version_code}; '
+        f'candidate {expected_version_code} has already been used or is stale.'
+    )
+PY
+rm -f "$play_json"
+'''
                     }
                 }
             }
@@ -161,6 +359,7 @@ docker_args=(
   --rm
   -e PYTHONDONTWRITEBYTECODE=1
   -e COVERAGE_FILE=/tmp/.coverage
+  -e PIP_ROOT_USER_ACTION=ignore
   -v "$PWD/source:/workspace:ro"
   -w /workspace
 )
@@ -206,6 +405,7 @@ docker run "${docker_args[@]}" "${PYTHON_TEST_IMAGE}" bash -lc '
   apt-get update >/dev/null
   apt-get install -y --no-install-recommends postgresql-client >/dev/null
   python -m pip install --disable-pip-version-check -r requirements-dev.txt
+  python -m pip check
   if [ -f scripts/validate_play_metadata.py ]; then
     python scripts/validate_play_metadata.py
   fi
@@ -497,7 +697,7 @@ umask 077
 play_json="$PWD/play-service.json"
 trap 'rm -f "$play_json"' EXIT
 aab_path=$(ls ${FLUTTER_ARTIFACTS} | head -n 1)
-release_notes_path="$PWD/.play-release-notes"
+release_notes_path="$PWD/.play-release-notes.json"
 if [ ! -s "$release_notes_path" ]; then
   echo "Missing Google Play release notes file: $release_notes_path" >&2
   exit 1
@@ -520,11 +720,23 @@ service_json, aab_path, package_name, track, release_status, rollout_fraction, r
 with open(service_json, 'r', encoding='utf-8') as f:
     svc = json.load(f)
 with open(release_notes_path, 'r', encoding='utf-8') as f:
-    release_notes = f.read().strip()
-if not release_notes:
+    release_notes_by_language = json.load(f)
+if not isinstance(release_notes_by_language, dict) or not release_notes_by_language:
     raise SystemExit('Google Play release notes are required')
-if len(release_notes) > 500:
-    raise SystemExit(f'Google Play release notes exceed 500 characters: {len(release_notes)}')
+release_notes = []
+for language, text in sorted(release_notes_by_language.items()):
+    if not isinstance(language, str) or not isinstance(text, str) or not text.strip():
+        raise SystemExit(f'Invalid Google Play release note for language: {language!r}')
+    normalized_text = text.strip()
+    if len(normalized_text) > 500:
+        raise SystemExit(
+            f'Google Play release notes exceed 500 characters for {language}: '
+            f'{len(normalized_text)}'
+        )
+    release_notes.append({
+        'language': language,
+        'text': normalized_text,
+    })
 
 def b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b'=').decode('ascii')
@@ -705,10 +917,7 @@ sync_play_listing_metadata(
 release = {
     'versionCodes': [version_code],
     'status': release_status,
-    'releaseNotes': [{
-        'language': 'en-US',
-        'text': release_notes,
-    }],
+    'releaseNotes': release_notes,
 }
 if release_status == 'inProgress':
     if not rollout_fraction.strip():

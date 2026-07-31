@@ -110,7 +110,7 @@ Manual release parameters:
 ```text
 BUILD_TARGET = appbundle-release
 PUBLISH_TO_PLAY = true
-PLAY_TRACK = internal | closed | open | production
+PLAY_TRACK = internal | alpha | beta | production
 PLAY_RELEASE_STATUS = draft | completed | inProgress
 PLAY_ROLLOUT_FRACTION = 0.05
 ```
@@ -118,6 +118,19 @@ PLAY_ROLLOUT_FRACTION = 0.05
 Use `PLAY_RELEASE_STATUS=inProgress` only for staged rollouts and set
 `PLAY_ROLLOUT_FRACTION` to a value greater than 0 and less than 1. Production
 publishing asks for manual confirmation by default.
+
+Before a publish build starts, the job reads the Flutter
+`version: <versionName>+<versionCode>` value and compares its versionCode with
+the bundles already in Play Console. The build fails early unless the candidate
+versionCode is greater than every previously uploaded bundle.
+
+Release notes are loaded for every language directory. A track-specific file
+takes precedence over that language's `default.txt`:
+
+```text
+android/app/src/main/play/release-notes/<language>/<track>.txt
+android/app/src/main/play/release-notes/<language>/default.txt
+```
 
 Supported listing metadata:
 
@@ -193,4 +206,4 @@ secret/jenkins/mobile/app/${applicationId}
 6. Create the shared Google Play service-account Vault secret if it does not already exist.
 7. Run the Jenkins job with `PUBLISH_TO_PLAY=false` once to validate build and signing.
 8. Run the Jenkins job with `PUBLISH_TO_PLAY=true` and `PLAY_TRACK=internal`.
-9. After internal testing passes, promote through closed/open/production as needed.
+9. After internal testing passes, promote through alpha/beta/production as needed.
