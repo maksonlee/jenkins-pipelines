@@ -36,7 +36,8 @@ pipeline {
                 sh '''#!/usr/bin/env bash
                     set -euo pipefail
 
-                    base_url="${HEALTH_BASE_URL%/}"
+                    base_url="${HEALTH_BASE_URL:-https://taipeiareabus.maksonlee.com}"
+                    base_url="${base_url%/}"
                     mkdir -p health-results
                     failures=0
 
