@@ -1,0 +1,143 @@
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    triggers {
+        cron('H/5 * * * *')
+    }
+
+    options {
+        buildDiscarder(logRotator(
+            numToKeepStr: '288',
+            artifactNumToKeepStr: '24'
+        ))
+        disableConcurrentBuilds()
+        skipDefaultCheckout(true)
+        timeout(time: 2, unit: 'MINUTES')
+        timestamps()
+    }
+
+    parameters {
+        string(
+            name: 'HEALTH_BASE_URL',
+            defaultValue: 'https://taipeiareabus.maksonlee.com',
+            description: 'Public Taiwan Bus API origin without a trailing slash'
+        )
+        string(
+            name: 'ALERT_EMAIL',
+            defaultValue: 'maksonlee@maksonlee.com',
+            description: 'Recipient for first-failure and recovery notifications'
+        )
+    }
+
+    stages {
+        stage('Check production health') {
+            steps {
+                deleteDir()
+                sh '''#!/usr/bin/env bash
+                    set -euo pipefail
+
+                    base_url="${HEALTH_BASE_URL%/}"
+                    mkdir -p health-results
+                    failures=0
+
+                    for endpoint in \
+                        /api/ready \
+                        /api/health/realtime \
+                        /api/health/travel-time
+                    do
+                        slug="${endpoint#/api/}"
+                        slug="$(printf '%s' "$slug" | tr / -)"
+                        body_file="health-results/${slug}.json"
+
+                        if ! http_code="$(curl \
+                            --haproxy-protocol \
+                            --silent \
+                            --show-error \
+                            --connect-timeout 5 \
+                            --max-time 15 \
+                            --output "$body_file" \
+                            --write-out '%{http_code}' \
+                            "${base_url}${endpoint}")"
+                        then
+                            echo "${endpoint}: request failed" >&2
+                            failures=1
+                            continue
+                        fi
+
+                        echo "${endpoint}: HTTP ${http_code}"
+                        if [[ "$http_code" != 200 ]]; then
+                            python3 -m json.tool "$body_file" >&2 || cat "$body_file" >&2
+                            failures=1
+                            continue
+                        fi
+
+                        if ! python3 - "$endpoint" "$body_file" <<'PY'
+import json
+import sys
+
+endpoint, filename = sys.argv[1:]
+with open(filename, encoding='utf-8') as response:
+    payload = json.load(response)
+status = payload.get('status')
+if status not in ('ok', 'syncing'):
+    raise SystemExit(f'{endpoint}: unexpected status {status!r}')
+print(f'{endpoint}: status={status}')
+PY
+                        then
+                            failures=1
+                        fi
+                    done
+
+                    if (( failures != 0 )); then
+                        echo 'One or more production health checks failed.' >&2
+                        exit 1
+                    fi
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts(
+                artifacts: 'health-results/*.json',
+                allowEmptyArchive: true,
+                fingerprint: false
+            )
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+        regression {
+            script {
+                if (params.ALERT_EMAIL?.trim()) {
+                    emailext(
+                        to: params.ALERT_EMAIL.trim(),
+                        subject: "[ALERT] Taiwan Bus production health failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                        body: """Taiwan Bus production health checks failed.
+
+Endpoints:
+- ${params.HEALTH_BASE_URL}/api/ready
+- ${params.HEALTH_BASE_URL}/api/health/realtime
+- ${params.HEALTH_BASE_URL}/api/health/travel-time
+
+Build details: ${env.BUILD_URL}
+"""
+                    )
+                }
+            }
+        }
+        fixed {
+            script {
+                if (params.ALERT_EMAIL?.trim()) {
+                    emailext(
+                        to: params.ALERT_EMAIL.trim(),
+                        subject: "[RECOVERED] Taiwan Bus production health: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                        body: """Taiwan Bus production health checks have recovered.
+
+Build details: ${env.BUILD_URL}
+"""
+                    )
+                }
+            }
+        }
+    }
+}
