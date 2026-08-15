@@ -227,10 +227,11 @@ and runs `connectedDebugAndroidTest` across those devices. It fails before the
 tests if the agent has fewer devices than the configured minimum.
 
 The main build runs in the Flutter container, while physical-device tests run
-with the host Flutter SDK so they can use the host ADB server. Before connected
-tests, the pipeline reruns `flutter pub get` on the host to regenerate package
-and plugin metadata with host SDK paths; container paths must not be reused by
-the host Gradle build.
+with the host Flutter SDK so they can use the host ADB server. Connected tests
+run from a clean `git archive` of the same commit, then regenerate dependency
+metadata with the host SDK. This prevents container-only Flutter and Gradle
+paths, cached build output, and generated signing files from leaking into the
+host build while preserving the original workspace's artifacts and coverage.
 
 ## Add A New Flutter Project
 

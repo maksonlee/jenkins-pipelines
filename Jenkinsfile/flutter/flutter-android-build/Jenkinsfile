@@ -677,6 +677,8 @@ ls -lh ${FLUTTER_ARTIFACTS}
 set -euo pipefail
 project_base="source/${PROJECT_WORKDIR}"
 minimum_file="${project_base}/connected-device-minimum.txt"
+workspace_root=$(pwd)
+source_project="${workspace_root}/${project_base}"
 minimum=$(tr -d '[:space:]' < "${minimum_file}")
 if ! [[ "${minimum}" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid connected Android device minimum: ${minimum}" >&2
@@ -706,11 +708,21 @@ export FVM_CACHE_PATH="${FLUTTER_CACHE_ROOT}/fvm"
 export PUB_CACHE="${FLUTTER_CACHE_ROOT}/pub-cache"
 export GRADLE_USER_HOME="${ANDROID_CACHE_ROOT}/gradle"
 export PATH="${android_sdk}/platform-tools:${PATH}"
-cd "${project_base}"
 
-# The main build runs inside a container whose Flutter SDK is mounted at
-# /home/ubuntu/fvm. Regenerate package and plugin metadata with host paths
-# before invoking the host Flutter SDK for physical-device tests.
+# The container build leaves absolute /workspace and /home/ubuntu paths in
+# generated Flutter and Gradle metadata. Run physical-device tests from a clean
+# archive of the same commit so the host build cannot reuse container paths or
+# copy generated signing material.
+connected_checkout=$(mktemp -d "${workspace_root}/connected-tests.XXXXXX")
+trap 'rm -rf -- "${connected_checkout}"' EXIT
+if [ "${PROJECT_WORKDIR}" = "." ]; then
+  git -C source archive HEAD | tar -C "${connected_checkout}" -xf -
+  connected_project="${connected_checkout}"
+else
+  git -C source archive HEAD "${PROJECT_WORKDIR}" | tar -C "${connected_checkout}" -xf -
+  connected_project="${connected_checkout}/${PROJECT_WORKDIR}"
+fi
+cd "${connected_project}"
 "${host_flutter}" pub get
 
 mapfile -t integration_tests < <(find integration_test -type f -name '*_test.dart' -print 2>/dev/null | sort)
@@ -730,6 +742,17 @@ if [ -d android/app/src/androidTest ]; then
 else
   echo "No Android instrumentation tests found."
 fi
+
+connected_results="build/app/outputs/androidTest-results/connected"
+if [ -d "${connected_results}" ]; then
+  source_results="${source_project}/${connected_results}"
+  mkdir -p "${source_results}"
+  cp -a "${connected_results}/." "${source_results}/"
+fi
+
+cd "${workspace_root}"
+rm -rf -- "${connected_checkout}"
+trap - EXIT
 '''
                 script {
                     def projectBase = env.PROJECT_WORKDIR == '.' ? 'source' : 'source/' + env.PROJECT_WORKDIR
