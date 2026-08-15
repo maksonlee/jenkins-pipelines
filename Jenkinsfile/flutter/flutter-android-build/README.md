@@ -13,11 +13,14 @@ This job builds Flutter Android artifacts for GitHub repositories under `maksonl
 Configure each Flutter app repository with the same webhook:
 
 ```text
-Payload URL:  https://jenkins.maksonlee.com/generic-webhook-trigger/invoke?token=flutter-android-build
+Payload URL:  configured in the GitHub repository settings
 Content type: application/json
 Events:       Just the push event
 Active:       enabled
 ```
+
+The trigger token is stored as the Jenkins secret-text credential
+`flutter-android-build-webhook-token`; do not put its value in this repository.
 
 The Jenkins job extracts:
 
@@ -194,6 +197,34 @@ mounting `flutter/bin/cache`.
 The job uses the Flutter version from the project's `.fvmrc` when present, so
 different projects can select different SDK versions. Projects without an FVM pin
 use the pipeline's backward-compatible `DEFAULT_FLUTTER_VERSION` fallback.
+
+## Quality Gates
+
+For Flutter applications, the job runs dependency resolution, static analysis,
+Flutter tests with line and branch coverage, Android lint, and any JVM unit tests
+under `android/app/src/test` before it builds an artifact.
+
+Projects can enforce coverage with numeric percentage files at their Flutter
+project root:
+
+```text
+coverage-minimum.txt
+branch-coverage-minimum.txt
+```
+
+If the branch threshold file is present but the LCOV report contains no branch
+records, the build fails instead of silently accepting missing data.
+
+Projects that require physical-device gates can add an integer file containing
+the minimum number of authorized Android devices:
+
+```text
+connected-device-minimum.txt
+```
+
+The job then runs every test under `integration_test/` on each connected device
+and runs `connectedDebugAndroidTest` across those devices. It fails before the
+tests if the agent has fewer devices than the configured minimum.
 
 ## Add A New Flutter Project
 

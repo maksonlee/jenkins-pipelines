@@ -12,7 +12,7 @@ pipeline {
                 [key: 'WEBHOOK_REF', value: '$.ref']
             ],
             causeString: 'GitHub push: $WEBHOOK_PROJECT $WEBHOOK_REF',
-            token: 'flutter-android-build',
+            tokenCredentialId: 'flutter-android-build-webhook-token',
             printContributedVariables: false,
             printPostContent: false,
             silentResponse: false,
@@ -506,9 +506,14 @@ echo "Release signing files prepared. JKS bytes: $(wc -c < "${signing_dir}/uploa
                         "${flutterBin} analyze --no-pub"
                     ]
                     if (fileExists("${projectBase}/test")) {
-                        qualityCommands.add("${flutterBin} test --coverage --no-pub")
+                        qualityCommands.add("${flutterBin} test --coverage --branch-coverage --no-pub")
                     } else {
                         echo "No Flutter tests found at ${projectBase}/test"
+                    }
+                    if (fileExists("${projectBase}/android/app")) {
+                        qualityCommands.add("./android/gradlew -p android :app:lintDebug --no-daemon")
+                    } else {
+                        echo "No Android app found at ${projectBase}/android/app"
                     }
                     if (fileExists("${projectBase}/android/app/src/test")) {
                         qualityCommands.add("./android/gradlew -p android :app:testDebugUnitTest --no-daemon")
@@ -590,8 +595,11 @@ docker run --rm \
 
 coverage_file="source/${PROJECT_WORKDIR}/coverage/lcov.info"
 coverage_minimum_file="source/${PROJECT_WORKDIR}/coverage-minimum.txt"
+branch_coverage_minimum_file="source/${PROJECT_WORKDIR}/branch-coverage-minimum.txt"
 if [ -f "${coverage_file}" ]; then
   minimum=0
+  branch_minimum=0
+  enforce_branch_minimum=false
   if [ -s "${coverage_minimum_file}" ]; then
     minimum=$(tr -d '[:space:]' < "${coverage_minimum_file}")
     if ! [[ "${minimum}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
@@ -599,14 +607,37 @@ if [ -f "${coverage_file}" ]; then
       exit 1
     fi
   fi
-  awk -F: -v minimum="${minimum}" '
+  if [ -s "${branch_coverage_minimum_file}" ]; then
+    branch_minimum=$(tr -d '[:space:]' < "${branch_coverage_minimum_file}")
+    if ! [[ "${branch_minimum}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+      echo "Invalid Flutter branch coverage minimum: ${branch_minimum}" >&2
+      exit 1
+    fi
+    enforce_branch_minimum=true
+  fi
+  awk -F: -v minimum="${minimum}" -v branch_minimum="${branch_minimum}" \
+    -v enforce_branch_minimum="${enforce_branch_minimum}" '
     /^LF:/ { lines_found += $2 }
     /^LH:/ { lines_hit += $2 }
+    /^BRDA:/ {
+      branches_found++
+      split($2, branch_fields, ",")
+      if (branch_fields[4] != "-" && branch_fields[4] + 0 > 0) branches_hit++
+    }
     END {
       percentage = lines_found ? (100 * lines_hit / lines_found) : 0
       printf "FLUTTER_LINE_COVERAGE=%.2f%% (%d/%d), minimum=%.2f%%\\n",
         percentage, lines_hit, lines_found, minimum
-      if (!lines_found || percentage + 0.00001 < minimum) exit 1
+      failed = !lines_found || percentage + 0.00001 < minimum
+
+      if (branches_found || enforce_branch_minimum == "true") {
+        branch_percentage = branches_found ? (100 * branches_hit / branches_found) : 0
+        printf "FLUTTER_BRANCH_COVERAGE=%.2f%% (%d/%d), minimum=%.2f%%\\n",
+          branch_percentage, branches_hit, branches_found, branch_minimum
+        if (!branches_found || branch_percentage + 0.00001 < branch_minimum) failed = 1
+      }
+
+      if (failed) exit 1
     }
   ' "${coverage_file}"
 fi
@@ -629,6 +660,73 @@ ls -lh ${FLUTTER_ARTIFACTS}
                     )
                     junit(
                         testResults: "${projectBase}/build/app/test-results/testDebugUnitTest/TEST-*.xml",
+                        allowEmptyResults: true
+                    )
+                }
+            }
+        }
+        stage('Connected Android tests') {
+            when {
+                expression {
+                    def projectBase = env.PROJECT_WORKDIR == '.' ? 'source' : 'source/' + env.PROJECT_WORKDIR
+                    fileExists("${projectBase}/connected-device-minimum.txt")
+                }
+            }
+            steps {
+                sh '''#!/bin/bash
+set -euo pipefail
+project_base="source/${PROJECT_WORKDIR}"
+minimum_file="${project_base}/connected-device-minimum.txt"
+minimum=$(tr -d '[:space:]' < "${minimum_file}")
+if ! [[ "${minimum}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid connected Android device minimum: ${minimum}" >&2
+  exit 1
+fi
+
+android_sdk="${ANDROID_CACHE_ROOT}/flutter-android-sdk"
+adb_bin="${android_sdk}/platform-tools/adb"
+host_flutter="${FLUTTER_CACHE_ROOT}/fvm/versions/${FLUTTER_VERSION}/bin/flutter"
+if [ ! -x "${adb_bin}" ] || [ ! -x "${host_flutter}" ]; then
+  echo "Connected-test tooling is unavailable on this Jenkins agent." >&2
+  exit 1
+fi
+
+"${adb_bin}" start-server >/dev/null
+mapfile -t device_serials < <("${adb_bin}" devices | awk 'NR > 1 && $2 == "device" { print $1 }')
+echo "CONNECTED_ANDROID_DEVICES=${#device_serials[@]}, minimum=${minimum}"
+if [ "${#device_serials[@]}" -lt "${minimum}" ]; then
+  echo "Not enough authorized Android devices are connected." >&2
+  "${adb_bin}" devices -l
+  exit 1
+fi
+
+export ANDROID_HOME="${android_sdk}"
+export ANDROID_SDK_ROOT="${android_sdk}"
+export PATH="${android_sdk}/platform-tools:${PATH}"
+cd "${project_base}"
+
+mapfile -t integration_tests < <(find integration_test -type f -name '*_test.dart' -print 2>/dev/null | sort)
+if [ "${#integration_tests[@]}" -gt 0 ]; then
+  for serial in "${device_serials[@]}"; do
+    for test_file in "${integration_tests[@]}"; do
+      echo "Running ${test_file} on ${serial}"
+      "${host_flutter}" test "${test_file}" -d "${serial}" --no-pub
+    done
+  done
+else
+  echo "No Flutter integration tests found."
+fi
+
+if [ -d android/app/src/androidTest ]; then
+  ./android/gradlew -p android :app:connectedDebugAndroidTest --no-daemon
+else
+  echo "No Android instrumentation tests found."
+fi
+'''
+                script {
+                    def projectBase = env.PROJECT_WORKDIR == '.' ? 'source' : 'source/' + env.PROJECT_WORKDIR
+                    junit(
+                        testResults: "${projectBase}/build/app/outputs/androidTest-results/connected/**/*.xml",
                         allowEmptyResults: true
                     )
                 }
