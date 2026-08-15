@@ -226,6 +226,12 @@ The job then runs every test under `integration_test/` on each connected device
 and runs `connectedDebugAndroidTest` across those devices. It fails before the
 tests if the agent has fewer devices than the configured minimum.
 
+The main build runs in the Flutter container, while physical-device tests run
+with the host Flutter SDK so they can use the host ADB server. Before connected
+tests, the pipeline reruns `flutter pub get` on the host to regenerate package
+and plugin metadata with host SDK paths; container paths must not be reused by
+the host Gradle build.
+
 ## Add A New Flutter Project
 
 1. Create the GitHub repository under `maksonlee`.

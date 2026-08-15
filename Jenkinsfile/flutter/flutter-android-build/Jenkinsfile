@@ -702,8 +702,16 @@ fi
 
 export ANDROID_HOME="${android_sdk}"
 export ANDROID_SDK_ROOT="${android_sdk}"
+export FVM_CACHE_PATH="${FLUTTER_CACHE_ROOT}/fvm"
+export PUB_CACHE="${FLUTTER_CACHE_ROOT}/pub-cache"
+export GRADLE_USER_HOME="${ANDROID_CACHE_ROOT}/gradle"
 export PATH="${android_sdk}/platform-tools:${PATH}"
 cd "${project_base}"
+
+# The main build runs inside a container whose Flutter SDK is mounted at
+# /home/ubuntu/fvm. Regenerate package and plugin metadata with host paths
+# before invoking the host Flutter SDK for physical-device tests.
+"${host_flutter}" pub get
 
 mapfile -t integration_tests < <(find integration_test -type f -name '*_test.dart' -print 2>/dev/null | sort)
 if [ "${#integration_tests[@]}" -gt 0 ]; then
