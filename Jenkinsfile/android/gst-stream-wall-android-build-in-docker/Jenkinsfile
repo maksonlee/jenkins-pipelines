@@ -12,6 +12,7 @@ pipeline {
         string(name: 'VERSION_CODE', defaultValue: '1', description: 'Monotonically increasing Google Play version code')
         string(name: 'VERSION_NAME', defaultValue: '0.1.0-alpha.1', description: 'User-visible Android version')
         booleanParam(name: 'PUBLISH_TO_PLAY', defaultValue: false, description: 'Upload to the Google Play internal track after approval')
+        booleanParam(name: 'PUBLISH_LISTING_TO_PLAY', defaultValue: false, description: 'Update Play Store listing metadata only; does not upload an AAB or alter a release track')
         choice(name: 'PLAY_RELEASE_STATUS', choices: ['draft', 'completed'], description: 'Draft is the safe first-upload default')
     }
 
@@ -32,10 +33,18 @@ pipeline {
                     if (!versionName || !(versionName ==~ /^[0-9A-Za-z][0-9A-Za-z.+-]{0,49}$/)) {
                         error "Invalid VERSION_NAME: ${versionName}"
                     }
+                    if (params.PUBLISH_TO_PLAY && params.PUBLISH_LISTING_TO_PLAY) {
+                        error 'PUBLISH_TO_PLAY and PUBLISH_LISTING_TO_PLAY are mutually exclusive'
+                    }
                     env.GIT_REF = gitRef
                     env.RELEASE_VERSION_CODE = versionCode
                     env.RELEASE_VERSION_NAME = versionName
-                    echo "Building ${env.GIT_REF} as Android ${env.RELEASE_VERSION_NAME} (${env.RELEASE_VERSION_CODE})"
+                    env.LISTING_ONLY = params.PUBLISH_LISTING_TO_PLAY ? 'true' : 'false'
+                    if (env.LISTING_ONLY == 'true') {
+                        echo "Updating Play Store listings from ${env.GIT_REF}; no AAB or release track will be changed"
+                    } else {
+                        echo "Building ${env.GIT_REF} as Android ${env.RELEASE_VERSION_NAME} (${env.RELEASE_VERSION_CODE})"
+                    }
                 }
             }
         }
@@ -93,6 +102,7 @@ install -d \
         }
 
         stage('Test, lint, build & sign AAB') {
+            when { expression { env.LISTING_ONLY != 'true' } }
             steps {
                 script {
                     gradleRelease(':app:bundleRelease', androidReleaseConfig([
@@ -107,6 +117,7 @@ install -d \
         }
 
         stage('Verify AAB') {
+            when { expression { env.LISTING_ONLY != 'true' } }
             steps {
                 withVault([vaultSecrets: [[
                     path: 'secret/jenkins/mobile/app/com.maksonlee.gststreamwall',
@@ -216,6 +227,27 @@ sha256sum -c apps/android/app/build/outputs/bundle/release/app-release.aab.sha25
                                     'release.versionName': env.RELEASE_VERSION_NAME,
                                     'play.releaseStatus': params.PLAY_RELEASE_STATUS
                             ]
+                    ]))
+                }
+            }
+        }
+
+        stage('Approve Play Store listing update') {
+            when { expression { params.PUBLISH_LISTING_TO_PLAY } }
+            steps {
+                input message: "Update the en-US and zh-TW Play Store listings from ${env.RELEASE_COMMIT}? No AAB or release track will be changed."
+            }
+        }
+
+        stage('Publish Play Store listings') {
+            when { expression { params.PUBLISH_LISTING_TO_PLAY } }
+            steps {
+                script {
+                    gradleRelease(':app:publishListing', androidReleaseConfig([
+                            requiresSigning: false,
+                            keystoreVaultPath: null,
+                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service',
+                            playJsonPath: '/tmp/gst-stream-wall-play-service.json'
                     ]))
                 }
             }

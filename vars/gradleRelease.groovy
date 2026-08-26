@@ -77,7 +77,10 @@ def effectiveGradleReleaseTask(String task, String workDir, Map cfg) {
 
 def call(String task, Map cfg = [:]) {
     if (!task?.trim()) error "gradleRelease: 'task' is required"
-    if (!cfg.keystoreVaultPath) error "gradleRelease: 'keystoreVaultPath' is required"
+    def requiresSigning = (cfg.get('requiresSigning', true)) as boolean
+    if (requiresSigning && !cfg.keystoreVaultPath) {
+        error "gradleRelease: 'keystoreVaultPath' is required"
+    }
 
     def image = (cfg.image ?: 'cdlee/android-build-env:latest') as String
     def insideArgs = (cfg.insideArgs ?: '') as String
@@ -106,6 +109,7 @@ def call(String task, Map cfg = [:]) {
     withAndroidReleaseEnv(
             image: image,
             insideArgs: insideArgs,
+            requiresSigning: requiresSigning,
             keystoreVaultPath: cfg.keystoreVaultPath,
             playServiceVaultPath: cfg.get('playServiceVaultPath', null),
             jksPath: jksPath,
@@ -126,6 +130,7 @@ def call(String task, Map cfg = [:]) {
                 'GRADLE_RELEASE_LOCK=' + (lockBuild ? 'true' : 'false'),
                 'GRADLE_RELEASE_LOCK_PATH=' + lockPath,
                 'GRADLE_RELEASE_PREPARE_SCRIPT=' + prepareScript,
+                'GRADLE_RELEASE_HAS_SIGNING=' + (envs.hasSigning ? 'true' : 'false'),
                 'GRADLE_RELEASE_HAS_PLAY=' + (envs.hasPlay ? 'true' : 'false'),
                 'GRADLE_RELEASE_PASS_SIGNING_PROPERTIES=' + (passSigningProperties ? 'true' : 'false'),
                 'GRADLE_RELEASE_TRACK=' + (track ?: ''),
@@ -162,10 +167,12 @@ if [ "${GRADLE_RELEASE_LOCK:-}" = "true" ]; then
 fi
 
 args=("${GRADLE_RELEASE_TASK}")
-export SIGNING_STORE_FILE="${GRADLE_RELEASE_JKS_PATH}"
-export SIGNING_STORE_PASSWORD="${STORE_PASSWORD}"
-export SIGNING_KEY_ALIAS="${KEY_ALIAS}"
-export SIGNING_KEY_PASSWORD="${KEY_PASSWORD}"
+if [ "${GRADLE_RELEASE_HAS_SIGNING:-}" = "true" ]; then
+  export SIGNING_STORE_FILE="${GRADLE_RELEASE_JKS_PATH}"
+  export SIGNING_STORE_PASSWORD="${STORE_PASSWORD}"
+  export SIGNING_KEY_ALIAS="${KEY_ALIAS}"
+  export SIGNING_KEY_PASSWORD="${KEY_PASSWORD}"
+fi
 if [ "${GRADLE_RELEASE_HAS_PLAY:-}" = "true" ]; then
   args+=("-Pplay.serviceAccountCredentials=${GRADLE_RELEASE_PLAY_JSON_PATH}")
   if [ -n "${GRADLE_RELEASE_TRACK:-}" ]; then
@@ -173,7 +180,8 @@ if [ "${GRADLE_RELEASE_HAS_PLAY:-}" = "true" ]; then
   fi
 fi
 
-if [ "${GRADLE_RELEASE_PASS_SIGNING_PROPERTIES:-true}" = "true" ]; then
+if [ "${GRADLE_RELEASE_HAS_SIGNING:-}" = "true" ] && \
+    [ "${GRADLE_RELEASE_PASS_SIGNING_PROPERTIES:-true}" = "true" ]; then
   args+=(
     "-Psigning.storeFile=${GRADLE_RELEASE_JKS_PATH}"
     "-Psigning.storePassword=${STORE_PASSWORD}"

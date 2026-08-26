@@ -1,10 +1,11 @@
 def call(Map cfg = [:], Closure body) {
-    if (!cfg.keystoreVaultPath) {
+    def requiresSigning = (cfg.get('requiresSigning', true)) as boolean
+    if (requiresSigning && !cfg.keystoreVaultPath) {
         error "withAndroidReleaseEnv: 'keystoreVaultPath' is required"
     }
 
     def image = (cfg.image ?: 'cdlee/android-build-env:latest') as String
-    def keystoreVP = cfg.keystoreVaultPath as String
+    def keystoreVP = (cfg.keystoreVaultPath ?: null) as String
     def playVP = (cfg.playServiceVaultPath ?: null) as String
     def jksPath = (cfg.jksPath ?: '/tmp/upload.jks') as String
     def playJsonPath = (cfg.playJsonPath ?: '/tmp/play-service.json') as String
@@ -26,15 +27,18 @@ def call(Map cfg = [:], Closure body) {
     ] : ["-v ${cacheRoot}/gradle:/home/ubuntu/.gradle"]
     def insideArgs = (cacheArgs + [cfg.insideArgs ?: '']).findAll { it.toString().trim() }.join(' ')
 
-    def vaults = [[
-                          path: keystoreVP, engineVersion: 2,
-                          secretValues: [
-                                  [envVar: 'UPLOAD_JKS_B64', vaultKey: 'upload_jks_b64'],
-                                  [envVar: 'STORE_PASSWORD', vaultKey: 'store_password'],
-                                  [envVar: 'KEY_PASSWORD',   vaultKey: 'key_password'],
-                                  [envVar: 'KEY_ALIAS',      vaultKey: 'key_alias'],
-                          ]
-                  ]]
+    def vaults = []
+    if (requiresSigning) {
+        vaults << [
+                path: keystoreVP, engineVersion: 2,
+                secretValues: [
+                        [envVar: 'UPLOAD_JKS_B64', vaultKey: 'upload_jks_b64'],
+                        [envVar: 'STORE_PASSWORD', vaultKey: 'store_password'],
+                        [envVar: 'KEY_PASSWORD',   vaultKey: 'key_password'],
+                        [envVar: 'KEY_ALIAS',      vaultKey: 'key_alias'],
+                ]
+        ]
+    }
     if (playVP) {
         vaults << [
                 path: playVP, engineVersion: 2,
@@ -67,24 +71,31 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
             }
         }
         withVault([vaultSecrets: vaults]) {
-            withEnv(['JKS_PATH=' + jksPath, 'PLAY_JSON_PATH=' + playJsonPath]) {
+            withEnv([
+                    'ANDROID_RELEASE_REQUIRES_SIGNING=' + (requiresSigning ? 'true' : 'false'),
+                    'JKS_PATH=' + jksPath,
+                    'PLAY_JSON_PATH=' + playJsonPath
+            ]) {
                 try {
                     sh '''#!/bin/bash
 set -euo pipefail
 umask 077
-: "${UPLOAD_JKS_B64:?ERROR: UPLOAD_JKS_B64 is empty or unset}"
-printf %s "$UPLOAD_JKS_B64" | sed 's/^data:[^,]*,//' | tr -d '\r\n ' | base64 -d > "$JKS_PATH"
-chmod 600 "$JKS_PATH"
+if [ "${ANDROID_RELEASE_REQUIRES_SIGNING}" = "true" ]; then
+  : "${UPLOAD_JKS_B64:?ERROR: UPLOAD_JKS_B64 is empty or unset}"
+  printf %s "$UPLOAD_JKS_B64" | sed 's/^data:[^,]*,//' | tr -d '\r\n ' | base64 -d > "$JKS_PATH"
+  chmod 600 "$JKS_PATH"
+fi
 if [ -n "${PLAY_SERVICE_JSON_B64:-}" ]; then
   printf %s "$PLAY_SERVICE_JSON_B64" | sed 's/^data:[^,]*,//' | tr -d '\r\n ' | base64 -d > "$PLAY_JSON_PATH"
   chmod 600 "$PLAY_JSON_PATH"
 fi
-echo "JKS bytes: $(wc -c < "$JKS_PATH")"
+[ -f "$JKS_PATH" ] && echo "JKS bytes: $(wc -c < "$JKS_PATH")" || true
 [ -f "$PLAY_JSON_PATH" ] && echo "Play JSON bytes: $(wc -c < "$PLAY_JSON_PATH")" || true
 '''
                     body([
                             jksPath: jksPath,
                             playJsonPath: playJsonPath,
+                            hasSigning: requiresSigning,
                             hasPlay: (playVP != null)
                     ])
                 } finally {
