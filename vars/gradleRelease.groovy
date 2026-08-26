@@ -89,6 +89,9 @@ def call(String task, Map cfg = [:]) {
     def extraProps = (cfg.get('extraProps', [:])) as Map   // e.g. [android.injected.signing.store.type:'jks']
     def userExtraArgs = (cfg.get('extraArgs', []) as List)
     def maxWorkers = (cfg.get('maxWorkers', 2)) as int
+    // Opt out for projects that read the generic SIGNING_* environment
+    // variables, keeping passwords out of Gradle's command-line arguments.
+    def passSigningProperties = (cfg.get('passSigningProperties', true)) as boolean
     def defaultArgs = ['--no-daemon']
     if (!userExtraArgs.any { it.toString().startsWith('--max-workers') }) {
         defaultArgs << "--max-workers=${maxWorkers}"
@@ -97,6 +100,7 @@ def call(String task, Map cfg = [:]) {
     def workDir = (cfg.get('workDir', '')) as String    // e.g. 'android' if gradlew在子目錄
     def lockBuild = (cfg.get('lockBuild', true)) as boolean
     def lockPath = (cfg.get('lockPath', '/home/ubuntu/.gradle/android-release-build.lock')) as String
+    def prepareScript = (cfg.get('prepareScript', '')) as String
     def releaseTask = effectiveGradleReleaseTask(task, workDir, cfg)
 
     withAndroidReleaseEnv(
@@ -106,6 +110,8 @@ def call(String task, Map cfg = [:]) {
             playServiceVaultPath: cfg.get('playServiceVaultPath', null),
             jksPath: jksPath,
             playJsonPath: playJsonPath,
+            mountAndroidCache: cfg.get('mountAndroidCache', true),
+            aptPackages: cfg.get('aptPackages', []),
             extraVaults: cfg.get('extraVaults', [])
     ) { envs ->
         def plainArgs = []
@@ -119,7 +125,9 @@ def call(String task, Map cfg = [:]) {
                 'GRADLE_RELEASE_WORK_DIR=' + (workDir ?: ''),
                 'GRADLE_RELEASE_LOCK=' + (lockBuild ? 'true' : 'false'),
                 'GRADLE_RELEASE_LOCK_PATH=' + lockPath,
+                'GRADLE_RELEASE_PREPARE_SCRIPT=' + prepareScript,
                 'GRADLE_RELEASE_HAS_PLAY=' + (envs.hasPlay ? 'true' : 'false'),
+                'GRADLE_RELEASE_PASS_SIGNING_PROPERTIES=' + (passSigningProperties ? 'true' : 'false'),
                 'GRADLE_RELEASE_TRACK=' + (track ?: ''),
                 'GRADLE_RELEASE_JKS_PATH=' + envs.jksPath,
                 'GRADLE_RELEASE_PLAY_JSON_PATH=' + envs.playJsonPath,
@@ -127,6 +135,19 @@ def call(String task, Map cfg = [:]) {
         ]) {
             sh '''#!/bin/bash
 set -euo pipefail
+if [ -n "${GRADLE_RELEASE_PREPARE_SCRIPT:-}" ]; then
+  case "${GRADLE_RELEASE_PREPARE_SCRIPT}" in
+    /*|*..*)
+      echo "Gradle prepare script must be a repository-relative path" >&2
+      exit 2
+      ;;
+  esac
+  if [ ! -f "${GRADLE_RELEASE_PREPARE_SCRIPT}" ]; then
+    echo "Gradle prepare script not found: ${GRADLE_RELEASE_PREPARE_SCRIPT}" >&2
+    exit 2
+  fi
+  bash "${GRADLE_RELEASE_PREPARE_SCRIPT}"
+fi
 if [ -n "${GRADLE_RELEASE_WORK_DIR:-}" ]; then
   cd "${GRADLE_RELEASE_WORK_DIR}"
 fi
@@ -141,6 +162,10 @@ if [ "${GRADLE_RELEASE_LOCK:-}" = "true" ]; then
 fi
 
 args=("${GRADLE_RELEASE_TASK}")
+export SIGNING_STORE_FILE="${GRADLE_RELEASE_JKS_PATH}"
+export SIGNING_STORE_PASSWORD="${STORE_PASSWORD}"
+export SIGNING_KEY_ALIAS="${KEY_ALIAS}"
+export SIGNING_KEY_PASSWORD="${KEY_PASSWORD}"
 if [ "${GRADLE_RELEASE_HAS_PLAY:-}" = "true" ]; then
   args+=("-Pplay.serviceAccountCredentials=${GRADLE_RELEASE_PLAY_JSON_PATH}")
   if [ -n "${GRADLE_RELEASE_TRACK:-}" ]; then
@@ -148,12 +173,14 @@ if [ "${GRADLE_RELEASE_HAS_PLAY:-}" = "true" ]; then
   fi
 fi
 
-args+=(
-  "-Psigning.storeFile=${GRADLE_RELEASE_JKS_PATH}"
-  "-Psigning.storePassword=${STORE_PASSWORD}"
-  "-Psigning.keyAlias=${KEY_ALIAS}"
-  "-Psigning.keyPassword=${KEY_PASSWORD}"
-)
+if [ "${GRADLE_RELEASE_PASS_SIGNING_PROPERTIES:-true}" = "true" ]; then
+  args+=(
+    "-Psigning.storeFile=${GRADLE_RELEASE_JKS_PATH}"
+    "-Psigning.storePassword=${STORE_PASSWORD}"
+    "-Psigning.keyAlias=${KEY_ALIAS}"
+    "-Psigning.keyPassword=${KEY_PASSWORD}"
+  )
+fi
 
 while IFS= read -r extra_arg; do
   if [ -n "$extra_arg" ]; then

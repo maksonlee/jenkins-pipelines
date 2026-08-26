@@ -9,14 +9,21 @@ def call(Map cfg = [:], Closure body) {
     def jksPath = (cfg.jksPath ?: '/tmp/upload.jks') as String
     def playJsonPath = (cfg.playJsonPath ?: '/tmp/play-service.json') as String
     def extraVaults = (cfg.extraVaults ?: []) as List
+    def aptPackages = (cfg.aptPackages ?: []) as List
+    aptPackages.each { packageName ->
+        if (!(packageName.toString() ==~ /^[a-z0-9][a-z0-9+.-]*$/)) {
+            error "withAndroidReleaseEnv: invalid apt package '${packageName}'"
+        }
+    }
     def cacheRoot = (cfg.cacheRoot ?: '/home/administrator/jenkins/android-cache') as String
-    def cacheArgs = [
-            "-v ${cacheRoot}/gradle:/home/ubuntu/.gradle",
-            "-v ${cacheRoot}/android-sdk/platforms:/home/ubuntu/Android/platforms",
-            "-v ${cacheRoot}/android-sdk/build-tools:/home/ubuntu/Android/build-tools",
-            "-v ${cacheRoot}/android-sdk/ndk:/home/ubuntu/Android/ndk",
-            "-v ${cacheRoot}/android-sdk/cmake:/home/ubuntu/Android/cmake"
-    ]
+    def mountAndroidCache = (cfg.get('mountAndroidCache', true)) as boolean
+    def cacheArgs = mountAndroidCache ? [
+        "-v ${cacheRoot}/gradle:/home/ubuntu/.gradle",
+        "-v ${cacheRoot}/android-sdk/platforms:/home/ubuntu/Android/platforms",
+        "-v ${cacheRoot}/android-sdk/build-tools:/home/ubuntu/Android/build-tools",
+        "-v ${cacheRoot}/android-sdk/ndk:/home/ubuntu/Android/ndk",
+        "-v ${cacheRoot}/android-sdk/cmake:/home/ubuntu/Android/cmake"
+    ] : ["-v ${cacheRoot}/gradle:/home/ubuntu/.gradle"]
     def insideArgs = (cacheArgs + [cfg.insideArgs ?: '']).findAll { it.toString().trim() }.join(' ')
 
     def vaults = [[
@@ -49,9 +56,20 @@ du -sh "${cacheRoot}" 2>/dev/null || true
 """
 
     docker.image(image).inside(insideArgs) {
+        if (aptPackages) {
+            withEnv(['ANDROID_RELEASE_APT_PACKAGES=' + aptPackages.join(' ')]) {
+                sh '''#!/bin/bash
+set -euo pipefail
+apt-get update -qq
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+  ${ANDROID_RELEASE_APT_PACKAGES}
+'''
+            }
+        }
         withVault([vaultSecrets: vaults]) {
             withEnv(['JKS_PATH=' + jksPath, 'PLAY_JSON_PATH=' + playJsonPath]) {
-                sh '''#!/bin/bash
+                try {
+                    sh '''#!/bin/bash
 set -euo pipefail
 umask 077
 : "${UPLOAD_JKS_B64:?ERROR: UPLOAD_JKS_B64 is empty or unset}"
@@ -64,12 +82,18 @@ fi
 echo "JKS bytes: $(wc -c < "$JKS_PATH")"
 [ -f "$PLAY_JSON_PATH" ] && echo "Play JSON bytes: $(wc -c < "$PLAY_JSON_PATH")" || true
 '''
+                    body([
+                            jksPath: jksPath,
+                            playJsonPath: playJsonPath,
+                            hasPlay: (playVP != null)
+                    ])
+                } finally {
+                    sh '''#!/bin/bash
+set -euo pipefail
+rm -f -- "$JKS_PATH" "$PLAY_JSON_PATH"
+'''
+                }
             }
-            body([
-                    jksPath: jksPath,
-                    playJsonPath: playJsonPath,
-                    hasPlay: (playVP != null)
-            ])
         }
     }
 }
