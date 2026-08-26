@@ -87,10 +87,7 @@ test -x "$android_sdk/cmake/3.22.1/bin/cmake"
 test -f "$gstreamer_sdk/arm64/share/gst-android/ndk-build/gstreamer-1.0.mk"
 
 install -d \
-  /home/administrator/jenkins/android-cache/apt/archives \
-  /home/administrator/jenkins/android-cache/apt/lists \
-  /home/administrator/jenkins/android-cache/rust/cargo \
-  /home/administrator/jenkins/android-cache/rust/rustup
+  /home/administrator/jenkins/android-cache/rust/cargo
 '''
             }
         }
@@ -235,28 +232,25 @@ sha256sum -c apps/android/app/build/outputs/bundle/release/app-release.aab.sha25
 def androidReleaseConfig(Map overrides = [:]) {
     def cacheRoot = '/home/administrator/jenkins/android-cache'
     def insideArgs = [
-            "-v ${cacheRoot}/apt/archives:/var/cache/apt/archives",
-            "-v ${cacheRoot}/apt/lists:/var/lib/apt/lists",
             "-v ${cacheRoot}/rust/cargo:/home/ubuntu/.cargo",
-            "-v ${cacheRoot}/rust/rustup:/home/ubuntu/.rustup",
             "-v ${cacheRoot}/flutter-android-sdk:/home/ubuntu/Android:ro",
             '-v /home/administrator/.cache/gst-stream-wall/gstreamer-1.0-android-universal-1.28.6:/opt/gstreamer:ro',
             '-e HOME=/home/ubuntu',
             '-e CARGO_HOME=/home/ubuntu/.cargo',
-            '-e RUSTUP_HOME=/home/ubuntu/.rustup',
+            '-e RUSTUP_HOME=/opt/rust/rustup',
+            '-e RUSTUP_BIN_DIR=/opt/rust/cargo/bin',
             '-e RUST_TOOLCHAIN_VERSION=1.98.0',
             '-e ANDROID_HOME=/home/ubuntu/Android',
             '-e ANDROID_SDK_ROOT=/home/ubuntu/Android',
             '-e GSTREAMER_ROOT_ANDROID=/opt/gstreamer',
-            '-e PATH=/home/ubuntu/.cargo/bin:/home/ubuntu/Android/cmake/3.22.1/bin:/home/ubuntu/Android/cmdline-tools/latest/bin:/home/ubuntu/Android/platform-tools:/home/ubuntu/.sdkman/candidates/java/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+            '-e PATH=/opt/rust/cargo/bin:/home/ubuntu/Android/cmake/3.22.1/bin:/home/ubuntu/Android/cmdline-tools/latest/bin:/home/ubuntu/Android/platform-tools:/home/ubuntu/.sdkman/candidates/java/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
     ].join(' ')
 
     return [
-            image: 'cdlee/android-build-env@sha256:aa44de3756d5850330663fc920b50011da481d3e7e3b3aab2366d3360dce24ab',
+            image: 'harbor.maksonlee.com/library/gst-stream-wall-android-build-env@sha256:8f53ba4fda30e392aa34895a58ffd9af4de46a41291b0a53992edb4483b43c06',
             workDir: 'apps/android',
             insideArgs: insideArgs,
             mountAndroidCache: false,
-            aptPackages: ['gcc', 'libc6-dev', 'pkg-config'],
             prepareScript: 'scripts/ensure-android-rust-toolchain.sh',
             keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.gststreamwall',
             jksPath: '/tmp/gst-stream-wall-upload.jks',
