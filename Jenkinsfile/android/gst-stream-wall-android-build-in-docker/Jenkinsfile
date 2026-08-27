@@ -9,11 +9,13 @@ pipeline {
 
     parameters {
         string(name: 'GIT_REF', defaultValue: 'main', description: 'main or a full commit SHA already contained in origin/main')
-        string(name: 'VERSION_CODE', defaultValue: '1', description: 'Monotonically increasing Google Play version code')
-        string(name: 'VERSION_NAME', defaultValue: '0.1.0-alpha.1', description: 'User-visible Android version')
-        booleanParam(name: 'PUBLISH_TO_PLAY', defaultValue: false, description: 'Upload to the Google Play internal track after approval')
+        string(name: 'VERSION_CODE', defaultValue: '3', description: 'Monotonically increasing Google Play version code')
+        string(name: 'VERSION_NAME', defaultValue: '0.1.0-alpha.3', description: 'User-visible Android version')
+        booleanParam(name: 'PUBLISH_TO_PLAY', defaultValue: false, description: 'Upload an AAB to the selected Google Play test track after approval')
+        booleanParam(name: 'PROMOTE_EXISTING_TO_PLAY', defaultValue: false, description: 'Promote an existing version code from Internal to the selected track without uploading an AAB')
         booleanParam(name: 'PUBLISH_LISTING_TO_PLAY', defaultValue: false, description: 'Update Play Store listing metadata only; does not upload an AAB or alter a release track')
-        choice(name: 'PLAY_RELEASE_STATUS', choices: ['draft', 'completed'], description: 'Draft is the safe first-upload default')
+        choice(name: 'PLAY_TRACK', choices: ['alpha', 'internal'], description: 'Google Play API track ID; alpha is Closed testing - Alpha')
+        choice(name: 'PLAY_RELEASE_STATUS', choices: ['completed', 'draft'], description: 'Completed makes the release available to testers assigned to the selected track')
     }
 
     stages {
@@ -33,15 +35,27 @@ pipeline {
                     if (!versionName || !(versionName ==~ /^[0-9A-Za-z][0-9A-Za-z.+-]{0,49}$/)) {
                         error "Invalid VERSION_NAME: ${versionName}"
                     }
-                    if (params.PUBLISH_TO_PLAY && params.PUBLISH_LISTING_TO_PLAY) {
-                        error 'PUBLISH_TO_PLAY and PUBLISH_LISTING_TO_PLAY are mutually exclusive'
+                    def playActions = [
+                            params.PUBLISH_TO_PLAY,
+                            params.PROMOTE_EXISTING_TO_PLAY,
+                            params.PUBLISH_LISTING_TO_PLAY
+                    ].count { it }
+                    if (playActions > 1) {
+                        error 'PUBLISH_TO_PLAY, PROMOTE_EXISTING_TO_PLAY, and PUBLISH_LISTING_TO_PLAY are mutually exclusive'
+                    }
+                    if (params.PROMOTE_EXISTING_TO_PLAY && params.PLAY_TRACK == 'internal') {
+                        error 'PROMOTE_EXISTING_TO_PLAY requires PLAY_TRACK=alpha'
                     }
                     env.GIT_REF = gitRef
                     env.RELEASE_VERSION_CODE = versionCode
                     env.RELEASE_VERSION_NAME = versionName
-                    env.LISTING_ONLY = params.PUBLISH_LISTING_TO_PLAY ? 'true' : 'false'
-                    if (env.LISTING_ONLY == 'true') {
+                    env.SKIP_AAB_BUILD = (
+                            params.PUBLISH_LISTING_TO_PLAY || params.PROMOTE_EXISTING_TO_PLAY
+                    ) ? 'true' : 'false'
+                    if (params.PUBLISH_LISTING_TO_PLAY) {
                         echo "Updating Play Store listings from ${env.GIT_REF}; no AAB or release track will be changed"
+                    } else if (params.PROMOTE_EXISTING_TO_PLAY) {
+                        echo "Promoting Android version code ${env.RELEASE_VERSION_CODE} from internal to ${params.PLAY_TRACK} as ${params.PLAY_RELEASE_STATUS}; no AAB will be uploaded"
                     } else {
                         echo "Building ${env.GIT_REF} as Android ${env.RELEASE_VERSION_NAME} (${env.RELEASE_VERSION_CODE})"
                     }
@@ -102,7 +116,7 @@ install -d \
         }
 
         stage('Test, lint, build & sign AAB') {
-            when { expression { env.LISTING_ONLY != 'true' } }
+            when { expression { env.SKIP_AAB_BUILD != 'true' } }
             steps {
                 script {
                     gradleRelease(':app:bundleRelease', androidReleaseConfig([
@@ -117,7 +131,7 @@ install -d \
         }
 
         stage('Verify AAB') {
-            when { expression { env.LISTING_ONLY != 'true' } }
+            when { expression { env.SKIP_AAB_BUILD != 'true' } }
             steps {
                 withVault([vaultSecrets: [[
                     path: 'secret/jenkins/mobile/app/com.maksonlee.gststreamwall',
@@ -201,14 +215,14 @@ sha256sum "$aab" | tee apps/android/app/build/outputs/bundle/release/app-release
             }
         }
 
-        stage('Approve internal upload') {
+        stage('Approve Google Play test upload') {
             when { expression { params.PUBLISH_TO_PLAY } }
             steps {
-                input message: "Upload ${env.RELEASE_VERSION_NAME} (${env.RELEASE_VERSION_CODE}) at ${env.RELEASE_COMMIT} to Google Play Internal as ${params.PLAY_RELEASE_STATUS}?"
+                input message: "Upload ${env.RELEASE_VERSION_NAME} (${env.RELEASE_VERSION_CODE}) at ${env.RELEASE_COMMIT} to Google Play ${params.PLAY_TRACK} as ${params.PLAY_RELEASE_STATUS}?"
             }
         }
 
-        stage('Publish to Google Play Internal') {
+        stage('Publish to Google Play test track') {
             when { expression { params.PUBLISH_TO_PLAY } }
             steps {
                 script {
@@ -220,12 +234,40 @@ sha256sum -c apps/android/app/build/outputs/bundle/release/app-release.aab.sha25
                     gradleRelease(':app:publishReleaseBundle', androidReleaseConfig([
                             playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service',
                             playJsonPath: '/tmp/gst-stream-wall-play-service.json',
-                            track: 'internal',
+                            track: params.PLAY_TRACK,
                             extraArgs: ['--artifact-dir=app/build/outputs/bundle/release'],
                             extraProps: [
                                     'release.versionCode': env.RELEASE_VERSION_CODE,
                                     'release.versionName': env.RELEASE_VERSION_NAME,
                                     'play.releaseStatus': params.PLAY_RELEASE_STATUS
+                            ]
+                    ]))
+                }
+            }
+        }
+
+        stage('Approve existing Play release promotion') {
+            when { expression { params.PROMOTE_EXISTING_TO_PLAY } }
+            steps {
+                input message: "Promote existing version code ${env.RELEASE_VERSION_CODE} from Google Play internal to ${params.PLAY_TRACK} as ${params.PLAY_RELEASE_STATUS}? No AAB will be uploaded."
+            }
+        }
+
+        stage('Promote existing Google Play release') {
+            when { expression { params.PROMOTE_EXISTING_TO_PLAY } }
+            steps {
+                script {
+                    gradleRelease(':app:promoteArtifact', androidReleaseConfig([
+                            requiresSigning: false,
+                            keystoreVaultPath: null,
+                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service',
+                            playJsonPath: '/tmp/gst-stream-wall-play-service.json',
+                            prepareScript: '',
+                            extraArgs: [
+                                    '--from-track=internal',
+                                    "--promote-track=${params.PLAY_TRACK}",
+                                    "--release-status=${params.PLAY_RELEASE_STATUS}",
+                                    "--version-code=${env.RELEASE_VERSION_CODE}"
                             ]
                     ]))
                 }
