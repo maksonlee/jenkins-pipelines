@@ -15,7 +15,7 @@ pipeline {
         booleanParam(name: 'PROMOTE_EXISTING_TO_PLAY', defaultValue: false, description: 'Promote an existing version code from Internal to the selected track without uploading an AAB')
         booleanParam(name: 'PUBLISH_LISTING_TO_PLAY', defaultValue: false, description: 'Update Play Store listing metadata only; does not upload an AAB or alter a release track')
         choice(name: 'PLAY_TRACK', choices: ['alpha', 'internal'], description: 'Google Play API track ID; alpha is Closed testing - Alpha')
-        choice(name: 'PLAY_RELEASE_STATUS', choices: ['completed', 'draft'], description: 'Completed makes the release available to testers assigned to the selected track')
+        choice(name: 'PLAY_RELEASE_STATUS', choices: ['draft', 'completed'], description: 'A draft app requires draft; use completed after Google has published the first test release')
     }
 
     stages {
