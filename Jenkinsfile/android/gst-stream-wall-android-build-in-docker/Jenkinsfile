@@ -49,6 +49,9 @@ pipeline {
                     env.GIT_REF = gitRef
                     env.RELEASE_VERSION_CODE = versionCode
                     env.RELEASE_VERSION_NAME = versionName
+                    env.RELEASE_APPLICATION_ID = 'com.maksonlee.gststreamwall'
+                    env.RELEASE_MIN_SDK = '26'
+                    env.RELEASE_TARGET_SDK = '37'
                     env.SKIP_AAB_BUILD = (
                             params.PUBLISH_LISTING_TO_PLAY || params.PROMOTE_EXISTING_TO_PLAY
                     ) ? 'true' : 'false'
@@ -133,6 +136,14 @@ install -d \
         stage('Verify AAB') {
             when { expression { env.SKIP_AAB_BUILD != 'true' } }
             steps {
+                script {
+                    gradleRelease('help', androidReleaseConfig([
+                            requiresSigning: false,
+                            keystoreVaultPath: null,
+                            prepareScript: 'scripts/verify-android-release-bundle.sh',
+                            extraArgs: ['--quiet']
+                    ]))
+                }
                 withVault([vaultSecrets: [[
                     path: 'secret/jenkins/mobile/app/com.maksonlee.gststreamwall',
                     engineVersion: 2,
@@ -207,11 +218,11 @@ printf '%s\n' "$entries" | awk -F/ \
   echo "$name supports 16 KB pages"
 done
 
-sha256sum "$aab" | tee apps/android/app/build/outputs/bundle/release/app-release.aab.sha256
+sha256sum -c apps/android/app/build/outputs/bundle/release/app-release.aab.sha256
 '''
                 }
-                stash name: 'android-release-aab', includes: 'apps/android/app/build/outputs/bundle/release/*.aab,apps/android/app/build/outputs/bundle/release/*.sha256,apps/android/app/build/outputs/mapping/release/**,apps/android/app/build/outputs/native-debug-symbols/release/**'
-                archiveArtifacts artifacts: 'apps/android/app/build/outputs/bundle/release/*.aab,apps/android/app/build/outputs/bundle/release/*.sha256,apps/android/app/build/outputs/mapping/release/**,apps/android/app/build/outputs/native-debug-symbols/release/**', fingerprint: true
+                stash name: 'android-release-aab', includes: 'apps/android/app/build/outputs/bundle/release/*.aab,apps/android/app/build/outputs/bundle/release/*.sha256,apps/android/app/build/outputs/bundle/release/*.xml,apps/android/app/build/outputs/bundle/release/*.json,apps/android/app/build/outputs/bundle/release/signature-verification.txt,apps/android/app/build/outputs/mapping/release/**,apps/android/app/build/outputs/native-debug-symbols/release/**'
+                archiveArtifacts artifacts: 'apps/android/app/build/outputs/bundle/release/*.aab,apps/android/app/build/outputs/bundle/release/*.sha256,apps/android/app/build/outputs/bundle/release/*.xml,apps/android/app/build/outputs/bundle/release/*.json,apps/android/app/build/outputs/bundle/release/signature-verification.txt,apps/android/app/build/outputs/mapping/release/**,apps/android/app/build/outputs/native-debug-symbols/release/**', fingerprint: true
             }
         }
 
@@ -317,11 +328,12 @@ def androidReleaseConfig(Map overrides = [:]) {
             '-e ANDROID_HOME=/home/ubuntu/Android',
             '-e ANDROID_SDK_ROOT=/home/ubuntu/Android',
             '-e GSTREAMER_ROOT_ANDROID=/opt/gstreamer',
+            '-e BUNDLETOOL_JAR=/opt/bundletool/bundletool-all-1.18.3.jar',
             '-e PATH=/opt/rust/cargo/bin:/home/ubuntu/Android/cmake/3.22.1/bin:/home/ubuntu/Android/cmdline-tools/latest/bin:/home/ubuntu/Android/platform-tools:/home/ubuntu/.sdkman/candidates/java/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
     ].join(' ')
 
     return [
-            image: 'harbor.maksonlee.com/library/gst-stream-wall-android-build-env@sha256:8f53ba4fda30e392aa34895a58ffd9af4de46a41291b0a53992edb4483b43c06',
+            image: 'harbor.maksonlee.com/library/gst-stream-wall-android-build-env@sha256:11e2a4f7a262afd5a28c2280b7b0114db541d24e7eff498dee79e4a55a10dad1',
             workDir: 'apps/android',
             insideArgs: insideArgs,
             mountAndroidCache: false,
