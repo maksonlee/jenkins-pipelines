@@ -14,6 +14,7 @@ pipeline {
         booleanParam(name: 'PUBLISH_TO_PLAY', defaultValue: false, description: 'Upload an AAB to the selected Google Play test track after approval')
         booleanParam(name: 'PROMOTE_EXISTING_TO_PLAY', defaultValue: false, description: 'Promote an existing version code from Internal to the selected track without uploading an AAB')
         booleanParam(name: 'PUBLISH_LISTING_TO_PLAY', defaultValue: false, description: 'Update Play Store listing metadata only; does not upload an AAB or alter a release track')
+        booleanParam(name: 'CORRESPONDING_SOURCE_READY', defaultValue: false, description: 'Confirm the exact application/GStreamer corresponding source and relink material are retained and recipient-accessible')
         choice(name: 'PLAY_TRACK', choices: ['alpha', 'internal'], description: 'Google Play API track ID; alpha is Closed testing - Alpha')
         choice(name: 'PLAY_RELEASE_STATUS', choices: ['draft', 'completed'], description: 'A draft app requires draft; use completed after Google has published the first test release')
     }
@@ -45,6 +46,10 @@ pipeline {
                     }
                     if (params.PROMOTE_EXISTING_TO_PLAY && params.PLAY_TRACK == 'internal') {
                         error 'PROMOTE_EXISTING_TO_PLAY requires PLAY_TRACK=alpha'
+                    }
+                    if ((params.PUBLISH_TO_PLAY || params.PROMOTE_EXISTING_TO_PLAY) &&
+                            !params.CORRESPONDING_SOURCE_READY) {
+                        error 'Google Play distribution requires CORRESPONDING_SOURCE_READY=true'
                     }
                     env.GIT_REF = gitRef
                     env.RELEASE_VERSION_CODE = versionCode
@@ -107,6 +112,11 @@ echo "CHECKED_OUT_SUBJECT=$RELEASE_SUBJECT"
                 sh '''#!/bin/bash
 set -euo pipefail
 python3 scripts/validate-play-metadata.py
+if [[ "${PUBLISH_LISTING_TO_PLAY:-false}" == true ]]; then
+  python3 scripts/check-release-consistency.py
+else
+  python3 scripts/check-release-consistency.py --require-tag android
+fi
 test -x scripts/ensure-android-rust-toolchain.sh
 
 android_sdk=/home/administrator/jenkins/android-cache/flutter-android-sdk
@@ -233,7 +243,7 @@ sha256sum -c apps/android/app/build/outputs/bundle/release/app-release.aab.sha25
         stage('Approve Google Play test upload') {
             when { expression { params.PUBLISH_TO_PLAY } }
             steps {
-                input message: "Upload ${env.RELEASE_VERSION_NAME} (${env.RELEASE_VERSION_CODE}) at ${env.RELEASE_COMMIT} to Google Play ${params.PLAY_TRACK} as ${params.PLAY_RELEASE_STATUS}?"
+                input message: "Upload ${env.RELEASE_VERSION_NAME} (${env.RELEASE_VERSION_CODE}) at ${env.RELEASE_COMMIT} to Google Play ${params.PLAY_TRACK} as ${params.PLAY_RELEASE_STATUS}? Exact corresponding source has been confirmed ready."
             }
         }
 
@@ -342,6 +352,10 @@ def androidReleaseConfig(Map overrides = [:]) {
             insideArgs: insideArgs,
             mountAndroidCache: false,
             prepareScript: 'scripts/ensure-android-rust-toolchain.sh',
+            // AAB publication and Store Listing publication have separate
+            // approvals. Never let the shared helper auto-upgrade
+            // publishReleaseBundle to publishReleaseApps for this project.
+            publishPlayListings: false,
             keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.gststreamwall',
             jksPath: '/tmp/gst-stream-wall-upload.jks',
             passSigningProperties: false,
