@@ -106,7 +106,7 @@ python3 scripts/validate-play-metadata.py
 test -x scripts/ensure-android-rust-toolchain.sh
 
 android_sdk=/home/administrator/jenkins/android-cache/flutter-android-sdk
-gstreamer_sdk=/home/administrator/.cache/gst-stream-wall/gstreamer-1.0-android-universal-1.28.6
+gstreamer_sdk=/home/administrator/.cache/gst-stream-wall/gstreamer-1.0-android-universal-1.28.6-verified
 test -f "$android_sdk/platforms/android-37.0/android.jar"
 test -x "$android_sdk/ndk/28.2.13676358/ndk-build"
 test -x "$android_sdk/cmake/3.22.1/bin/cmake"
@@ -319,7 +319,7 @@ def androidReleaseConfig(Map overrides = [:]) {
     def insideArgs = [
             "-v ${cacheRoot}/rust/cargo:/home/ubuntu/.cargo",
             "-v ${cacheRoot}/flutter-android-sdk:/home/ubuntu/Android:ro",
-            '-v /home/administrator/.cache/gst-stream-wall/gstreamer-1.0-android-universal-1.28.6:/opt/gstreamer:ro',
+            '-v /home/administrator/.cache/gst-stream-wall/gstreamer-1.0-android-universal-1.28.6-verified:/opt/gstreamer:ro',
             '-e HOME=/home/ubuntu',
             '-e CARGO_HOME=/home/ubuntu/.cargo',
             '-e RUSTUP_HOME=/opt/rust/rustup',
