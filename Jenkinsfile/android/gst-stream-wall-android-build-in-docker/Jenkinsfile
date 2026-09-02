@@ -79,22 +79,26 @@ pipeline {
                                 url: 'git@github.com:maksonlee/gst-stream-wall.git'
                         ]]
                 ])
+                script {
+                    env.RELEASE_COMMIT = sh(
+                            script: 'git rev-parse HEAD',
+                            returnStdout: true
+                    ).trim()
+                    env.RELEASE_SUBJECT = sh(
+                            script: 'git log -1 --pretty=%s',
+                            returnStdout: true
+                    ).trim()
+                }
                 sh '''#!/bin/bash
 set -euo pipefail
-git rev-parse HEAD > .release-commit
-git log -1 --pretty=%s > .release-subject
 git rev-parse --verify 'refs/remotes/origin/main^{commit}' >/dev/null
-if ! git merge-base --is-ancestor "$(cat .release-commit)" refs/remotes/origin/main; then
+if ! git merge-base --is-ancestor "$RELEASE_COMMIT" refs/remotes/origin/main; then
   echo 'Release commit is not contained in origin/main; refusing to expose signing credentials.' >&2
   exit 1
 fi
-echo "CHECKED_OUT_COMMIT=$(cat .release-commit)"
-echo "CHECKED_OUT_SUBJECT=$(cat .release-subject)"
+echo "CHECKED_OUT_COMMIT=$RELEASE_COMMIT"
+echo "CHECKED_OUT_SUBJECT=$RELEASE_SUBJECT"
 '''
-                script {
-                    env.RELEASE_COMMIT = readFile('.release-commit').trim()
-                    env.RELEASE_SUBJECT = readFile('.release-subject').trim()
-                }
             }
         }
 
