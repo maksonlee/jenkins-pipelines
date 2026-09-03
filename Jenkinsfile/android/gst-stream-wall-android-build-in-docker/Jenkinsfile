@@ -9,8 +9,8 @@ pipeline {
 
     parameters {
         string(name: 'GIT_REF', defaultValue: 'main', description: 'main or a full commit SHA already contained in origin/main')
-        string(name: 'VERSION_CODE', defaultValue: '12', description: 'Monotonically increasing Google Play version code')
-        string(name: 'VERSION_NAME', defaultValue: '0.1.0-alpha.12', description: 'User-visible Android version')
+        string(name: 'VERSION_CODE', defaultValue: '13', description: 'Monotonically increasing Google Play version code')
+        string(name: 'VERSION_NAME', defaultValue: '0.1.0-alpha.13', description: 'User-visible Android version')
         booleanParam(name: 'PUBLISH_TO_PLAY', defaultValue: false, description: 'Upload an AAB to the selected Google Play test track after approval')
         booleanParam(name: 'PROMOTE_EXISTING_TO_PLAY', defaultValue: false, description: 'Promote an existing version code from Internal to the selected track without uploading an AAB')
         booleanParam(name: 'PUBLISH_LISTING_TO_PLAY', defaultValue: false, description: 'Update Play Store listing metadata only; does not upload an AAB or alter a release track')
