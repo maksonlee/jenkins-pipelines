@@ -91,7 +91,7 @@ def call(String task, Map cfg = [:]) {
     def stacktrace = (cfg.get('stacktrace', true)) as boolean
     def extraProps = (cfg.get('extraProps', [:])) as Map   // e.g. [android.injected.signing.store.type:'jks']
     def userExtraArgs = (cfg.get('extraArgs', []) as List)
-    def maxWorkers = (cfg.get('maxWorkers', 2)) as int
+    def maxWorkers = (cfg.get('maxWorkers', 1)) as int
     // Opt out for projects that read the generic SIGNING_* environment
     // variables, keeping passwords out of Gradle's command-line arguments.
     def passSigningProperties = (cfg.get('passSigningProperties', true)) as boolean
