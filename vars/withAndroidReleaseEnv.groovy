@@ -26,6 +26,7 @@ def call(Map cfg = [:], Closure body) {
         "-v ${cacheRoot}/android-sdk/cmake:/home/ubuntu/Android/cmake"
     ] : ["-v ${cacheRoot}/gradle:/home/ubuntu/.gradle"]
     def resourceArgs = [
+        '--cpus=2',
         '--memory=4g',
         '--memory-reservation=2g',
         '--memory-swap=5g'
