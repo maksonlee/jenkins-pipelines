@@ -25,7 +25,12 @@ def call(Map cfg = [:], Closure body) {
         "-v ${cacheRoot}/android-sdk/ndk:/home/ubuntu/Android/ndk",
         "-v ${cacheRoot}/android-sdk/cmake:/home/ubuntu/Android/cmake"
     ] : ["-v ${cacheRoot}/gradle:/home/ubuntu/.gradle"]
-    def insideArgs = (cacheArgs + [cfg.insideArgs ?: '']).findAll { it.toString().trim() }.join(' ')
+    def resourceArgs = [
+        '--memory=4g',
+        '--memory-reservation=2g',
+        '--memory-swap=5g'
+    ]
+    def insideArgs = (resourceArgs + cacheArgs + [cfg.insideArgs ?: '']).findAll { it.toString().trim() }.join(' ')
 
     def vaults = []
     if (requiresSigning) {

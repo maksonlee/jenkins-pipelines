@@ -578,6 +578,9 @@ echo "ANDROID_CACHE_SIZE_BEFORE=$(du -sh "${android_cache_root}" 2>/dev/null | c
 start=$(date +%s)
 
 docker run --rm \
+  --memory=4g \
+  --memory-reservation=2g \
+  --memory-swap=5g \
   -u ${uid}:${gid} \
   -e HOME=/home/ubuntu \
   -e ANDROID_HOME=/home/ubuntu/Android \
