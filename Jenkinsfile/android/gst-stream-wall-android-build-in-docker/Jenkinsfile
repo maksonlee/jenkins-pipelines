@@ -15,6 +15,7 @@ pipeline {
         booleanParam(name: 'PROMOTE_EXISTING_TO_PLAY', defaultValue: false, description: 'Promote an existing version code from Internal to the selected track without uploading an AAB')
         booleanParam(name: 'PUBLISH_LISTING_TO_PLAY', defaultValue: false, description: 'Update Play Store listing metadata only; does not upload an AAB or alter a release track')
         booleanParam(name: 'CORRESPONDING_SOURCE_READY', defaultValue: false, description: 'Confirm the exact application/GStreamer corresponding source and relink material are retained and recipient-accessible')
+        booleanParam(name: 'ALPHA22_BUILD43_OWNER_EXCEPTION', defaultValue: false, description: 'Owner-authorized alpha.22 publication of the exact verified build 43 AAB while additional formal qualification remains incomplete')
         choice(name: 'PLAY_TRACK', choices: ['alpha', 'internal'], description: 'Google Play API track ID; alpha is Closed testing - Alpha')
         choice(name: 'PLAY_RELEASE_STATUS', choices: ['draft', 'completed'], description: 'A draft app requires draft; use completed after Google has published the first test release')
     }
@@ -47,8 +48,21 @@ pipeline {
                     if (params.PROMOTE_EXISTING_TO_PLAY && params.PLAY_TRACK == 'internal') {
                         error 'PROMOTE_EXISTING_TO_PLAY requires PLAY_TRACK=alpha'
                     }
+                    // The owner explicitly authorized only this engineering-preview
+                    // artifact without the additional formal qualification records.
+                    // This exception neither asserts source readiness nor applies to
+                    // another artifact, version, track, or publication operation.
+                    def reuseBuild43 = params.ALPHA22_BUILD43_OWNER_EXCEPTION
+                    if (reuseBuild43 && (
+                            gitRef != '9d63d4820e29ccf02b0aea74668d1ad9b28f21a7' ||
+                            versionCode != '22' || versionName != '0.1.0-alpha.22' ||
+                            !params.PUBLISH_TO_PLAY || params.PROMOTE_EXISTING_TO_PLAY ||
+                            params.PUBLISH_LISTING_TO_PLAY || params.CORRESPONDING_SOURCE_READY ||
+                            params.PLAY_TRACK != 'alpha' || params.PLAY_RELEASE_STATUS != 'completed')) {
+                        error 'The build 43 owner exception is restricted to the exact alpha.22 AAB, alpha/completed, and CORRESPONDING_SOURCE_READY=false'
+                    }
                     if ((params.PUBLISH_TO_PLAY || params.PROMOTE_EXISTING_TO_PLAY) &&
-                            !params.CORRESPONDING_SOURCE_READY) {
+                            !params.CORRESPONDING_SOURCE_READY && !reuseBuild43) {
                         error 'Google Play distribution requires CORRESPONDING_SOURCE_READY=true'
                     }
                     env.GIT_REF = gitRef
@@ -57,13 +71,18 @@ pipeline {
                     env.RELEASE_APPLICATION_ID = 'com.maksonlee.gststreamwall'
                     env.RELEASE_MIN_SDK = '26'
                     env.RELEASE_TARGET_SDK = '37'
+                    env.REUSE_AAB_BUILD43 = reuseBuild43 ? 'true' : 'false'
+                    env.RELEASE_EXPECTED_AAB_SHA256 = reuseBuild43 ?
+                            '2704ca271623fdfc26815d0068b7d03f27a8c4504fb9c84f94d46b034e1e8a6f' : ''
                     env.SKIP_AAB_BUILD = (
-                            params.PUBLISH_LISTING_TO_PLAY || params.PROMOTE_EXISTING_TO_PLAY
+                            params.PUBLISH_LISTING_TO_PLAY || params.PROMOTE_EXISTING_TO_PLAY || reuseBuild43
                     ) ? 'true' : 'false'
                     if (params.PUBLISH_LISTING_TO_PLAY) {
                         echo "Updating Play Store listings from ${env.GIT_REF}; no AAB or release track will be changed"
                     } else if (params.PROMOTE_EXISTING_TO_PLAY) {
                         echo "Promoting Android version code ${env.RELEASE_VERSION_CODE} from internal to ${params.PLAY_TRACK} as ${params.PLAY_RELEASE_STATUS}; no AAB will be uploaded"
+                    } else if (reuseBuild43) {
+                        echo 'Reusing the exact verified Jenkins build 43 alpha.22 AAB; owner-authorized engineering-preview exception, corresponding-source readiness remains false and additional formal qualification remains incomplete'
                     } else {
                         echo "Building ${env.GIT_REF} as Android ${env.RELEASE_VERSION_NAME} (${env.RELEASE_VERSION_CODE})"
                     }
@@ -147,8 +166,59 @@ install -d \
             }
         }
 
+        stage('Restore verified alpha.22 build 43 AAB') {
+            when { expression { env.REUSE_AAB_BUILD43 == 'true' } }
+            steps {
+                sh '''#!/bin/bash
+set -euo pipefail
+release_dir=apps/android/app/build/outputs/bundle/release
+retained_root=/home/administrator/jenkins/android-cache/gst-stream-wall/alpha22-build43
+retained_dir=$retained_root/$release_dir
+test -s "$retained_dir/app-release.aab"
+test -s "$retained_dir/release-provenance.json"
+test -s "$retained_root/owner-release-scope-decision.json"
+mkdir -p "$release_dir"
+cp -a "$retained_dir/." "$release_dir/"
+cp -a "$retained_root/owner-release-scope-decision.json" "$release_dir/"
+printf '%s  %s\n' "$RELEASE_EXPECTED_AAB_SHA256" "$release_dir/app-release.aab" | sha256sum -c -
+sha256sum -c "$release_dir/app-release.aab.sha256"
+python3 scripts/check-release-consistency.py --require-tag android \
+  --provenance "$release_dir/release-provenance.json" \
+  --artifact "$release_dir/app-release.aab"
+python3 - "$release_dir/owner-release-scope-decision.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+decision = json.loads(Path(sys.argv[1]).read_text())
+expected = {
+    "schema": "org.gststreamwall.engineering-preview-release-scope-exception/v1",
+    "application_id": "com.maksonlee.gststreamwall",
+    "version_code": 22,
+    "version_name": "0.1.0-alpha.22",
+    "source_commit": "9d63d4820e29ccf02b0aea74668d1ad9b28f21a7",
+    "annotated_tag": "android-v0.1.0-alpha.22",
+    "source_jenkins_build": 43,
+    "aab_sha256": "2704ca271623fdfc26815d0068b7d03f27a8c4504fb9c84f94d46b034e1e8a6f",
+    "track": "alpha",
+    "release_status": "completed",
+    "listing_publication": False,
+    "rebuild_permitted": False,
+    "corresponding_source_ready": False,
+    "formal_qualification_evidence_complete": False,
+    "qualification_pass_records_created": False,
+}
+for key, value in expected.items():
+    if key not in decision or type(decision[key]) is not type(value) or decision[key] != value:
+        raise SystemExit(f"Owner release-scope decision does not match this exception: {key}")
+print("Owner release-scope decision matches the exact artifact; formal qualification remains incomplete.")
+PY
+'''
+            }
+        }
+
         stage('Verify AAB') {
-            when { expression { env.SKIP_AAB_BUILD != 'true' } }
+            when { expression { env.SKIP_AAB_BUILD != 'true' || env.REUSE_AAB_BUILD43 == 'true' } }
             steps {
                 script {
                     gradleRelease('help', androidReleaseConfig([
@@ -233,6 +303,9 @@ printf '%s\n' "$entries" | awk -F/ \
 done
 
 sha256sum -c apps/android/app/build/outputs/bundle/release/app-release.aab.sha256
+if [[ "${REUSE_AAB_BUILD43:-false}" == true ]]; then
+  printf '%s  %s\n' "$RELEASE_EXPECTED_AAB_SHA256" "$aab" | sha256sum -c -
+fi
 '''
                 }
                 stash name: 'android-release-aab', includes: 'apps/android/app/build/outputs/bundle/release/*.aab,apps/android/app/build/outputs/bundle/release/*.sha256,apps/android/app/build/outputs/bundle/release/*.xml,apps/android/app/build/outputs/bundle/release/*.json,apps/android/app/build/outputs/bundle/release/signature-verification.txt,apps/android/app/build/outputs/mapping/release/**,apps/android/app/build/outputs/native-debug-symbols/release/**'
@@ -243,7 +316,12 @@ sha256sum -c apps/android/app/build/outputs/bundle/release/app-release.aab.sha25
         stage('Approve Google Play test upload') {
             when { expression { params.PUBLISH_TO_PLAY } }
             steps {
-                input message: "Upload ${env.RELEASE_VERSION_NAME} (${env.RELEASE_VERSION_CODE}) at ${env.RELEASE_COMMIT} to Google Play ${params.PLAY_TRACK} as ${params.PLAY_RELEASE_STATUS}? Exact corresponding source has been confirmed ready."
+                script {
+                    def qualification = env.REUSE_AAB_BUILD43 == 'true' ?
+                            'Owner-authorized alpha.22 engineering-preview exception: corresponding-source readiness remains false and additional formal qualification remains incomplete. Exact verified build 43 AAB will be reused.' :
+                            'Exact corresponding source has been confirmed ready.'
+                    input message: "Upload ${env.RELEASE_VERSION_NAME} (${env.RELEASE_VERSION_CODE}) at ${env.RELEASE_COMMIT} to Google Play ${params.PLAY_TRACK} as ${params.PLAY_RELEASE_STATUS}? ${qualification}"
+                }
             }
         }
 
@@ -255,8 +333,11 @@ sha256sum -c apps/android/app/build/outputs/bundle/release/app-release.aab.sha25
                     sh '''#!/bin/bash
 set -euo pipefail
 sha256sum -c apps/android/app/build/outputs/bundle/release/app-release.aab.sha256
+if [[ "${REUSE_AAB_BUILD43:-false}" == true ]]; then
+  printf '%s  %s\n' "$RELEASE_EXPECTED_AAB_SHA256" apps/android/app/build/outputs/bundle/release/app-release.aab | sha256sum -c -
+fi
 '''
-                    gradleRelease(':app:publishReleaseBundle', androidReleaseConfig([
+                    def publicationConfig = [
                             playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service',
                             playJsonPath: '/tmp/gst-stream-wall-play-service.json',
                             track: params.PLAY_TRACK,
@@ -266,7 +347,15 @@ sha256sum -c apps/android/app/build/outputs/bundle/release/app-release.aab.sha25
                                     'release.versionName': env.RELEASE_VERSION_NAME,
                                     'play.releaseStatus': params.PLAY_RELEASE_STATUS
                             ]
-                    ]))
+                    ]
+                    if (env.REUSE_AAB_BUILD43 == 'true') {
+                        publicationConfig += [
+                                requiresSigning: false,
+                                keystoreVaultPath: null,
+                                prepareScript: ''
+                        ]
+                    }
+                    gradleRelease(':app:publishReleaseBundle', androidReleaseConfig(publicationConfig))
                 }
             }
         }
