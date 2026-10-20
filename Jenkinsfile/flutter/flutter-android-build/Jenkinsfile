@@ -385,6 +385,13 @@ docker_args=(
   -v "$PWD/source:/workspace:ro"
   -w /workspace
 )
+if [ -f source/scripts/prepare_flutter_test_fixtures.py ]; then
+  mkdir -p source/.tmp/flutter-test-fixtures
+  docker_args+=(
+    -e "FLUTTER_FIXTURE_OWNER=$(id -u):$(id -g)"
+    -v "$PWD/source/.tmp/flutter-test-fixtures:/workspace/.tmp/flutter-test-fixtures"
+  )
+fi
 
 if [ -f source/tests/test_database_integration.py ]; then
   docker pull "${POSTGIS_TEST_IMAGE}"
@@ -424,6 +431,9 @@ fi
 
 docker run "${docker_args[@]}" "${PYTHON_TEST_IMAGE}" bash -lc '
   set -euo pipefail
+  if [ -f scripts/prepare_flutter_test_fixtures.py ]; then
+    trap "chown -R ${FLUTTER_FIXTURE_OWNER} .tmp/flutter-test-fixtures" EXIT
+  fi
   apt-get update >/dev/null
   apt-get install -y --no-install-recommends postgresql-client >/dev/null
   git config --global --add safe.directory /workspace
@@ -434,6 +444,9 @@ docker run "${docker_args[@]}" "${PYTHON_TEST_IMAGE}" bash -lc '
   fi
   python -m coverage run --branch -m unittest discover -s tests -v
   python -m coverage report --fail-under=35
+  if [ -f scripts/prepare_flutter_test_fixtures.py ]; then
+    python scripts/prepare_flutter_test_fixtures.py --output .tmp/flutter-test-fixtures
+  fi
 '
 '''
                     } else if (fileExists('source/scripts/validate_play_metadata.py')) {
@@ -767,6 +780,55 @@ trap - EXIT
                 }
             }
         }
+        stage('Release artifact checks') {
+            when {
+                expression {
+                    params.BUILD_TARGET == 'appbundle-release' &&
+                        fileExists('source/scripts/check_android_release_artifact.py')
+                }
+            }
+            steps {
+                script {
+                    def projectBase = env.PROJECT_WORKDIR == '.' ? 'source' : 'source/' + env.PROJECT_WORKDIR
+                    env.RELEASE_ARTIFACT_REPORT = "${projectBase}/build/release-artifact-checks.json"
+                }
+                sh '''#!/bin/bash
+set -euo pipefail
+bundletool="${ANDROID_CACHE_ROOT}/tools/bundletool-all-1.18.3.jar"
+bundletool_sha256=a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29
+mkdir -p "$(dirname "$bundletool")"
+if [ ! -f "$bundletool" ]; then
+  download=$(mktemp "${bundletool}.XXXXXX")
+  trap 'rm -f "$download"' EXIT
+  curl --fail --location --retry 3 \
+    https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar \
+    --output "$download"
+  printf '%s  %s\\n' "$bundletool_sha256" "$download" | sha256sum --check --status
+  mv "$download" "$bundletool"
+  trap - EXIT
+fi
+printf '%s  %s\\n' "$bundletool_sha256" "$bundletool" | sha256sum --check --status
+mapfile -t aab_files < <(compgen -G "${FLUTTER_ARTIFACTS}" || true)
+if [ "${#aab_files[@]}" -ne 1 ]; then
+  echo "Expected exactly one release AAB for artifact checks." >&2
+  exit 1
+fi
+cd source
+python3 scripts/check_android_release_artifact.py \
+  --aab "${aab_files[0]#source/}" \
+  --repo-root . \
+  --android-sdk "${ANDROID_CACHE_ROOT}/flutter-android-sdk" \
+  --bundletool "$bundletool" \
+  --report "${RELEASE_ARTIFACT_REPORT#source/}"
+'''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: env.RELEASE_ARTIFACT_REPORT,
+                        allowEmptyArchive: true, fingerprint: true
+                }
+            }
+        }
         stage('Archive artifacts') {
             steps {
                 archiveArtifacts artifacts: env.FLUTTER_ARTIFACTS, fingerprint: true
@@ -864,6 +926,7 @@ fi
 printf %s "${PLAY_SERVICE_JSON_B64}" | sed 's/^data:[^,]*,//' | tr -d '\r\n ' | base64 -d > "$play_json"
 python3 - "$play_json" "$aab_path" "$PLAY_PACKAGE_NAME" "$PLAY_TRACK" "$PLAY_RELEASE_STATUS" "${PLAY_ROLLOUT_FRACTION:-}" "$release_notes_path" <<'PY'
 import base64
+import hashlib
 import json
 import os
 import pathlib
@@ -876,6 +939,24 @@ import urllib.parse
 import urllib.request
 
 service_json, aab_path, package_name, track, release_status, rollout_fraction, release_notes_path = sys.argv[1:]
+bundle = pathlib.Path(aab_path).read_bytes()
+artifact_report_path = os.environ.get('RELEASE_ARTIFACT_REPORT')
+if artifact_report_path:
+    artifact_report = json.loads(pathlib.Path(artifact_report_path).read_text(encoding='utf-8'))
+    source_commit = subprocess.check_output(
+        ['git', '-C', 'source', 'rev-parse', 'HEAD'], text=True,
+    ).strip()
+    artifact_sha256 = hashlib.sha256(bundle).hexdigest()
+    if (
+        artifact_report.get('status') != 'passed'
+        or artifact_report.get('source_commit') != source_commit
+        or artifact_report.get('sha256') != artifact_sha256
+        or artifact_report.get('package') != package_name
+        or artifact_report.get('version_name') != os.environ.get('PLAY_VERSION_NAME')
+        or str(artifact_report.get('version_code')) != os.environ.get('PLAY_VERSION_CODE')
+    ):
+        raise SystemExit('Release artifact no longer matches the successful pre-publication checks')
+    print(f'Verified upload artifact: source={source_commit}, sha256={artifact_sha256}')
 with open(service_json, 'r', encoding='utf-8') as f:
     svc = json.load(f)
 with open(release_notes_path, 'r', encoding='utf-8') as f:
@@ -1060,8 +1141,6 @@ upload_base = f'https://androidpublisher.googleapis.com/upload/androidpublisher/
 edit = request_json('POST', base + '/edits', token=token)
 edit_id = edit['id']
 print(f'Created Google Play edit: {edit_id}')
-with open(aab_path, 'rb') as f:
-    bundle = f.read()
 upload_url = f'{upload_base}/edits/{edit_id}/bundles?uploadType=media'
 bundle_resp = request_json('POST', upload_url, token=token, data=bundle, content_type='application/octet-stream')
 version_code = str(bundle_resp['versionCode'])

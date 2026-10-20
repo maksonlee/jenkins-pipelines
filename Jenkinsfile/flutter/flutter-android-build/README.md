@@ -204,6 +204,21 @@ For Flutter applications, the job runs dependency resolution, static analysis,
 Flutter tests with line and branch coverage, Android lint, and any JVM unit tests
 under `android/app/src/test` before it builds an artifact.
 
+Repositories can provide `scripts/prepare_flutter_test_fixtures.py`. After the
+Python quality gates pass, the configured Python container runs this optional
+hook with `--output .tmp/flutter-test-fixtures`. Only that output directory is
+mounted writable; the remaining source stays read-only. Flutter tests can then
+read the generated fixtures without requiring Python in the Flutter image.
+
+For release AABs, an optional repository
+`scripts/check_android_release_artifact.py` runs on the agent after the build and
+before archiving or uploading the artifact. It receives the AAB, repository root,
+cached Android SDK, checksum-pinned bundletool 1.18.3 and a JSON report path.
+Failure blocks publication; the report is archived even on failure. Before Play
+upload, the job checks that the successful report still matches the actual AAB
+bytes, checkout commit, package and preflight version, then uploads those same
+validated bytes.
+
 Projects can enforce coverage with numeric percentage files at their Flutter
 project root:
 
