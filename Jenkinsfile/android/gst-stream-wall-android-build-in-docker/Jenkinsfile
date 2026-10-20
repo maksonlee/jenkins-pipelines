@@ -349,9 +349,10 @@ fi
                             ]
                     ]
                     if (env.REUSE_AAB_BUILD43 == 'true') {
+                        // Play Publisher registers only signed variants. Keep
+                        // the normal masked signing inputs for task discovery;
+                        // --artifact-dir still uploads the existing AAB.
                         publicationConfig += [
-                                requiresSigning: false,
-                                keystoreVaultPath: null,
                                 prepareScript: ''
                         ]
                     }
