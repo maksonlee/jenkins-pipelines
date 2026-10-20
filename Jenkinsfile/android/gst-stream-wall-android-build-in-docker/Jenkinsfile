@@ -9,8 +9,8 @@ pipeline {
 
     parameters {
         string(name: 'GIT_REF', defaultValue: 'main', description: 'main or a full commit SHA already contained in origin/main')
-        string(name: 'VERSION_CODE', defaultValue: '20', description: 'Monotonically increasing Google Play version code')
-        string(name: 'VERSION_NAME', defaultValue: '0.1.0-alpha.20', description: 'User-visible Android version')
+        string(name: 'VERSION_CODE', defaultValue: '22', description: 'Monotonically increasing Google Play version code')
+        string(name: 'VERSION_NAME', defaultValue: '0.1.0-alpha.22', description: 'User-visible Android version')
         booleanParam(name: 'PUBLISH_TO_PLAY', defaultValue: false, description: 'Upload an AAB to the selected Google Play test track after approval')
         booleanParam(name: 'PROMOTE_EXISTING_TO_PLAY', defaultValue: false, description: 'Promote an existing version code from Internal to the selected track without uploading an AAB')
         booleanParam(name: 'PUBLISH_LISTING_TO_PLAY', defaultValue: false, description: 'Update Play Store listing metadata only; does not upload an AAB or alter a release track')
@@ -120,7 +120,7 @@ fi
 test -x scripts/ensure-android-rust-toolchain.sh
 
 android_sdk=/home/administrator/jenkins/android-cache/flutter-android-sdk
-gstreamer_sdk=/home/administrator/.cache/gst-stream-wall/gstreamer-1.0-android-universal-1.28.6-verified
+gstreamer_sdk=/home/administrator/.cache/gst-stream-wall/gstreamer-android-1.28.8
 test -f "$android_sdk/platforms/android-37.0/android.jar"
 test -x "$android_sdk/ndk/28.2.13676358/ndk-build"
 test -x "$android_sdk/cmake/3.22.1/bin/cmake"
@@ -333,7 +333,7 @@ def androidReleaseConfig(Map overrides = [:]) {
     def insideArgs = [
             "-v ${cacheRoot}/rust/cargo:/home/ubuntu/.cargo",
             "-v ${cacheRoot}/flutter-android-sdk:/home/ubuntu/Android:ro",
-            '-v /home/administrator/.cache/gst-stream-wall/gstreamer-1.0-android-universal-1.28.6-verified:/opt/gstreamer:ro',
+            '-v /home/administrator/.cache/gst-stream-wall/gstreamer-android-1.28.8:/opt/gstreamer:ro',
             '-e HOME=/home/ubuntu',
             '-e CARGO_HOME=/home/ubuntu/.cargo',
             '-e RUSTUP_HOME=/opt/rust/rustup',
