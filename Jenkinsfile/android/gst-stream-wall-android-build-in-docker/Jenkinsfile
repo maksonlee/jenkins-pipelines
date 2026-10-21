@@ -332,16 +332,27 @@ fi
                     unstash 'android-release-aab'
                     sh '''#!/bin/bash
 set -euo pipefail
-sha256sum -c apps/android/app/build/outputs/bundle/release/app-release.aab.sha256
+source_aab=apps/android/app/build/outputs/bundle/release/app-release.aab
+verified_aab_sha256=$(sha256sum "$source_aab")
+verified_aab_sha256=${verified_aab_sha256%% *}
+sha256sum -c "$source_aab.sha256"
 if [[ "${REUSE_AAB_BUILD43:-false}" == true ]]; then
-  printf '%s  %s\n' "$RELEASE_EXPECTED_AAB_SHA256" apps/android/app/build/outputs/bundle/release/app-release.aab | sha256sum -c -
+  printf '%s  %s\n' "$RELEASE_EXPECTED_AAB_SHA256" "$source_aab" | sha256sum -c -
 fi
+
+# GPP uploads every matching AAB in artifactDir. Start with an empty
+# publication directory and stage only the artifact verified above.
+publication_dir=apps/android/app/build/outputs/play-publication
+rm -rf -- "$publication_dir"
+mkdir -p "$publication_dir"
+install -m 0644 "$source_aab" "$publication_dir/app-release.aab"
+printf '%s  %s\n' "$verified_aab_sha256" "$publication_dir/app-release.aab" | sha256sum -c -
 '''
                     def publicationConfig = [
                             playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service',
                             playJsonPath: '/tmp/gst-stream-wall-play-service.json',
                             track: params.PLAY_TRACK,
-                            extraArgs: ['--artifact-dir=app/build/outputs/bundle/release'],
+                            extraArgs: ['--artifact-dir=app/build/outputs/play-publication'],
                             extraProps: [
                                     'release.versionCode': env.RELEASE_VERSION_CODE,
                                     'release.versionName': env.RELEASE_VERSION_NAME,
