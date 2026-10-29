@@ -185,7 +185,6 @@ cmp "$release_dir/app-release.aab" "$publication_dir/app-release.aab"
 
 def androidReleaseConfig(Map overrides = [:]) {
     return [
-            image: 'cdlee/android-build-env:latest',
             // Store listings are maintained separately; never let the shared
             // helper auto-upgrade publishReleaseBundle to publishReleaseApps.
             publishPlayListings: false,

@@ -448,7 +448,7 @@ def androidReleaseConfig(Map overrides = [:]) {
     ].join(' ')
 
     return [
-            image: 'harbor.maksonlee.com/library/gst-stream-wall-android-build-env@sha256:11e2a4f7a262afd5a28c2280b7b0114db541d24e7eff498dee79e4a55a10dad1',
+            image: buildImages.gstStreamWall(),
             workDir: 'apps/android',
             insideArgs: insideArgs,
             mountAndroidCache: false,

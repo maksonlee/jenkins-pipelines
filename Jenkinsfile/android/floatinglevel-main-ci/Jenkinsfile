@@ -18,7 +18,6 @@ pipeline {
             steps {
                 script {
                     gradleRelease(':app:bundleRelease', [
-                            image            : 'cdlee/android-build-env:latest',
                             keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.floatinglevel',
                             jksPath          : '/tmp/floatinglevel-upload.jks'
                     ])

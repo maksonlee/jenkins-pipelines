@@ -4,7 +4,7 @@ def call(Map cfg = [:], Closure body) {
         error "withAndroidReleaseEnv: 'keystoreVaultPath' is required"
     }
 
-    def image = (cfg.image ?: 'cdlee/android-build-env:latest') as String
+    def image = (cfg.image ?: buildImages.android()) as String
     def keystoreVP = (cfg.keystoreVaultPath ?: null) as String
     def playVP = (cfg.playServiceVaultPath ?: null) as String
     def jksPath = (cfg.jksPath ?: '/tmp/upload.jks') as String
@@ -18,19 +18,12 @@ def call(Map cfg = [:], Closure body) {
     }
     def cacheRoot = (cfg.cacheRoot ?: '/home/administrator/jenkins/android-cache') as String
     def mountAndroidCache = (cfg.get('mountAndroidCache', true)) as boolean
+    // The same Android SDK root as the Flutter and gst pipelines: the host's ANDROID_HOME.
     def cacheArgs = mountAndroidCache ? [
         "-v ${cacheRoot}/gradle:/home/ubuntu/.gradle",
-        "-v ${cacheRoot}/android-sdk/platforms:/home/ubuntu/Android/platforms",
-        "-v ${cacheRoot}/android-sdk/build-tools:/home/ubuntu/Android/build-tools",
-        "-v ${cacheRoot}/android-sdk/ndk:/home/ubuntu/Android/ndk",
-        "-v ${cacheRoot}/android-sdk/cmake:/home/ubuntu/Android/cmake"
+        "-v ${cacheRoot}/flutter-android-sdk:/home/ubuntu/Android"
     ] : ["-v ${cacheRoot}/gradle:/home/ubuntu/.gradle"]
-    def resourceArgs = [
-        '--cpus=2',
-        '--memory=4g',
-        '--memory-reservation=2g',
-        '--memory-swap=5g'
-    ]
+    def resourceArgs = buildContainer.resourceArgs()
     def insideArgs = (resourceArgs + cacheArgs + [cfg.insideArgs ?: '']).findAll { it.toString().trim() }.join(' ')
 
     def vaults = []
@@ -57,10 +50,7 @@ def call(Map cfg = [:], Closure body) {
 set -euo pipefail
 mkdir -p \\
   "${cacheRoot}/gradle" \\
-  "${cacheRoot}/android-sdk/platforms" \\
-  "${cacheRoot}/android-sdk/build-tools" \\
-  "${cacheRoot}/android-sdk/ndk" \\
-  "${cacheRoot}/android-sdk/cmake"
+  "${cacheRoot}/flutter-android-sdk"
 echo "ANDROID_CACHE_ROOT=${cacheRoot}"
 du -sh "${cacheRoot}" 2>/dev/null || true
 """

@@ -82,7 +82,7 @@ def call(String task, Map cfg = [:]) {
         error "gradleRelease: 'keystoreVaultPath' is required"
     }
 
-    def image = (cfg.image ?: 'cdlee/android-build-env:latest') as String
+    def image = (cfg.image ?: buildImages.android()) as String
     def insideArgs = (cfg.insideArgs ?: '') as String
     def jksPath = (cfg.jksPath ?: '/tmp/upload.jks') as String
     def playJsonPath = (cfg.playJsonPath ?: '/tmp/play-service.json') as String

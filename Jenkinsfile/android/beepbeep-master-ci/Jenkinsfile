@@ -19,7 +19,6 @@ pipeline {
             steps {
                 script {
                     gradleRelease(':app:bundleRelease', [
-                            image            : 'cdlee/android-build-env:latest',
                             keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.beepbeep',
                             jksPath          : '/tmp/beepbeep-upload.jks'
                     ])

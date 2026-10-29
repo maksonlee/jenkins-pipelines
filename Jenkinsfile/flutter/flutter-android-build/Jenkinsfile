@@ -44,10 +44,11 @@ pipeline {
                     env.PROJECT_CREDENTIALS_ID = 'vault-github-ssh'
                     // Keep the historical fallback for projects that have not
                     // pinned Flutter yet. A project's .fvmrc takes precedence.
-                    env.DEFAULT_FLUTTER_VERSION = '3.44.0'
+                    env.DEFAULT_FLUTTER_VERSION = '3.47.8'
                     // This image contains Android, Dart, and FVM. The project
                     // Flutter SDK is installed into the mounted FVM cache.
-                    env.FLUTTER_IMAGE = 'harbor.maksonlee.com/library/flutter-android-build-env:3.44.0-fvm'
+                    env.FLUTTER_IMAGE = buildImages.flutter()
+                    env.BUILD_CONTAINER_RESOURCE_ARGS = buildContainer.resourceArgs().join(' ')
                     env.PYTHON_TEST_IMAGE = 'python:3.13-bookworm'
                     env.POSTGIS_TEST_IMAGE = 'postgis/postgis:18-3.6'
                     env.FLUTTER_CACHE_ROOT = '/home/administrator/jenkins/flutter-cache'
@@ -591,10 +592,7 @@ echo "ANDROID_CACHE_SIZE_BEFORE=$(du -sh "${android_cache_root}" 2>/dev/null | c
 start=$(date +%s)
 
 docker run --rm \
-  --cpus=2 \
-  --memory=4g \
-  --memory-reservation=2g \
-  --memory-swap=5g \
+  ${BUILD_CONTAINER_RESOURCE_ARGS} \
   -u ${uid}:${gid} \
   -e HOME=/home/ubuntu \
   -e ANDROID_HOME=/home/ubuntu/Android \
