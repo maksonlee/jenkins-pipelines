@@ -91,13 +91,15 @@ def call(String task, Map cfg = [:]) {
     def stacktrace = (cfg.get('stacktrace', true)) as boolean
     def extraProps = (cfg.get('extraProps', [:])) as Map   // e.g. [android.injected.signing.store.type:'jks']
     def userExtraArgs = (cfg.get('extraArgs', []) as List)
-    def maxWorkers = (cfg.get('maxWorkers', 1)) as int
+    // Workers and the build cache come from the project's gradle.properties, so CI and local builds match;
+    // maxWorkers overrides the worker count for one job.
+    def maxWorkers = cfg.get('maxWorkers', null)
     // Opt out for projects that read the generic SIGNING_* environment
     // variables, keeping passwords out of Gradle's command-line arguments.
     def passSigningProperties = (cfg.get('passSigningProperties', true)) as boolean
     def defaultArgs = ['--no-daemon']
-    if (!userExtraArgs.any { it.toString().startsWith('--max-workers') }) {
-        defaultArgs << "--max-workers=${maxWorkers}"
+    if (maxWorkers != null && !userExtraArgs.any { it.toString().startsWith('--max-workers') }) {
+        defaultArgs << "--max-workers=${maxWorkers as int}"
     }
     def extraArgs = (defaultArgs + userExtraArgs).unique()
     def workDir = (cfg.get('workDir', '')) as String    // e.g. 'android' if gradlew在子目錄

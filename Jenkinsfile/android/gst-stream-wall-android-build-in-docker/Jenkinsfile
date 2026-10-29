@@ -459,7 +459,6 @@ def androidReleaseConfig(Map overrides = [:]) {
             publishPlayListings: false,
             keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.gststreamwall',
             jksPath: '/tmp/gst-stream-wall-upload.jks',
-            passSigningProperties: false,
-            maxWorkers: 1
+            passSigningProperties: false
     ] + overrides
 }

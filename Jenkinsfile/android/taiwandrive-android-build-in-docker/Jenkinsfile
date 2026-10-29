@@ -191,7 +191,6 @@ def androidReleaseConfig(Map overrides = [:]) {
             keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.taiwandrive',
             jksPath: '/tmp/taiwandrive-upload.jks',
             // The build reads SIGNING_* only, keeping passwords off the Gradle command line.
-            passSigningProperties: false,
-            maxWorkers: 1
+            passSigningProperties: false
     ] + overrides
 }
