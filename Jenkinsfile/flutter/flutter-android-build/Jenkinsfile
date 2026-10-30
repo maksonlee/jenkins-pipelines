@@ -369,7 +369,7 @@ test_db=""
 
 cleanup() {
   if [ -n "${test_db}" ]; then
-    docker rm -f "${test_db}" >/dev/null 2>&1 || true
+    docker rm -f -v "${test_db}" >/dev/null 2>&1 || true
   fi
   if [ -n "${test_network}" ]; then
     docker network rm "${test_network}" >/dev/null 2>&1 || true
