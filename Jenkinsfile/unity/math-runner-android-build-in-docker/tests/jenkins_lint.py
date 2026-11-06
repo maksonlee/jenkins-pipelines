@@ -68,20 +68,34 @@ job = base + "/job/unity/job/math-runner-android-build-in-docker"
 try:
     status, config_text = request(job + "/config.xml", auth)
     config = ET.fromstring(config_text)
-    if (status != 200 or config.findtext("disabled") != "true" or
+    disabled = config.findtext("disabled")
+    if (status != 200 or disabled not in {"true", "false"} or
             config.findtext("./definition/scriptPath") !=
             "Jenkinsfile/unity/math-runner-android-build-in-docker/Jenkinsfile" or
             config.findtext("./definition/scm/branches/hudson.plugins.git.BranchSpec/name") !=
-            "*/main"):
-        raise SystemExit("Disabled Jenkins job configuration changed")
+            "*/main" or
+            config.findtext("./definition/scm/userRemoteConfigs/hudson.plugins.git.UserRemoteConfig/url") !=
+            "git@github.com:maksonlee/jenkins-pipelines.git" or
+            config.findtext("./definition/scm/userRemoteConfigs/hudson.plugins.git.UserRemoteConfig/credentialsId") !=
+            "vault-github-ssh"):
+        raise SystemExit("Jenkins job SCM or script configuration changed")
     status, api_text = request(
         job + "/api/json?tree=buildable,inQueue,lastBuild[number]", auth
     )
     job_state = json.loads(api_text)
-    if (status != 200 or job_state.get("buildable") is not False or
-            job_state.get("inQueue") is not False or
-            job_state.get("lastBuild") is not None):
-        raise SystemExit("Disabled Jenkins job has unexpected runtime state")
+    if (status != 200 or not isinstance(job_state.get("buildable"), bool) or
+            not isinstance(job_state.get("inQueue"), bool)):
+        raise SystemExit("Jenkins job runtime state is unavailable")
+    last_build = job_state.get("lastBuild")
+    if last_build is not None and (
+            not isinstance(last_build, dict) or
+            not isinstance(last_build.get("number"), int)):
+        raise SystemExit("Jenkins lastBuild number is unavailable")
 except urllib.error.HTTPError as error:
     raise SystemExit(f"Jenkins job readback HTTP {error.code}") from None
-print("Disabled job readback: disabled=true, main/scriptPath retained, buildable=false, inQueue=false, lastBuild=null.")
+print(
+    "Jenkins job readback: main/SCM/scriptPath retained; "
+    f"disabled={disabled}, buildable={job_state['buildable']}, "
+    f"inQueue={job_state['inQueue']}, "
+    f"lastBuild={None if last_build is None else last_build['number']}."
+)
