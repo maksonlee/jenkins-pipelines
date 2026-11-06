@@ -15,3 +15,8 @@ def gstStreamWall() {
     // gst-stream-wall-android-build-env:1.98.0-2, built 2026-08-30; Dockerfile in docker/gst-stream-wall-android-build-env
     return 'harbor.maksonlee.com/library/gst-stream-wall-android-build-env@sha256:11e2a4f7a262afd5a28c2280b7b0114db541d24e7eff498dee79e4a55a10dad1'
 }
+
+def unityAndroid() {
+    // unity-android-build-env:6000.6.7f1-android-1; Unity 6000.6.7f1 with embedded Android tools.
+    return 'harbor.maksonlee.com/library/unity-android-build-env@sha256:c45b47f9999a81df26f664419725ab5895438e5dbf6123bc002c766ecf3c4cf3'
+}

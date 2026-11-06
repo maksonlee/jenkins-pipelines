@@ -1,0 +1,438 @@
+@Library('jenkins-shared-lib') _
+
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        disableConcurrentBuilds()
+        skipDefaultCheckout(true)
+        timeout(time: 180, unit: 'MINUTES')
+    }
+
+    parameters {
+        string(name: 'GIT_REF', defaultValue: 'main', description: 'main or a full commit SHA contained in origin/main')
+        string(name: 'VERSION_NAME', defaultValue: '0.1.0', description: 'Android versionName, for example 0.1.0')
+        string(name: 'ANDROID_VERSION_CODE', defaultValue: '1', description: 'Google Play versionCode (1..2100000000)')
+    }
+
+    environment {
+        PACKAGE_NAME = 'com.maksonlee.mathrunner'
+        RELEASE_AAB = 'Builds/Release/Android/SportsDayMath.aab'
+        UNITY_BUILD_REPORT = 'Evidence/Checks/Builds/PlayAab/Android-AndroidBuildReport.json'
+    }
+
+    stages {
+        stage('Validate candidate') {
+            steps {
+                script {
+                    def gitRef = params.GIT_REF?.trim()
+                    def versionName = params.VERSION_NAME?.trim()
+                    def versionCode = params.ANDROID_VERSION_CODE?.trim()
+                    if (!gitRef || (gitRef != 'main' && !(gitRef ==~ /^[0-9a-fA-F]{40}$/))) {
+                        error 'GIT_REF must be main or a full 40-character commit SHA'
+                    }
+                    if (!versionName || !(versionName ==~ /^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/)) {
+                        error 'VERSION_NAME must be 1..64 safe version characters'
+                    }
+                    if (!versionCode || !(versionCode ==~ /^[1-9][0-9]*$/) ||
+                            versionCode.length() > 10 || versionCode.toLong() > 2100000000L) {
+                        error 'ANDROID_VERSION_CODE must be an integer from 1 to 2100000000'
+                    }
+                    env.CANDIDATE_REF = gitRef.toLowerCase()
+                    env.VERSION_NAME = versionName
+                    env.ANDROID_VERSION_CODE = versionCode
+                    env.UNITY_IMAGE = buildImages.unityAndroid()
+                }
+            }
+        }
+
+        stage('Fetch source') {
+            steps {
+                deleteDir()
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: env.CANDIDATE_REF]],
+                    doGenerateSubmoduleConfigurations: false,
+                    extensions: [],
+                    userRemoteConfigs: [[
+                        credentialsId: 'vault-github-ssh',
+                        url: 'git@github.com:maksonlee/math-runner.git'
+                    ]]
+                ])
+                sh '''#!/bin/bash
+set -euo pipefail
+release_commit=$(git rev-parse HEAD)
+git rev-parse --verify 'refs/remotes/origin/main^{commit}' >/dev/null
+if [ "$CANDIDATE_REF" != main ] && [ "$release_commit" != "$CANDIDATE_REF" ]; then
+  echo 'Checked out commit differs from requested SHA.' >&2
+  exit 1
+fi
+if ! git merge-base --is-ancestor "$release_commit" refs/remotes/origin/main; then
+  echo 'Release commit is not contained in origin/main.' >&2
+  exit 1
+fi
+if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+  echo 'Release checkout is not clean.' >&2
+  exit 1
+fi
+test -f Assets/Editor/Build/ProjectBuilder.cs
+test -f ProjectSettings/ProjectVersion.txt
+grep -Fxq 'm_EditorVersion: 6000.6.7f1' ProjectSettings/ProjectVersion.txt
+mkdir -p -- "$(dirname "$RELEASE_AAB")"
+rm -f -- "$RELEASE_AAB" "$RELEASE_AAB.sha256" "$RELEASE_AAB.signer-sha256"
+echo "CHECKED_OUT_COMMIT=$release_commit"
+'''
+                script {
+                    env.RELEASE_COMMIT = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
+                    echo "Candidate ${env.RELEASE_COMMIT}, Android ${env.VERSION_NAME} (${env.ANDROID_VERSION_CODE})"
+                }
+            }
+        }
+
+        stage('Build signed AAB') {
+            steps {
+                sh '''#!/bin/bash
+set -euo pipefail
+for old in "${WORKSPACE}@tmp"/mathrunner-ci-*; do
+  { test ! -e "$old" && test ! -L "$old"; } ||
+    { echo 'A previous Math Runner signing directory remains.' >&2; exit 1; }
+done
+'''
+                withVault([vaultSecrets: [[
+                    path: 'secret/jenkins/mobile/app/com.maksonlee.mathrunner',
+                    engineVersion: 2,
+                    secretValues: [
+                        [envVar: 'UPLOAD_JKS_B64', vaultKey: 'upload_jks_b64'],
+                        [envVar: 'STORE_PASSWORD', vaultKey: 'store_password'],
+                        [envVar: 'KEY_PASSWORD', vaultKey: 'key_password'],
+                        [envVar: 'KEY_ALIAS', vaultKey: 'key_alias']
+                    ]
+                ]]]) {
+                    sh '''#!/bin/bash
+set -euo pipefail
+set +x
+umask 077
+: "${UPLOAD_JKS_B64:?Upload JKS is missing from Vault}"
+: "${STORE_PASSWORD:?JKS store password is missing from Vault}"
+: "${KEY_PASSWORD:?JKS key password is missing from Vault}"
+: "${KEY_ALIAS:?JKS key alias is missing from Vault}"
+
+# The worker's Personal identity is bootstrapped and sealed separately.
+# A normal build never creates or replaces it.
+state=/home/administrator/jenkins/unity/math-runner-worker-1
+tool_dir=/home/administrator/jenkins/unity-cli/1.0.0-beta.17
+hostname=mathrunner-unity-worker-1
+tool_sha=2f5246ee5bea5032da2917f5f0125d3cfe803c85dc34f78bd75a427db13a0b3c
+image=harbor.maksonlee.com/library/unity-android-build-env@sha256:c45b47f9999a81df26f664419725ab5895438e5dbf6123bc002c766ecf3c4cf3
+test "$UNITY_IMAGE" = "$image"
+test "$(id -u):$(id -g)" = 1000:1000
+for dir in "$state" "$state/identity" "$state/home" "$state/share"; do
+  test -d "$dir" && test ! -L "$dir"
+  test "$(stat -c '%u:%g:%a' "$dir")" = 1000:1000:700
+done
+test "$(cat "$state/identity/schema")" = mathrunner-unity-personal-v1
+[[ "$(cat "$state/identity/machine-id")" =~ ^[0-9a-f]{32}$ ]]
+grep -Eq '^unityci:x:1000:1000:[^:]*:/home/ubuntu:/bin/bash$' "$state/identity/passwd"
+grep -Eq '^unityci:x:1000:$' "$state/identity/group"
+for file in machine-id passwd group schema; do
+  test -f "$state/identity/$file" && test ! -L "$state/identity/$file"
+  test "$(stat -c '%u:%g:%a' "$state/identity/$file")" = 1000:1000:600
+done
+test "$(stat -c '%u:%g:%a' "$state/worker.lock")" = 1000:1000:600
+test "$(stat -c '%u:%g:%a' "$state/ready")" = 1000:1000:600
+test "$(stat -c '%u:%g:%a' "$state/persistence-proof")" = 1000:1000:600
+identity_digest=$(
+  {
+    sha256sum "$state/identity/schema" "$state/identity/machine-id" \
+      "$state/identity/passwd" "$state/identity/group"
+    printf '%s\\n' "$hostname" "$image" "$tool_sha"
+  } | sha256sum | cut -d' ' -f1
+)
+test "$(cat "$state/ready")" = "$identity_digest"
+test "$(cat "$state/persistence-proof")" = "$identity_digest"
+printf '%s  %s\\n' \
+  "$tool_sha" \
+  "$tool_dir/unity" | sha256sum --check --status
+docker pull "$UNITY_IMAGE" >/dev/null
+
+ci_root="${WORKSPACE}@tmp/mathrunner-ci-${BUILD_NUMBER}"
+case "$ci_root" in "${WORKSPACE}@tmp"/mathrunner-ci-*) ;; *) exit 2 ;; esac
+exec 9<"$state/worker.lock"
+flock -x -w 60 9 || { echo 'Unity worker is busy.' >&2; exit 1; }
+worker_containers=$(docker ps -aq --filter label=com.maksonlee.mathrunner.worker=mathrunner-unity-worker-1) ||
+  { echo 'Cannot enumerate Unity worker containers.' >&2; exit 1; }
+if [ -n "$worker_containers" ]; then
+  echo 'A Unity worker container already exists; refusing concurrent activation.' >&2
+  exit 1
+fi
+for old in "${WORKSPACE}@tmp"/mathrunner-ci-*; do
+  { test ! -e "$old" && test ! -L "$old"; } ||
+    { echo 'A previous Math Runner signing directory remains.' >&2; exit 1; }
+done
+mkdir -m 0700 -- "$ci_root"
+mkdir -m 0700 -- "$ci_root/secrets"
+secrets="$ci_root/secrets"
+printf %s "$UPLOAD_JKS_B64" | sed 's/^data:[^,]*,//' | tr -d '\\r\\n ' | base64 -d > "$secrets/upload.jks"
+printf %s "$STORE_PASSWORD" > "$secrets/store-password"
+printf %s "$KEY_PASSWORD" > "$secrets/key-password"
+printf %s "$KEY_ALIAS" > "$secrets/key-alias"
+chmod 0600 "$secrets"/*
+keytool -list -v -keystore "$secrets/upload.jks" \
+  -storepass:env STORE_PASSWORD -alias "$KEY_ALIAS" > "$ci_root/certificate.txt"
+expected_signer=$(awk -F': ' '$1 ~ /^[[:space:]]*SHA256$/ { gsub(/:/, "", $2); print toupper($2); exit }' "$ci_root/certificate.txt")
+if [[ ! "$expected_signer" =~ ^[0-9A-F]{64}$ ]]; then
+  echo 'Could not read one JKS upload certificate SHA-256 fingerprint.' >&2
+  exit 1
+fi
+printf '%s\\n' "$expected_signer" > "$RELEASE_AAB.signer-sha256"
+unset UPLOAD_JKS_B64 STORE_PASSWORD KEY_PASSWORD KEY_ALIAS
+
+# The lock stays with this shell while Unity runs. FD 9 is closed in Docker's
+# client so a killed shell cannot leave the lock held by an orphaned client.
+name="mathrunner-unity-build-${BUILD_NUMBER}"
+mkdir -p Evidence/Checks/Builds/PlayAab
+timeout --signal=TERM --kill-after=30s 150m docker run --rm --pull never \
+  --name "$name" \
+  --label com.maksonlee.mathrunner.worker=mathrunner-unity-worker-1 \
+  --label "com.maksonlee.mathrunner.build=${BUILD_NUMBER}" \
+  --label "com.maksonlee.mathrunner.workspace=${WORKSPACE}" \
+  --user 1000:1000 --hostname "$hostname" \
+  --cpus 6 --memory 12g --shm-size 2g \
+  --env HOME=/home/ubuntu --env USER=unityci --env LOGNAME=unityci \
+  --env XDG_RUNTIME_DIR=/run/user/1000 \
+  --tmpfs /run/user/1000:rw,uid=1000,gid=1000,mode=0700 \
+  --env "VERSION_NAME=$VERSION_NAME" \
+  --env "ANDROID_VERSION_CODE=$ANDROID_VERSION_CODE" \
+  --env SIGNING_STORE_FILE=/run/mathrunner-signing/upload.jks \
+  --env SIGNING_STORE_PASSWORD_FILE=/run/mathrunner-signing/store-password \
+  --env SIGNING_KEY_PASSWORD_FILE=/run/mathrunner-signing/key-password \
+  --env SIGNING_KEY_ALIAS_FILE=/run/mathrunner-signing/key-alias \
+  --mount "type=bind,src=$state/home,dst=/home/ubuntu" \
+  --mount "type=bind,src=$state/share,dst=/usr/share/unity3d" \
+  --mount "type=bind,src=$state/identity/machine-id,dst=/etc/machine-id,readonly" \
+  --mount "type=bind,src=$state/identity/passwd,dst=/etc/passwd,readonly" \
+  --mount "type=bind,src=$state/identity/group,dst=/etc/group,readonly" \
+  --mount "type=bind,src=$tool_dir,dst=/opt/unity-cli,readonly" \
+  --mount "type=bind,src=$WORKSPACE,dst=/workspace" \
+  --mount "type=bind,src=$secrets,dst=/run/mathrunner-signing,readonly" \
+  --workdir /workspace "$UNITY_IMAGE" /bin/bash -c '
+    set -euo pipefail
+    /opt/unity-cli/unity auth status --format json >/tmp/mathrunner-auth.json
+    /opt/unity-cli/unity license status --format json >/tmp/mathrunner-license.json
+    python3 - <<PY
+import json
+for kind in ("auth", "license"):
+    with open("/tmp/mathrunner-" + kind + ".json", encoding="utf-8") as stream:
+        status = json.load(stream)
+        data = status.get("data") or {}
+        valid = (data.get("loggedIn") is True if kind == "auth" else
+                 data.get("active") is True and data.get("signedIn") is True)
+        if status.get("success") is not True or not valid:
+            raise SystemExit("Unity " + kind + " status is not successful")
+PY
+    /opt/unity/Editor/Unity -batchmode -nographics -quit -buildTarget Android \
+      -projectPath /workspace \
+      -executeMethod MathRunner.Editor.ProjectBuilder.BuildAndroidPlayAab \
+      -logFile /workspace/Evidence/Checks/Builds/PlayAab/Unity.log
+  ' 9<&-
+test -s "$RELEASE_AAB"
+grep -Fq 'Build succeeded!' Evidence/Checks/Builds/PlayAab/Unity.log
+'''
+                }
+            }
+        }
+
+        stage('Verify and archive AAB') {
+            steps {
+                sh '''#!/bin/bash
+set -euo pipefail
+export LC_ALL=C
+release_dir=Builds/Release/Android
+aab="$RELEASE_AAB"
+test -s "$aab"
+test -s "$UNITY_BUILD_REPORT"
+test "$(find "$release_dir" -maxdepth 1 -type f -name '*.aab' | wc -l)" -eq 1
+bundletool=/home/administrator/jenkins/android-cache/tools/bundletool-all-1.18.3.jar
+test -f "$bundletool"
+printf '%s  %s\\n' \
+  a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29 "$bundletool" \
+  | sha256sum --check --status
+java -jar "$bundletool" validate --bundle "$aab"
+java -jar "$bundletool" dump manifest --bundle "$aab" --module base \
+  > "$release_dir/AndroidManifest.xml"
+
+signature_report="$release_dir/signature-verification.txt"
+set +e
+jarsigner -verify -strict "$aab" > "$signature_report" 2>&1
+signature_status=$?
+set -e
+python3 - "$signature_report" "$signature_status" <<'PY'
+import pathlib
+import sys
+
+report = pathlib.Path(sys.argv[1]).read_text(encoding='utf-8', errors='replace')
+status = int(sys.argv[2])
+lower = report.lower()
+if 'unsigned entries' in lower or 'treated as unsigned' in lower or 'jar is unsigned' in lower:
+    raise SystemExit('AAB has unsigned entries')
+if status == 0:
+    if 'jar verified.' not in report:
+        raise SystemExit('JAR verification did not confirm the AAB')
+elif status == 4:
+    if 'jar verified, with signer errors.' not in report or 'Error:' not in report:
+        raise SystemExit('Unexpected JAR signature verification result')
+    errors = report.split('Error:', 1)[1].split('Warning:', 1)[0].strip().splitlines()
+    errors = [line.strip() for line in errors if line.strip()]
+    allowed = (
+        'This jar contains entries whose certificate chain is invalid. Reason: PKIX path building failed:',
+        'This jar contains entries whose signer certificate is self-signed.',
+    )
+    if not errors or any(not any(line.startswith(item) for item in allowed) for line in errors):
+        raise SystemExit('JAR signature errors exceed the expected self-signed upload certificate')
+else:
+    raise SystemExit(f'JAR strict verification failed (exit {status})')
+PY
+actual_signer=$(keytool -printcert -jarfile "$aab" \
+  | awk -F': ' '$1 ~ /^[[:space:]]*SHA256$/ { gsub(/:/, "", $2); print toupper($2); exit }')
+expected_signer=$(cat "$aab.signer-sha256")
+if [[ ! "$actual_signer" =~ ^[0-9A-F]{64}$ ]] || [ "$actual_signer" != "$expected_signer" ]; then
+  echo 'AAB signer does not match the upload JKS certificate.' >&2
+  exit 1
+fi
+sha256sum "$aab" | sed 's#  .*/#  #' > "$aab.sha256"
+(cd "$release_dir" && sha256sum --check --status SportsDayMath.aab.sha256)
+
+python3 - "$aab" "$release_dir/AndroidManifest.xml" "$release_dir/release-verification.json" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import sys
+import xml.etree.ElementTree as ET
+import zipfile
+
+aab, manifest, report = map(pathlib.Path, sys.argv[1:])
+root = ET.parse(manifest).getroot()
+android = '{http://schemas.android.com/apk/res/android}'
+expected = {
+    'package': os.environ['PACKAGE_NAME'],
+    'versionCode': os.environ['ANDROID_VERSION_CODE'],
+    'versionName': os.environ['VERSION_NAME'],
+}
+actual = {
+    'package': root.attrib.get('package'),
+    'versionCode': root.attrib.get(android + 'versionCode'),
+    'versionName': root.attrib.get(android + 'versionName'),
+}
+if actual != expected:
+    raise SystemExit(f'AAB manifest mismatch: expected {expected}, found {actual}')
+with zipfile.ZipFile(aab) as bundle:
+    names = bundle.namelist()
+    libs = [n for n in names if n.startswith('base/lib/') and n.endswith('.so')]
+    abis = sorted({n.split('/')[2] for n in libs})
+    required = {'base/lib/arm64-v8a/libunity.so',
+                'base/lib/arm64-v8a/libil2cpp.so'}
+    if abis != ['arm64-v8a'] or not required.issubset(names):
+        raise SystemExit(f'AAB must contain ARM64 Unity IL2CPP only; ABIs={abis}')
+sha = hashlib.sha256(aab.read_bytes()).hexdigest()
+fingerprint = (aab.parent / (aab.name + '.signer-sha256')).read_text().strip()
+result = {
+    'status': 'passed',
+    'source_commit': os.environ['RELEASE_COMMIT'],
+    'image': os.environ['UNITY_IMAGE'],
+    'unity_cli_version': '1.0.0-beta.17',
+    'unity_worker': 'mathrunner-unity-worker-1',
+    'license_lifecycle': 'persistent-personal',
+    'package': actual['package'],
+    'version_code': int(actual['versionCode']),
+    'version_name': actual['versionName'],
+    'abis': abis,
+    'signer_sha256': fingerprint,
+    'aab_sha256': sha,
+}
+report.write_text(json.dumps(result, indent=2) + '\\n', encoding='utf-8')
+print(f"Verified AAB: source={result['source_commit']} version={result['version_name']} ({result['version_code']}) sha256={sha} signer={fingerprint}")
+PY
+'''
+                archiveArtifacts(
+                    artifacts: 'Builds/Release/Android/SportsDayMath.aab,Builds/Release/Android/SportsDayMath.aab.sha256,Builds/Release/Android/SportsDayMath.aab.signer-sha256,Builds/Release/Android/AndroidManifest.xml,Builds/Release/Android/signature-verification.txt,Builds/Release/Android/release-verification.json,Evidence/Checks/Builds/PlayAab/Android-AndroidBuildReport.json',
+                    fingerprint: true
+                )
+            }
+        }
+    }
+
+    post {
+        always {
+            // Stop only this build's container. Keep the worker's Personal
+            // HOME, Unity share and identity across all jobs and aborts.
+            sh '''#!/bin/bash
+set -euo pipefail
+state=/home/administrator/jenkins/unity/math-runner-worker-1
+if [ -e "$state/worker.lock" ]; then
+  exec 9<"$state/worker.lock"
+  flock -x -w 150 9 || {
+    echo 'Unity worker remains busy; preserving checkout and task files.' >&2
+    exit 1
+  }
+fi
+python3 - <<'PY'
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+
+workspace_text = os.environ.get('WORKSPACE', '')
+number = os.environ.get('BUILD_NUMBER', '')
+if not workspace_text or not re.fullmatch(r'[0-9]+', number):
+    raise SystemExit('Cannot identify this Jenkins workspace/build for cleanup')
+workspace = pathlib.Path(workspace_text).resolve()
+temporary_parent = pathlib.Path(str(workspace) + '@tmp').resolve()
+root = temporary_parent / ('mathrunner-ci-' + number)
+if root.resolve().parent != temporary_parent:
+    raise SystemExit('Refusing cleanup outside the task temporary directory')
+state = pathlib.Path('/home/administrator/jenkins/unity/math-runner-worker-1')
+name = 'mathrunner-unity-build-' + number
+ids = subprocess.check_output([
+    'docker', 'ps', '-aq', '--no-trunc', '--filter', 'name=^/' + name + '$'
+], text=True).split()
+if len(ids) > 1:
+    raise SystemExit('More than one exact build container was found')
+if ids:
+    container = json.loads(subprocess.check_output(
+        ['docker', 'inspect', ids[0]], text=True))[0]
+    labels = container['Config'].get('Labels') or {}
+    expected = {
+        'com.maksonlee.mathrunner.worker': 'mathrunner-unity-worker-1',
+        'com.maksonlee.mathrunner.build': number,
+        'com.maksonlee.mathrunner.workspace': workspace_text,
+    }
+    if any(labels.get(key) != value for key, value in expected.items()):
+        raise SystemExit('Build container labels do not match; preserving it')
+    mounts = {(m.get('Source'), m.get('Destination'))
+              for m in container.get('Mounts', [])}
+    required = {
+        (str(workspace), '/workspace'),
+        (str(state / 'home'), '/home/ubuntu'),
+        (str(root / 'secrets'), '/run/mathrunner-signing'),
+    }
+    if not required.issubset(mounts):
+        raise SystemExit('Build container mounts do not match; preserving it')
+    if container['State']['Running']:
+        subprocess.run(['docker', 'stop', '--time', '90', ids[0]],
+                       check=True, timeout=120)
+    subprocess.run(['docker', 'rm', ids[0]], check=False,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   timeout=20)
+if root.exists():
+    if root.is_symlink() or not root.is_dir():
+        raise SystemExit('Task temporary root is not a real directory')
+    shutil.rmtree(root)
+PY
+'''
+            cleanWs(deleteDirs: true, disableDeferredWipeout: true)
+        }
+    }
+}
