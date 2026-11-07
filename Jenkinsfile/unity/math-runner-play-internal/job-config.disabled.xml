@@ -1,6 +1,6 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
-  <description>Disabled Math Runner internal Play publisher candidate. Requires reviewed Copy Artifact plugin, source-job copy permission and separate authorization for any Play write.</description>
+  <description>Disabled initial template for the Math Runner Artifactory-backed internal Play publisher. Verify the Artifactory route and require manual Play input before any write.</description>
   <keepDependencies>false</keepDependencies>
   <properties>
     <hudson.model.ParametersDefinitionProperty>

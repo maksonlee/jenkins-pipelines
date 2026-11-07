@@ -6,8 +6,8 @@ import sys
 path = pathlib.Path(sys.argv[1])
 source = path.read_text(encoding="utf-8")
 blocks = re.findall(r"sh '''(.*?)'''", source, re.S)
-if len(blocks) != 5:
-    raise SystemExit(f"Expected 5 shell blocks, got {len(blocks)}")
+if len(blocks) != 8:
+    raise SystemExit(f"Expected 8 shell blocks, got {len(blocks)}")
 compiled = 0
 for index, block in enumerate(blocks, 1):
     result = subprocess.run(["bash", "-n"], input=block.encode(), capture_output=True)
@@ -16,8 +16,8 @@ for index, block in enumerate(blocks, 1):
     for code in re.findall(r"<<'?PY'?\n(.*?)\nPY", block, re.S):
         compile(code, f"shell-{index}-python", "exec")
         compiled += 1
-if compiled != 4:
-    raise SystemExit(f"Expected 4 Python blocks, got {compiled}")
+if compiled != 5:
+    raise SystemExit(f"Expected 5 Python blocks, got {compiled}")
 print(f"Embedded Bash: {len(blocks)}/{len(blocks)}; Python compile: {compiled}/{compiled}")
 if len(sys.argv) > 2:
     bootstrap = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")

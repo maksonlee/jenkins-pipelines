@@ -9,8 +9,8 @@ import tempfile
 
 source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 blocks = re.findall(r"sh '''(.*?)'''", source, re.S)
-assert len(blocks) == 5
-preflight, build, post = (blocks[1], blocks[2], blocks[4])
+assert len(blocks) == 8
+preflight, build, post = (blocks[1], blocks[2], blocks[-1])
 # Groovy decodes escaped backslashes in triple-single-quoted shell strings.
 preflight, build, post = [x.replace("\\\\", "\\") for x in (preflight, build, post)]
 real_state = "/home/administrator/jenkins/unity/math-runner-worker-1"

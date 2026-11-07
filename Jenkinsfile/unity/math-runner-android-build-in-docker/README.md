@@ -4,8 +4,13 @@ Jenkins job: `unity/math-runner-android-build-in-docker`. Its first live build, 
 
 The Pipeline definition is loaded from `git@github.com:maksonlee/jenkins-pipelines.git` on `main`, with script path `Jenkinsfile/unity/math-runner-android-build-in-docker/Jenkinsfile`. `job-config.disabled.xml` is the reviewed, disabled creation template with the required first-run parameters; it is not the current live job state. A Declarative linter result alone does not establish a Unity build.
 
-The job builds, verifies, archives and fingerprints one signed Android App Bundle. It does not activate or return a Personal license during a normal build, receive a Unity email/password, or upload to Google Play. A later Play job must consume the archived AAB and SHA-256, require separate authorization, and verify its own Play service-account access.
+The job builds, verifies, archives and fingerprints one signed Android App Bundle. Future runs also preserve its seven public verification files in the existing Artifactory `android-snapshots` repository, with byte-for-byte readback before success. It does not activate or return a Personal license during a normal build, receive a Unity email/password, or upload to Google Play. The separate internal Play job downloads the fixed Artifactory path and verifies the AAB and proof again before seeking approval or Play credentials.
 
+## Artifactory preservation
+
+The path for Jenkins build number `N` and verified lowercase AAB SHA-256 `H` is `android-snapshots/com/maksonlee/math-runner/jenkins-build-N-sha256-H-SNAPSHOT/`. This follows the local Maven repository's `group/artifact/version` layout. Six public files retain their names; the original `SportsDayMath.aab.sha256` is stored as `SportsDayMath.aab.sha256.txt` because Artifactory reserves `.sha256` checksum URLs. The original 84-byte checksum file is restored for the Play publisher's seven-file verifier.
+
+The stage downloads the exact target before upload. If absent, it uploads the seven verified files; if present, all seven must already match local byte size and SHA-256. Partial or differing content fails before upload. It then downloads all seven again and checks every byte digest. This is a collision and drift check, not an Artifactory immutability or retention guarantee. Build #1 predates this stage: its already verified archive was imported once to that path and all seven bytes read back, without another Unity build. The new source-job Artifactory stage itself has not yet run on a new Unity build.
 ## Candidate and release inputs
 
 - `GIT_REF`: `main` or a full SHA contained in `origin/main`. The product checkout records its exact commit and must be clean.

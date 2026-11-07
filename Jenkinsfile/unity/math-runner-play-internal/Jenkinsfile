@@ -53,24 +53,51 @@ git -C pipeline-source rev-parse HEAD
             }
         }
 
-        stage('Copy and verify source AAB') {
+        stage('Download and verify Artifactory AAB') {
             steps {
                 sh '''#!/bin/bash
 set -euo pipefail
 test ! -e artifact
 test ! -L artifact
 '''
-                // Copy Artifact is a reviewed prerequisite. It is not installed
-                // in the current Jenkins controller and this job stays disabled.
-                copyArtifacts(
-                    projectName: '/unity/math-runner-android-build-in-docker',
-                    selector: specific(params.SOURCE_BUILD_NUMBER),
-                    filter: 'Builds/Release/Android/SportsDayMath.aab,Builds/Release/Android/SportsDayMath.aab.sha256,Builds/Release/Android/SportsDayMath.aab.signer-sha256,Builds/Release/Android/release-verification.json,Builds/Release/Android/AndroidManifest.xml,Builds/Release/Android/signature-verification.txt,Evidence/Checks/Builds/PlayAab/Android-AndroidBuildReport.json',
-                    target: 'artifact',
-                    flatten: true,
-                    fingerprintArtifacts: true,
-                    optional: false
-                )
+                script {
+                    env.ARTIFACTORY_TARGET = "android-snapshots/com/maksonlee/math-runner/jenkins-build-${params.SOURCE_BUILD_NUMBER}-sha256-${params.EXPECTED_AAB_SHA256}-SNAPSHOT/"
+                    echo "Downloading exact Artifactory AAB proof from ${env.ARTIFACTORY_TARGET}"
+                    def spec = groovy.json.JsonOutput.toJson([files: [[
+                        pattern: env.ARTIFACTORY_TARGET + '*',
+                        target: 'artifactory-raw/',
+                        flat: true
+                    ]]])
+                    rtDownload(serverId: 'artifactory', spec: spec, failNoOp: true)
+                }
+                sh '''#!/bin/bash
+set -euo pipefail
+python3 - <<'PY'
+import pathlib
+
+stored_to_canonical = {
+    'SportsDayMath.aab': 'SportsDayMath.aab',
+    'SportsDayMath.aab.sha256.txt': 'SportsDayMath.aab.sha256',
+    'SportsDayMath.aab.signer-sha256': 'SportsDayMath.aab.signer-sha256',
+    'release-verification.json': 'release-verification.json',
+    'AndroidManifest.xml': 'AndroidManifest.xml',
+    'signature-verification.txt': 'signature-verification.txt',
+    'Android-AndroidBuildReport.json': 'Android-AndroidBuildReport.json',
+}
+source = pathlib.Path('artifactory-raw')
+if not source.is_dir() or source.is_symlink():
+    raise SystemExit('Artifactory download did not create a regular directory')
+files = list(source.iterdir())
+if {p.name for p in files} != set(stored_to_canonical) or any(not p.is_file() or p.is_symlink() for p in files):
+    raise SystemExit('Artifactory seven-file inventory is missing or unexpected')
+destination = pathlib.Path('artifact')
+if destination.exists() or destination.is_symlink():
+    raise SystemExit('Artifact destination is not empty')
+destination.mkdir()
+for stored, canonical in stored_to_canonical.items():
+    (destination / canonical).write_bytes((source / stored).read_bytes())
+PY
+'''
                 sh '''#!/bin/bash
 set -euo pipefail
 python3 "$PUBLISHER_SCRIPT" verify "$SOURCE_BUILD_NUMBER" "$EXPECTED_AAB_SHA256" artifact

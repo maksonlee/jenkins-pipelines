@@ -360,6 +360,94 @@ PY
                 )
             }
         }
+        stage('Preserve verified AAB in Artifactory') {
+            steps {
+                script {
+                    def sha = readFile("${env.RELEASE_AAB}.sha256").trim().split(/\s+/)[0]
+                    if (!(sha ==~ /^[0-9a-f]{64}$/) || !(env.BUILD_NUMBER ==~ /^[1-9][0-9]{0,7}$/)) {
+                        error 'Verified AAB SHA or Jenkins build number is invalid'
+                    }
+                    env.ARTIFACTORY_TARGET = "android-snapshots/com/maksonlee/math-runner/jenkins-build-${env.BUILD_NUMBER}-sha256-${sha}-SNAPSHOT/"
+                    echo "Artifactory verified AAB target: ${env.ARTIFACTORY_TARGET}"
+                }
+                sh '''#!/bin/bash
+set -euo pipefail
+test ! -e artifactory-upload && test ! -L artifactory-upload
+mkdir artifactory-upload
+cp -- "$RELEASE_AAB" artifactory-upload/SportsDayMath.aab
+cp -- "$RELEASE_AAB.sha256" artifactory-upload/SportsDayMath.aab.sha256.txt
+cp -- "$RELEASE_AAB.signer-sha256" artifactory-upload/SportsDayMath.aab.signer-sha256
+cp -- Builds/Release/Android/release-verification.json artifactory-upload/release-verification.json
+cp -- Builds/Release/Android/AndroidManifest.xml artifactory-upload/AndroidManifest.xml
+cp -- Builds/Release/Android/signature-verification.txt artifactory-upload/signature-verification.txt
+cp -- "$UNITY_BUILD_REPORT" artifactory-upload/Android-AndroidBuildReport.json
+cat > artifactory-compare.py <<'PY'
+import hashlib
+import pathlib
+import sys
+
+mode, other_name = sys.argv[1:]
+expected = {
+    'SportsDayMath.aab', 'SportsDayMath.aab.sha256.txt',
+    'SportsDayMath.aab.signer-sha256', 'release-verification.json',
+    'AndroidManifest.xml', 'signature-verification.txt',
+    'Android-AndroidBuildReport.json',
+}
+source = pathlib.Path('artifactory-upload')
+other = pathlib.Path(other_name)
+source_files = list(source.iterdir())
+if {p.name for p in source_files} != expected or any(not p.is_file() or p.is_symlink() for p in source_files):
+    raise SystemExit('Local Artifactory upload inventory differs from the seven verified files')
+if other.is_symlink():
+    raise SystemExit('Artifactory download directory is a symlink')
+actual = list(other.iterdir()) if other.is_dir() else []
+if mode == 'pre' and not actual:
+    pathlib.Path('artifactory-needs-upload').touch()
+    print('Artifactory target has no files; upload is required')
+    raise SystemExit(0)
+if mode not in ('pre', 'post') or {p.name for p in actual} != expected or any(not p.is_file() or p.is_symlink() for p in actual):
+    raise SystemExit('Artifactory target inventory is partial or unexpected')
+for name in sorted(expected):
+    left, right = source / name, other / name
+    if left.stat().st_size != right.stat().st_size or hashlib.sha256(left.read_bytes()).digest() != hashlib.sha256(right.read_bytes()).digest():
+        raise SystemExit('Artifactory has conflicting bytes for ' + name)
+print('Artifactory seven-file byte readback matched')
+PY
+'''
+                script {
+                    def spec = groovy.json.JsonOutput.toJson([files: [[
+                        pattern: env.ARTIFACTORY_TARGET + '*',
+                        target: 'artifactory-existing/',
+                        flat: true
+                    ]]])
+                    rtDownload(serverId: 'artifactory', spec: spec, failNoOp: false)
+                }
+                sh '''#!/bin/bash
+set -euo pipefail
+python3 artifactory-compare.py pre artifactory-existing
+'''
+                script {
+                    if (fileExists('artifactory-needs-upload')) {
+                        def spec = groovy.json.JsonOutput.toJson([files: [[
+                            pattern: 'artifactory-upload/*',
+                            target: env.ARTIFACTORY_TARGET,
+                            flat: true
+                        ]]])
+                        rtUpload(serverId: 'artifactory', spec: spec, failNoOp: true)
+                    }
+                    def readbackSpec = groovy.json.JsonOutput.toJson([files: [[
+                        pattern: env.ARTIFACTORY_TARGET + '*',
+                        target: 'artifactory-readback/',
+                        flat: true
+                    ]]])
+                    rtDownload(serverId: 'artifactory', spec: readbackSpec, failNoOp: true)
+                }
+                sh '''#!/bin/bash
+set -euo pipefail
+python3 artifactory-compare.py post artifactory-readback
+'''
+            }
+        }
     }
 
     post {
