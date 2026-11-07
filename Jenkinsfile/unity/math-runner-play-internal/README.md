@@ -2,6 +2,12 @@
 
 Jenkins job: `unity/math-runner-play-internal`. The disabled XML is an initial creation template, not the live job state. This job does not build Unity, access the persistent Unity Personal worker, or read the Android upload JKS. It uses a fixed Artifactory path for an already signed AAB and fetches the shared Play service-account `json_b64` from Vault only after a human approves the exact internal action.
 
+## Current live result (2026-11-07)
+
+The job is enabled. Its [Artifactory-backed verification preview #4](https://jenkins.maksonlee.com/job/unity/job/math-runner-play-internal/4/) completed `SUCCESS` with `PUBLISH_TO_PLAY=false`. The exact same source artifact was then approved at the human input in [publisher build #5](https://jenkins.maksonlee.com/job/unity/job/math-runner-play-internal/5/), which completed `SUCCESS`: Play reported one exact AAB upload and a confirmed edit commit to `internal` status `draft`, versionCode `1`. A fresh package-only API readback found bundle code `1` with SHA-256 `a22ec535fd6e587640198109bbe153813665b15ecac0ec76dcf8621d3a624931` and release `0.1.0` / `draft`; that readback deleted only its own temporary edit. Draft is not served to testers. No completed rollout or tester invitation occurred.
+
+Builds #4 and #5 loaded pipeline repository commit `042de73759c8c70e56171307fa82546299206f81`; the product AAB remains from commit `8602e68745213fbc93e63281e39a1f5111466977` and source Jenkins build #1. Build #1's Artifactory import and seven byte readbacks were done by a bounded protected API seed, not by a new Unity build. The new source-job `rtUpload` stage remains unexercised until a future explicitly requested source build. Earlier Copy Artifact preview #1 failed because its source permission lacked a leading slash, #2 succeeded after that permission fix, and old draft #3 was aborted at input before Play Vault or Play writes when the artifact route changed. The unused source Copy Artifact permission has since been removed; Copy Artifact itself remains installed on Jenkins.
+
 ## Source and Artifactory contract
 
 The source is `unity/math-runner-android-build-in-docker`, with `SOURCE_BUILD_NUMBER` and `EXPECTED_AAB_SHA256` as the only artifact selectors. For build number `N` and expected lowercase hex digest `H`, the Jenkins Artifactory plugin downloads exactly from:
