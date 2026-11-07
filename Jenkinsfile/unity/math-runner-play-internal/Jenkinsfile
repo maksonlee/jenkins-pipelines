@@ -1,0 +1,138 @@
+@Library('jenkins-shared-lib') _
+
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        disableConcurrentBuilds()
+        skipDefaultCheckout(true)
+        timeout(time: 60, unit: 'MINUTES')
+    }
+
+    parameters {
+        string(name: 'SOURCE_BUILD_NUMBER', defaultValue: '1', description: 'Exact Math Runner signed AAB build number')
+        string(name: 'EXPECTED_AAB_SHA256', defaultValue: 'a22ec535fd6e587640198109bbe153813665b15ecac0ec76dcf8621d3a624931', description: 'Expected archive AAB SHA-256 (64 lowercase hex characters)')
+        string(name: 'RELEASE_STATUS', defaultValue: 'draft', description: 'internal release status: draft or completed')
+        booleanParam(name: 'PUBLISH_TO_PLAY', defaultValue: false, description: 'Requires a separate manual approval before any Play API write')
+    }
+
+    environment {
+        PUBLISHER_SCRIPT = 'pipeline-source/Jenkinsfile/unity/math-runner-play-internal/publish.py'
+        PUBLISHER_SHA256 = '52b33a74250fea2d0defdab2c22ec0bdb8ea43276ebd4f31aa7f0450c6fc0e43'
+    }
+
+    stages {
+        stage('Validate request') {
+            steps {
+                script {
+                    if (!(params.SOURCE_BUILD_NUMBER ==~ /^[1-9][0-9]{0,7}$/)) {
+                        error 'SOURCE_BUILD_NUMBER must be a positive exact build number'
+                    }
+                    if (!(params.EXPECTED_AAB_SHA256 ==~ /^[0-9a-f]{64}$/)) {
+                        error 'EXPECTED_AAB_SHA256 must be 64 lowercase hex characters'
+                    }
+                    if (!(params.RELEASE_STATUS in ['draft', 'completed'])) {
+                        error 'RELEASE_STATUS must be draft or completed'
+                    }
+                }
+            }
+        }
+
+        stage('Fetch publisher source') {
+            steps {
+                deleteDir()
+                dir('pipeline-source') {
+                    checkout scm
+                }
+                sh '''#!/bin/bash
+set -euo pipefail
+printf '%s  %s\n' "$PUBLISHER_SHA256" "$PUBLISHER_SCRIPT" | sha256sum --check --status
+python3 -c 'import cryptography'
+git -C pipeline-source rev-parse HEAD
+'''
+            }
+        }
+
+        stage('Copy and verify source AAB') {
+            steps {
+                sh '''#!/bin/bash
+set -euo pipefail
+test ! -e artifact
+test ! -L artifact
+'''
+                // Copy Artifact is a reviewed prerequisite. It is not installed
+                // in the current Jenkins controller and this job stays disabled.
+                copyArtifacts(
+                    projectName: '/unity/math-runner-android-build-in-docker',
+                    selector: specific(params.SOURCE_BUILD_NUMBER),
+                    filter: 'Builds/Release/Android/SportsDayMath.aab,Builds/Release/Android/SportsDayMath.aab.sha256,Builds/Release/Android/SportsDayMath.aab.signer-sha256,Builds/Release/Android/release-verification.json,Builds/Release/Android/AndroidManifest.xml,Builds/Release/Android/signature-verification.txt,Evidence/Checks/Builds/PlayAab/Android-AndroidBuildReport.json',
+                    target: 'artifact',
+                    flatten: true,
+                    fingerprintArtifacts: true,
+                    optional: false
+                )
+                sh '''#!/bin/bash
+set -euo pipefail
+python3 "$PUBLISHER_SCRIPT" verify "$SOURCE_BUILD_NUMBER" "$EXPECTED_AAB_SHA256" artifact
+'''
+                archiveArtifacts artifacts: 'artifact/verified.json', fingerprint: true
+                script {
+                    env.APPROVAL_SUMMARY = sh(
+                        script: '''#!/bin/bash
+set -euo pipefail
+python3 "$PUBLISHER_SCRIPT" describe artifact/verified.json "$EXPECTED_AAB_SHA256"
+''',
+                        returnStdout: true
+                    ).trim()
+                    env.APPROVED_REPORT_SHA256 = sh(
+                        script: "sha256sum artifact/verified.json | cut -d' ' -f1",
+                        returnStdout: true
+                    ).trim()
+                }
+            }
+        }
+
+        stage('Approve Play internal action') {
+            when { expression { params.PUBLISH_TO_PLAY } }
+            steps {
+                input message: "Upload or reuse this exact Play bundle, then set internal release to ${params.RELEASE_STATUS}? ${env.APPROVAL_SUMMARY}. draft preserves an earlier completed release and is not served; completed replaces an earlier completed version and can reach eligible internal testers."
+            }
+        }
+
+        stage('Publish to Play internal') {
+            when { expression { params.PUBLISH_TO_PLAY } }
+            steps {
+                sh '''#!/bin/bash
+set -euo pipefail
+printf '%s  %s\n' "$PUBLISHER_SHA256" "$PUBLISHER_SCRIPT" | sha256sum --check --status
+printf '%s  %s\n' "$APPROVED_REPORT_SHA256" artifact/verified.json | sha256sum --check --status
+printf '%s  %s\n' "$EXPECTED_AAB_SHA256" artifact/SportsDayMath.aab | sha256sum --check --status
+'''
+                withVault([vaultSecrets: [[
+                    path: 'secret/jenkins/mobile/shared/play-service',
+                    engineVersion: 2,
+                    secretValues: [[envVar: 'PLAY_SERVICE_JSON_B64', vaultKey: 'json_b64']]
+                ]]]) {
+                    sh '''#!/bin/bash
+set +x
+set -euo pipefail
+umask 077
+python3 "$PUBLISHER_SCRIPT" publish artifact/verified.json "$EXPECTED_AAB_SHA256" "$RELEASE_STATUS"
+'''
+                }
+                archiveArtifacts artifacts: 'artifact/publish-result.json', fingerprint: true
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                if (fileExists('artifact/publish-attempt.json')) {
+                    archiveArtifacts artifacts: 'artifact/publish-attempt.json', fingerprint: true
+                }
+            }
+            cleanWs(deleteDirs: true, notFailBuild: false)
+        }
+    }
+}
