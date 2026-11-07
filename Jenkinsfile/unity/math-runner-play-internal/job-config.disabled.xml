@@ -18,6 +18,18 @@
           <trim>false</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
+          <name>REPLACE_DRAFT_VERSION_CODE</name>
+          <description>Exact existing internal draft versionCode; pair with its bundle SHA-256</description>
+          <defaultValue></defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>EXPECTED_REPLACED_DRAFT_SHA256</name>
+          <description>Expected Play bundle SHA-256 for the existing internal draft</description>
+          <defaultValue></defaultValue>
+          <trim>false</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
           <name>RELEASE_STATUS</name>
           <description>internal only: draft or completed</description>
           <defaultValue>draft</defaultValue>

@@ -65,6 +65,21 @@ def validate_selection(build_number, expected_sha, release_status=None):
     return int(build_number)
 
 
+def validate_replacement(replace_code, replace_sha, release_status, target_code):
+    require(bool(replace_code) == bool(replace_sha),
+            "Previous draft code and SHA-256 must be provided together")
+    if not replace_code:
+        return None
+    require(re.fullmatch(r"[1-9][0-9]{0,7}", replace_code),
+            "Previous draft versionCode must be a positive integer")
+    require(SHA256.fullmatch(replace_sha),
+            "Previous draft SHA-256 must be 64 lowercase hex characters")
+    require(release_status == "draft", "A draft replacement cannot complete a release")
+    previous = int(replace_code)
+    require(previous < int(target_code), "Replacement draft versionCode must increase")
+    return previous
+
+
 def safe_error(error):
     try:
         document = json.loads(error.read(4096))
@@ -216,11 +231,18 @@ def load_verified(path, expected_sha):
     return report, aab
 
 
-def describe(path, expected_sha):
+def describe(path, expected_sha, release_status, replace_code, replace_sha):
     report, _ = load_verified(path, expected_sha)
+    validate_selection(str(report["source_build_number"]), expected_sha, release_status)
+    previous = validate_replacement(replace_code, replace_sha, release_status, report["version_code"])
+    replacement = (f"replace existing internal draft code {previous} with bundle SHA-256 {replace_sha}; "
+                   if previous is not None else "no previous draft replacement; ")
     print(f"source build #{report['source_build_number']}, commit {report['source_commit']}, "
           f"{PACKAGE} {report['version_name']} (code {report['version_code']}), "
-          f"AAB SHA-256 {report['aab_sha256']}, signer {SIGNER_SHA256}")
+          f"AAB SHA-256 {report['aab_sha256']}, signer {SIGNER_SHA256}; "
+          f"internal {release_status}; {replacement}"
+          + ("draft is not served to testers" if release_status == "draft"
+             else "completed can reach internal testers"))
 
 
 def service_token():
@@ -289,9 +311,10 @@ class PlayClient:
             raise PublishError(f"Play {operation} network result is unknown; do not retry automatically") from None
 
 
-def internal_releases(track, target_code, release_status, version_name):
+def internal_releases(track, target_code, release_status, version_name, previous=None):
     require(track.get("track") == "internal", "Play internal track response mismatch")
     retained = []
+    previous_seen = 0
     for release in track.get("releases", []):
         codes = {str(code) for code in release.get("versionCodes", [])}
         require(len(codes) == 1 and release.get("status") in ("draft", "completed"),
@@ -299,20 +322,32 @@ def internal_releases(track, target_code, release_status, version_name):
         code = next(iter(codes))
         require(code.isdecimal(), "Internal track has a nonnumeric versionCode")
         if code == target_code:
+            require(previous is None, "Target release already exists while replacing another draft")
             require(not (release["status"] == "completed" and release_status == "draft"),
                     "Refusing to downgrade completed internal release to draft")
+            continue
+        if previous is not None and int(code) == previous:
+            require(release["status"] == "draft", "Expected previous internal release is not draft")
+            previous_seen += 1
+            require(previous_seen == 1, "Duplicate previous draft release")
             continue
         require(release["status"] == "completed", "Unrelated draft internal release requires manual decision")
         require(int(code) < int(target_code), "A newer internal release exists")
         if release_status == "draft":
             retained.append(release)
+    if previous is not None:
+        require(previous_seen == 1, "Expected previous internal draft is missing")
     notes = [{"language": "en-US", "text": f"Math Runner {version_name} internal test build."}]
     retained.append({"versionCodes": [target_code], "status": release_status, "releaseNotes": notes})
     return retained
 
 
-def publish_transaction(client, report, aab, release_status, attempt):
+def publish_transaction(client, report, aab, release_status, attempt,
+                        replace_code="", replace_sha=""):
     validate_selection(str(report["source_build_number"]), report["aab_sha256"], release_status)
+    previous = validate_replacement(replace_code, replace_sha, release_status, report["version_code"])
+    attempt["replaced_draft_version_code"] = previous
+    attempt["replaced_draft_sha256"] = replace_sha if previous is not None else None
     attempt["stage"] = "edit_insert"
     edit = client.request("POST", "/edits", {}, operation="edit_insert")
     edit_id = edit.get("id")
@@ -328,6 +363,10 @@ def publish_transaction(client, report, aab, release_status, attempt):
                 "Play bundles include an unrecognized versionCode")
         existing = [bundle for bundle in bundles if str(bundle.get("versionCode")) == target_code]
         require(len(existing) <= 1, "Duplicate target versionCode in Play bundles")
+        if previous is not None:
+            old = [bundle for bundle in bundles if int(bundle["versionCode"]) == previous]
+            require(len(old) == 1 and old[0].get("sha256", "").lower() == replace_sha,
+                    "Previous Play draft bundle SHA-256 does not match approval")
         higher_codes = [int(bundle["versionCode"]) for bundle in bundles
                         if str(bundle.get("versionCode", "")).isdecimal()
                         and int(bundle["versionCode"]) > int(target_code)]
@@ -340,7 +379,7 @@ def publish_transaction(client, report, aab, release_status, attempt):
             action = "uploaded exact AAB once"
         attempt["stage"] = "track_preflight"
         track = client.request("GET", prefix + "/tracks/internal", operation="track_get")
-        releases = internal_releases(track, target_code, release_status, report["version_name"])
+        releases = internal_releases(track, target_code, release_status, report["version_name"], previous)
         if not existing:
             attempt["stage"] = "bundle_upload"
             attempt["upload_attempted"] = True
@@ -363,7 +402,9 @@ def publish_transaction(client, report, aab, release_status, attempt):
         committed = True
         return {"status": "committed", "action": action, "track": "internal",
                 "release_status": release_status, "version_code": report["version_code"],
-                "aab_sha256": report["aab_sha256"], "source_build_number": report["source_build_number"]}
+                "aab_sha256": report["aab_sha256"], "source_build_number": report["source_build_number"],
+                "replaced_draft_version_code": previous,
+                "replaced_draft_sha256": replace_sha if previous is not None else None}
     finally:
         if not committed:
             attempt["failure_stage"] = attempt["stage"]
@@ -377,7 +418,7 @@ def publish_transaction(client, report, aab, release_status, attempt):
                 print("Could not confirm deletion of this edit; inspect Play state before any new run.", file=sys.stderr)
 
 
-def publish(report_path, expected_sha, release_status):
+def publish(report_path, expected_sha, release_status, replace_code, replace_sha):
     path = pathlib.Path(report_path)
     attempt = {
         "status": "started", "stage": "artifact_recheck", "api_events": [],
@@ -389,6 +430,7 @@ def publish(report_path, expected_sha, release_status):
     try:
         report, aab = load_verified(report_path, expected_sha)
         validate_selection(str(report["source_build_number"]), expected_sha, release_status)
+        validate_replacement(replace_code, replace_sha, release_status, report["version_code"])
         PLAY_LOCK.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         descriptor = os.open(PLAY_LOCK, os.O_CREAT | os.O_RDWR, 0o600)
         try:
@@ -397,7 +439,8 @@ def publish(report_path, expected_sha, release_status):
             raise PublishError("Another Math Runner Play edit is in progress") from None
         attempt["stage"] = "oauth"
         client = PlayClient(service_token(), attempt)
-        result = publish_transaction(client, report, aab.read_bytes(), release_status, attempt)
+        result = publish_transaction(client, report, aab.read_bytes(), release_status, attempt,
+                                     replace_code, replace_sha)
         output = path.with_name("publish-result.json")
         write_exclusive(output, (json.dumps(result, indent=2) + "\n").encode())
         attempt["status"] = "committed"
@@ -425,12 +468,12 @@ def main(argv):
     require(argv, "Usage: publish.py verify|describe|publish ...")
     if argv[0] == "verify" and len(argv) == 4:
         verify(argv[1], argv[2], argv[3])
-    elif argv[0] == "describe" and len(argv) == 3:
-        describe(argv[1], argv[2])
-    elif argv[0] == "publish" and len(argv) == 4:
-        publish(argv[1], argv[2], argv[3])
+    elif argv[0] == "describe" and len(argv) == 6:
+        describe(argv[1], argv[2], argv[3], argv[4], argv[5])
+    elif argv[0] == "publish" and len(argv) == 6:
+        publish(argv[1], argv[2], argv[3], argv[4], argv[5])
     else:
-        raise PublishError("Usage: publish.py verify BUILD SHA DIR | describe REPORT SHA | publish REPORT SHA draft|completed")
+        raise PublishError("Usage: publish.py verify BUILD SHA DIR | describe REPORT SHA STATUS OLD_CODE OLD_SHA | publish REPORT SHA STATUS OLD_CODE OLD_SHA")
 
 
 if __name__ == "__main__":

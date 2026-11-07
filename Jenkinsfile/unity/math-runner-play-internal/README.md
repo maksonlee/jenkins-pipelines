@@ -8,6 +8,40 @@ The job is enabled. Its [Artifactory-backed verification preview #4](https://jen
 
 Builds #4 and #5 loaded pipeline repository commit `042de73759c8c70e56171307fa82546299206f81`; the product AAB remains from commit `8602e68745213fbc93e63281e39a1f5111466977` and source Jenkins build #1. Build #1's Artifactory import and seven byte readbacks were done by a bounded protected API seed, not by a new Unity build. The new source-job `rtUpload` stage remains unexercised until a future explicitly requested source build. Earlier Copy Artifact preview #1 failed because its source permission lacked a leading slash, #2 succeeded after that permission fix, and old draft #3 was aborted at input before Play Vault or Play writes when the artifact route changed. The unused source Copy Artifact permission has since been removed; Copy Artifact itself remains installed on Jenkins.
 
+## Pending guarded draft replacement candidate
+
+This source candidate prepares guarded replacement for a later signed Math
+Runner AAB. Source changes alone do not establish live deployment; the last
+confirmed Play state was the code 1 internal draft described above. No fresh
+Play read or edit was made for this candidate. Confirm the live state before
+any future run. The live job's parameter definitions must include and read back
+both new blank-default fields; the disabled XML is only a source template, and
+a new SCM Jenkinsfile alone does not add live parameters.
+
+The default route leaves both new parameters empty and keeps the existing
+fail-closed behavior for an unrelated draft. To replace an internal draft in
+one edit, set both `REPLACE_DRAFT_VERSION_CODE` and
+`EXPECTED_REPLACED_DRAFT_SHA256`; the current code 1 bundle SHA-256 is
+`a22ec535fd6e587640198109bbe153813665b15ecac0ec76dcf8621d3a624931`.
+The target must have a higher versionCode and `RELEASE_STATUS=draft`. Before
+bundle upload, the publisher checks the exact old Play bundle SHA-256 and a
+single matching old draft on the internal track. Missing, changed, completed,
+multiple-version, newer, or unrelated draft state fails closed. A matching
+target bundle may be reused, but it does not bypass the predecessor check.
+
+The approval input displays the verified source build and product commit,
+target version name/code, new AAB SHA-256 and upload signer, internal draft
+status, and expected old draft code/SHA and replacement effect. The pinned
+helper, verified report, and new AAB hashes are rechecked after input.
+The transaction uploads or reuses the target bundle, sends one desired
+internal track state that omits the old draft and includes the new draft,
+then commits with `ERROR_IF_IN_REVIEW`. It does not delete the old draft in
+a separate edit, complete a release, invite testers, or retry an ambiguous
+upload/commit. If the old draft has disappeared after an uncertain result,
+a repeat invocation with the same predecessor parameters fails closed
+pending state inspection. Earlier completed releases retain the existing
+draft-route policy.
+
 ## Source and Artifactory contract
 
 The source is `unity/math-runner-android-build-in-docker`, with `SOURCE_BUILD_NUMBER` and `EXPECTED_AAB_SHA256` as the only artifact selectors. For build number `N` and expected lowercase hex digest `H`, the Jenkins Artifactory plugin downloads exactly from:
@@ -26,7 +60,7 @@ The publisher requires `release-verification.status=passed`, the exact expected 
 
 `PUBLISH_TO_PLAY=false` is verification only. `true` pauses at Jenkins `input` showing source build, product commit, version/code, AAB SHA, public signer and selected `internal` status. The helper/report/AAB digests are fixed before that input and rechecked before Vault. The default status is `draft`, which is not served to testers; `completed` must be explicitly selected and can reach eligible internal testers. The en-US release note is `Math Runner <version> internal test build.`
 
-With approval, the transaction uses only Vault KV v2 `secret/jenkins/mobile/shared/play-service` / `json_b64`; it does not use the upload JKS, Unity credentials or the host administrator Jenkins API token. It can upload this AAB once or reuse an existing Play bundle only if its versionCode and API SHA-256 match. Version conflicts, ambiguous uploads/commits, unrelated drafts, newer versions and unsafe track changes fail closed without automatic retry. A draft preserves an older completed release; an explicitly selected completed target replaces an older completed release. `edits.commit` uses `changesInReviewBehavior=ERROR_IF_IN_REVIEW`; a cleanup attempt deletes only this job's uncommitted edit. The host `flock` serializes this job's edits but cannot prevent external Console/API activity.
+With approval, the transaction uses only Vault KV v2 `secret/jenkins/mobile/shared/play-service` / `json_b64`; it does not use the upload JKS, Unity credentials or the host administrator Jenkins API token. It can upload this AAB once or reuse an existing Play bundle only if its versionCode and API SHA-256 match. Version conflicts, ambiguous uploads/commits, unrelated drafts without the explicit matching predecessor, newer versions and unsafe track changes fail closed without automatic retry. A draft preserves an older completed release; an explicitly selected completed target replaces an older completed release. `edits.commit` uses `changesInReviewBehavior=ERROR_IF_IN_REVIEW`; a cleanup attempt deletes only this job's uncommitted edit. The host `flock` serializes this job's edits but cannot prevent external Console/API activity.
 
 The agent is the existing `ssh-agent-with-docker` Linux node; the actual remoting process runs as `administrator` UID 1000 on `client.maksonlee.com`. Python 3.14.4, cryptography 46.0.5, Java `jarsigner`/`keytool` and the lock parent were checked on that same host. No image or Unity license operation is involved.
 

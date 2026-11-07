@@ -167,6 +167,113 @@ class PublisherContractTests(unittest.TestCase):
         self.assertIn("changesInReviewBehavior=ERROR_IF_IN_REVIEW", commit[2])
         self.assertNotIn("edit_delete", client.operations())
 
+    def test_exact_previous_draft_replaced_by_new_draft_in_one_edit(self):
+        client = FakePlay(
+            bundles=[{"versionCode": 1, "sha256": "b" * 64}],
+            releases=[{"status": "draft", "versionCodes": [1]}],
+            upload_code=2,
+        )
+        state = attempt()
+        result = publisher.publish_transaction(
+            client, play_report(2), b"aab", "draft", state, "1", "b" * 64)
+        self.assertEqual(result["replaced_draft_version_code"], 1)
+        self.assertEqual(result["replaced_draft_sha256"], "b" * 64)
+        self.assertEqual(client.operations().count("edit_insert"), 1)
+        self.assertEqual(client.operations().count("bundle_upload"), 1)
+        self.assertEqual(client.operations().count("track_update"), 1)
+        self.assertEqual(client.operations().count("edit_commit"), 1)
+        self.assertLess(client.operations().index("track_get"),
+                        client.operations().index("bundle_upload"))
+        releases = next(call[3]["releases"] for call in client.calls
+                        if call[0] == "track_update")
+        self.assertEqual(releases, [{
+            "versionCodes": ["2"], "status": "draft",
+            "releaseNotes": [{"language": "en-US", "text": "Math Runner 0.1.0 internal test build."}],
+        }])
+        self.assertNotIn("edit_delete", client.operations())
+
+    def test_exact_target_bundle_can_be_reused_but_previous_draft_still_required(self):
+        client = FakePlay(
+            bundles=[{"versionCode": 1, "sha256": "b" * 64},
+                     {"versionCode": 2, "sha256": "a" * 64}],
+            releases=[{"status": "draft", "versionCodes": [1]}],
+        )
+        result = publisher.publish_transaction(
+            client, play_report(2), b"aab", "draft", attempt(), "1", "b" * 64)
+        self.assertEqual(result["action"], "reused exact Play bundle")
+        self.assertNotIn("bundle_upload", client.operations())
+        self.assertEqual(client.operations().count("edit_commit"), 1)
+
+    def test_previous_draft_mismatch_or_absence_fails_before_upload(self):
+        cases = [
+            ([{"versionCode": 1, "sha256": "c" * 64}],
+             [{"status": "draft", "versionCodes": [1]}],
+             "Previous Play draft bundle SHA-256"),
+            ([{"versionCode": 1, "sha256": "b" * 64}], [],
+             "Expected previous internal draft is missing"),
+            ([{"versionCode": 1, "sha256": "b" * 64}],
+             [{"status": "completed", "versionCodes": [1]}],
+             "Expected previous internal release is not draft"),
+            ([{"versionCode": 1, "sha256": "b" * 64}],
+             [{"status": "draft", "versionCodes": [1]},
+              {"status": "draft", "versionCodes": [3]}],
+             "Unrelated draft"),
+            ([{"versionCode": 1, "sha256": "b" * 64}],
+             [{"status": "draft", "versionCodes": [1, 2]}],
+             "complex release"),
+        ]
+        for bundles, releases, message in cases:
+            with self.subTest(message=message):
+                client = FakePlay(bundles=bundles, releases=releases)
+                with self.assertRaisesRegex(publisher.PublishError, message):
+                    publisher.publish_transaction(
+                        client, play_report(2), b"aab", "draft", attempt(), "1", "b" * 64)
+                self.assertNotIn("bundle_upload", client.operations())
+                self.assertNotIn("track_update", client.operations())
+                self.assertNotIn("edit_commit", client.operations())
+                self.assertEqual(client.operations()[-1], "edit_delete")
+
+    def test_replacement_parameters_are_paired_draft_only_and_increasing(self):
+        for previous_code, previous_sha, status, target_code in [
+            ("1", "", "draft", 2), ("", "b" * 64, "draft", 2),
+            ("1", "bad", "draft", 2), ("1", "b" * 64, "completed", 2),
+            ("2", "b" * 64, "draft", 2), ("3", "b" * 64, "draft", 2),
+        ]:
+            with self.subTest(previous_code=previous_code, status=status,
+                              target_code=target_code):
+                client = FakePlay()
+                with self.assertRaises(publisher.PublishError):
+                    publisher.publish_transaction(
+                        client, play_report(target_code), b"aab", status, attempt(),
+                        previous_code, previous_sha)
+                self.assertEqual(client.calls, [])
+
+    def test_replacement_preserves_earlier_completed_release(self):
+        client = FakePlay(
+            bundles=[{"versionCode": 2, "sha256": "b" * 64}],
+            releases=[{"status": "completed", "versionCodes": [1]},
+                      {"status": "draft", "versionCodes": [2]}],
+            upload_code=3,
+        )
+        publisher.publish_transaction(
+            client, play_report(3), b"aab", "draft", attempt(), "2", "b" * 64)
+        releases = next(call[3]["releases"] for call in client.calls
+                        if call[0] == "track_update")
+        self.assertEqual([(r["status"], r["versionCodes"]) for r in releases],
+                         [("completed", [1]), ("draft", ["3"])])
+
+    def test_original_route_reuses_same_target_draft_without_predecessor(self):
+        client = FakePlay(
+            bundles=[{"versionCode": 1, "sha256": "a" * 64}],
+            releases=[{"status": "draft", "versionCodes": [1]}],
+        )
+        result = publisher.publish_transaction(
+            client, play_report(), b"aab", "draft", attempt())
+        self.assertEqual(result["action"], "reused exact Play bundle")
+        self.assertIsNone(result["replaced_draft_version_code"])
+        self.assertNotIn("bundle_upload", client.operations())
+        self.assertEqual(client.operations().count("edit_commit"), 1)
+
     def test_exact_existing_draft_reused_for_completed_without_upload(self):
         client = FakePlay(
             bundles=[{"versionCode": 1, "sha256": "a" * 64}],

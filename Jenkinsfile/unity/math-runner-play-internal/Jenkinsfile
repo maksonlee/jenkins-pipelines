@@ -12,13 +12,15 @@ pipeline {
     parameters {
         string(name: 'SOURCE_BUILD_NUMBER', defaultValue: '1', description: 'Exact Math Runner signed AAB build number')
         string(name: 'EXPECTED_AAB_SHA256', defaultValue: 'a22ec535fd6e587640198109bbe153813665b15ecac0ec76dcf8621d3a624931', description: 'Expected archive AAB SHA-256 (64 lowercase hex characters)')
+        string(name: 'REPLACE_DRAFT_VERSION_CODE', defaultValue: '', description: 'Existing internal draft versionCode to replace; leave empty for the original strict route')
+        string(name: 'EXPECTED_REPLACED_DRAFT_SHA256', defaultValue: '', description: 'Expected Play bundle SHA-256 for that existing internal draft; paired with its versionCode')
         string(name: 'RELEASE_STATUS', defaultValue: 'draft', description: 'internal release status: draft or completed')
         booleanParam(name: 'PUBLISH_TO_PLAY', defaultValue: false, description: 'Requires a separate manual approval before any Play API write')
     }
 
     environment {
         PUBLISHER_SCRIPT = 'pipeline-source/Jenkinsfile/unity/math-runner-play-internal/publish.py'
-        PUBLISHER_SHA256 = '52b33a74250fea2d0defdab2c22ec0bdb8ea43276ebd4f31aa7f0450c6fc0e43'
+        PUBLISHER_SHA256 = 'c78e655c4378f5888032c832d19c5d28cb2f2d71810fceac6896e8737590de36'
     }
 
     stages {
@@ -33,6 +35,20 @@ pipeline {
                     }
                     if (!(params.RELEASE_STATUS in ['draft', 'completed'])) {
                         error 'RELEASE_STATUS must be draft or completed'
+                    }
+                    def oldCode = params.REPLACE_DRAFT_VERSION_CODE ?: ''
+                    def oldSha = params.EXPECTED_REPLACED_DRAFT_SHA256 ?: ''
+                    if (!!oldCode != !!oldSha) {
+                        error 'Previous draft versionCode and SHA-256 must be supplied together'
+                    }
+                    if (oldCode && !(oldCode ==~ /^[1-9][0-9]{0,7}$/)) {
+                        error 'REPLACE_DRAFT_VERSION_CODE must be a positive versionCode'
+                    }
+                    if (oldSha && !(oldSha ==~ /^[0-9a-f]{64}$/)) {
+                        error 'EXPECTED_REPLACED_DRAFT_SHA256 must be 64 lowercase hex characters'
+                    }
+                    if (oldCode && params.RELEASE_STATUS != 'draft') {
+                        error 'Replacing an internal draft requires RELEASE_STATUS=draft'
                     }
                 }
             }
@@ -107,7 +123,7 @@ python3 "$PUBLISHER_SCRIPT" verify "$SOURCE_BUILD_NUMBER" "$EXPECTED_AAB_SHA256"
                     env.APPROVAL_SUMMARY = sh(
                         script: '''#!/bin/bash
 set -euo pipefail
-python3 "$PUBLISHER_SCRIPT" describe artifact/verified.json "$EXPECTED_AAB_SHA256"
+python3 "$PUBLISHER_SCRIPT" describe artifact/verified.json "$EXPECTED_AAB_SHA256" "$RELEASE_STATUS" "$REPLACE_DRAFT_VERSION_CODE" "$EXPECTED_REPLACED_DRAFT_SHA256"
 ''',
                         returnStdout: true
                     ).trim()
@@ -122,7 +138,7 @@ python3 "$PUBLISHER_SCRIPT" describe artifact/verified.json "$EXPECTED_AAB_SHA25
         stage('Approve Play internal action') {
             when { expression { params.PUBLISH_TO_PLAY } }
             steps {
-                input message: "Upload or reuse this exact Play bundle, then set internal release to ${params.RELEASE_STATUS}? ${env.APPROVAL_SUMMARY}. draft preserves an earlier completed release and is not served; completed replaces an earlier completed version and can reach eligible internal testers."
+                input message: "Approve this exact Play internal action? ${env.APPROVAL_SUMMARY}. A specified previous draft is removed only in the same edit as its replacement; no separate delete is used."
             }
         }
 
@@ -144,7 +160,7 @@ printf '%s  %s\n' "$EXPECTED_AAB_SHA256" artifact/SportsDayMath.aab | sha256sum 
 set +x
 set -euo pipefail
 umask 077
-python3 "$PUBLISHER_SCRIPT" publish artifact/verified.json "$EXPECTED_AAB_SHA256" "$RELEASE_STATUS"
+python3 "$PUBLISHER_SCRIPT" publish artifact/verified.json "$EXPECTED_AAB_SHA256" "$RELEASE_STATUS" "$REPLACE_DRAFT_VERSION_CODE" "$EXPECTED_REPLACED_DRAFT_SHA256"
 '''
                 }
                 archiveArtifacts artifacts: 'artifact/publish-result.json', fingerprint: true
