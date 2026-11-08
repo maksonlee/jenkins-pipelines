@@ -241,6 +241,17 @@ The job then runs every test under `integration_test/` on each connected device
 and runs `connectedDebugAndroidTest` across those devices. It fails before the
 tests if the agent has fewer devices than the configured minimum.
 
+To leave specific phones out, a project can also add a file that lists one
+device serial or `ro.product.model` value per line (`#` starts a comment):
+
+```text
+connected-device-exclude.txt
+```
+
+Listed devices skip both the integration tests and `connectedDebugAndroidTest`
+(through a comma-separated `ANDROID_SERIAL`), and they do not count toward the
+minimum. Without the file, every authorized device is tested.
+
 The main build runs in the Flutter container, while physical-device tests run
 with the host Flutter SDK so they can use the host ADB server. Connected tests
 run from a clean `git archive` of the same commit, then regenerate dependency
