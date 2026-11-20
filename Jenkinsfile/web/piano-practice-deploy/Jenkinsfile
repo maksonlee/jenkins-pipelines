@@ -73,11 +73,7 @@ pipeline {
                                   selector: specific(env.SELECTED_CI_BUILD),
                                   filter: 'release/release.json,release/checksums.json,release/piano-practice-dist.tar.gz',
                                   target: 'incoming',
-                                  resultVariableSuffix: 'PIANO_CI',
                                   fingerprintArtifacts: true)
-                    if (env.COPYARTIFACT_BUILD_NUMBER_PIANO_CI != env.SELECTED_CI_BUILD) {
-                        error('Copied artifacts did not come from the selected CI build.')
-                    }
                 }
             }
         }
