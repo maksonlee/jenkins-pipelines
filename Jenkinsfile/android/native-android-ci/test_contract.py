@@ -1,17 +1,22 @@
 """Exercise the pipeline's Bash blocks with local Git and synthetic AGP outputs."""
 
 import hashlib
+import io
+import json
 import os
 import re
 import subprocess
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
+from unittest.mock import Mock
+from urllib.error import HTTPError
 
 
 BASH = os.environ.get("BASH", "bash")
 JENKINSFILE = Path(__file__).with_name("Jenkinsfile").read_text(encoding="utf-8")
-COLLECT, BUILD, DEVICE, VERIFY, CHECKOUT = (
+PUBLISH, COLLECT, BUILD, DEVICE, VERIFY, CHECKOUT = (
     script.replace("\\\n", "").replace("\\\\", "\\")
     for script in re.findall(r"'''(#!/bin/bash\n.*?)'''", JENKINSFILE, re.S)
 )
@@ -78,7 +83,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(check.returncode, 0, check.stderr.decode())
 
     def test_embedded_bash_syntax(self):
-        for script in (COLLECT, BUILD, DEVICE, VERIFY, CHECKOUT):
+        for script in (PUBLISH, COLLECT, BUILD, DEVICE, VERIFY, CHECKOUT):
             result = subprocess.run([BASH, "-n"], input=script.encode(), capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr.decode())
 
@@ -214,6 +219,61 @@ class ContractTest(unittest.TestCase):
                 result = self.run_bash(DEVICE, self.workspace, {})
                 self.assertEqual(result.returncode, 3, result.stderr.decode())
                 self.assertIn(reason, (self.evidence / "device/preflight.log").read_text())
+
+
+class StatusPublicationTest(unittest.TestCase):
+    def setUp(self):
+        script = PUBLISH.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+        namespace = {"__name__": "native_status_fixture"}
+        exec(compile(script, "commit_status.py", "exec"), namespace)
+        self.publish = namespace["publish"]
+        self.target = "https://jenkins.maksonlee.com/job/android/job/native-android-ci/42/"
+        self.sha = "a" * 40
+        self.settings = {
+            "NATIVE_ANDROID_STATUS_SHA": self.sha,
+            "NATIVE_ANDROID_STATUS_TOKEN": "fixture-only",
+            "NATIVE_ANDROID_STATUS_PHASE": "device",
+            "NATIVE_ANDROID_STATUS_OUTCOME": "success",
+            "BUILD_URL": self.target,
+        }
+
+    def test_success_failure_abort_and_skip_match_exact_http_receipt(self):
+        context = "ci/jenkins/native-android/device"
+        for outcome, state, description in (
+            ("pending", "pending", "in progress"),
+            ("success", "success", "passed"),
+            ("failure", "failure", "failed"),
+            ("aborted", "error", "aborted"),
+            ("skipped", "error", "skipped: see Jenkins"),
+        ):
+            with self.subTest(outcome=outcome):
+                payload = {"context": context, "state": state, "target_url": self.target,
+                           "description": f"Native Android device {description}"}
+                url = "https://api.github.com/repos/maksonlee/learn-chess/statuses/" + self.sha
+                response = Mock(status=201, read=Mock(return_value=json.dumps({**payload, "url": url}).encode()))
+                opener = Mock()
+                opener.open.return_value = nullcontext(response)
+
+                result = self.publish({**self.settings, "NATIVE_ANDROID_STATUS_OUTCOME": outcome}, opener)
+
+                self.assertEqual(result, (context, state, self.sha))
+                message = opener.open.call_args.args[0]
+                self.assertEqual((message.method, message.full_url), ("POST", url))
+                self.assertEqual(json.loads(message.data), payload)
+                self.assertEqual(message.get_header("Authorization"), "Bearer fixture-only")
+
+    def test_forbidden_and_wrong_receipt_are_not_confirmed(self):
+        opener = Mock()
+        opener.open.side_effect = HTTPError("https://api.github.com", 403, "Forbidden", {},
+                                          io.BytesIO(b"arbitrary response body"))
+        with self.assertRaisesRegex(RuntimeError, r"HTTP 403; check repository scope and Commit statuses: write"):
+            self.publish(self.settings, opener)
+
+        response = Mock(status=201, read=Mock(return_value=b'{"url": "https://api.github.com/statuses/wrong-commit"}'))
+        opener.open.side_effect = None
+        opener.open.return_value = nullcontext(response)
+        with self.assertRaisesRegex(RuntimeError, r"receipt SHA, state, context, description or target URL did not match"):
+            self.publish(self.settings, opener)
 
 
 if __name__ == "__main__":
