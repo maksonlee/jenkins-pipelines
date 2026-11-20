@@ -1,5 +1,7 @@
 @Library('jenkins-shared-lib') _
 
+import groovy.json.JsonOutput
+
 def nativeAndroidProjects() {
     [
         'learn-chess': [
@@ -7,6 +9,7 @@ def nativeAndroidProjects() {
             androidTestModules: ['app'],
             lintModules: ['app'],
             flatAppEvidence: true,
+            traceDevice: true,
             unitTestTasks: [
                 'app': 'testDebugUnitTest',
                 'core/chess': 'test',
@@ -28,6 +31,40 @@ def nativeAndroidProjects() {
 def nativeAndroidPushFilter() {
     def projects = nativeAndroidProjects().keySet().join('|')
     '^push:maksonlee/(' + projects + '):refs/heads/main:false:(?!0{40}$)[0-9a-f]{40}$'
+}
+
+def publishLearnChessStatus(phase, outcome) {
+    if (env.NATIVE_ANDROID_PROJECT != 'learn-chess' || !env.NATIVE_ANDROID_REQUESTED_COMMIT ||
+        env.NATIVE_ANDROID_VERIFIED_TARGET != env.NATIVE_ANDROID_REQUESTED_COMMIT) {
+        return
+    }
+    def states = [
+        pending: 'PENDING', success: 'SUCCESS', failure: 'FAILURE',
+        aborted: 'ERROR', skipped: 'ERROR', unavailable: 'ERROR'
+    ]
+    def messages = [
+        pending: 'in progress', success: 'passed', failure: 'failed', aborted: 'aborted',
+        skipped: 'skipped: see Jenkins', unavailable: 'evidence unavailable'
+    ]
+    // The GitHub plugin authenticates on the controller with its configured server credential.
+    retry(2) {
+        step([
+            $class: 'GitHubCommitStatusSetter',
+            reposSource: [$class: 'ManuallyEnteredRepositorySource', url: 'https://github.com/maksonlee/learn-chess'],
+            commitShaSource: [$class: 'ManuallyEnteredShaSource', sha: env.NATIVE_ANDROID_REQUESTED_COMMIT],
+            contextSource: [$class: 'ManuallyEnteredCommitContextSource', context: "ci/jenkins/native-android/${phase}"],
+            statusBackrefSource: [$class: 'ManuallyEnteredBackrefSource', backref: env.BUILD_URL],
+            statusResultSource: [$class: 'ConditionalStatusResultSource', results: [
+                [$class: 'AnyBuildResult', state: states[outcome], message: "Native Android ${phase} ${messages[outcome]}"]
+            ]]
+        ])
+    }
+}
+
+def reportLearnChessStatus(phase, outcome) {
+    catchError(buildResult: 'FAILURE', message: "Could not publish GitHub ${phase} status", catchInterruptions: false) {
+        publishLearnChessStatus(phase, outcome)
+    }
 }
 
 def collectNativeAndroidEvidence(projectConfig) {
@@ -114,6 +151,259 @@ fi
     }
 }
 
+def buildNativeAndroidDebug() {
+    def cache = '/home/administrator/jenkins/android-cache'
+    def androidUserHome = "${pwd()}/android-user-home"
+    // AGP writes preferences and lock files alongside the read-only keystore.
+    sh 'mkdir -p -- android-user-home'
+    def args = buildContainer.resourceArgs() + [
+        "--mount type=bind,src=${cache}/gradle,dst=/home/ubuntu/.gradle",
+        "--mount type=bind,src=${cache}/flutter-android-sdk,dst=/home/ubuntu/Android,readonly",
+        "--mount 'type=bind,src=/home/administrator/.android/debug.keystore,dst=${androidUserHome}/debug.keystore,readonly'"
+    ]
+    docker.image(env.NATIVE_ANDROID_IMAGE).inside(args.join(' ')) {
+        withEnv(['GRADLE_USER_HOME=/home/ubuntu/.gradle', "ANDROID_USER_HOME=${androidUserHome}"]) {
+            dir('source') {
+                def gradleExit = sh(returnStatus: true, script: '''#!/bin/bash
+set -euo pipefail
+run_gradle() {
+    if [[ ! -w "$ANDROID_USER_HOME" ]]; then
+        echo 'The build container needs a writable Android user home' >&2
+        return 2
+    fi
+    if [[ ! -r "$ANDROID_USER_HOME/debug.keystore" ]]; then
+        echo 'The existing worker debug keystore is unreadable in the build container' >&2
+        return 2
+    fi
+    local command=(./gradlew nativeAndroidCi --continue --console=plain --no-daemon --max-workers=2)
+    if [[ "${NATIVE_ANDROID_TRACE:-}" == true ]]; then
+        printf '%s\\n' "${command[*]}" > ../evidence/build-command.txt
+        ./gradlew --version > ../evidence/gradle-version.txt 2>&1 || true
+        for props in "${ANDROID_HOME:-}"/platforms/android-*/source.properties; do
+            if [[ -f "$props" ]]; then
+                printf '[%s]\\n' "$(basename "$(dirname "$props")")"
+                grep -E '^(Pkg.Revision|AndroidVersion.ApiLevel|AndroidVersion.ExtensionLevel)=' "$props" || true
+            fi
+        done > ../evidence/android-sdk.txt
+    fi
+    "${command[@]}"
+}
+
+if [[ "${NATIVE_ANDROID_TRACE:-}" == true ]]; then
+    mkdir -p ../evidence
+    run_gradle 2>&1 | tee ../evidence/gradle.log
+else
+    run_gradle
+fi
+''')
+                env.NATIVE_ANDROID_GRADLE_EXIT = gradleExit.toString()
+                if (gradleExit != 0) {
+                    error "nativeAndroidCi exited with status ${gradleExit}"
+                }
+            }
+        }
+    }
+}
+
+def runNativeAndroidDevice() {
+    sh returnStatus: true, script: '''#!/bin/bash
+set -euo pipefail
+shopt -s nullglob
+evidence="$PWD/evidence"
+runner="$PWD/source/tools/native-android-ci/run_device.py"
+app_apks=("$evidence"/apk/debug/*.apk)
+test_apks=("$evidence"/apk/androidTest/*.apk)
+mkdir -p "$evidence/device"
+if (( ${#app_apks[@]} != 1 || ${#test_apks[@]} != 1 )); then
+    echo 'Exactly one app APK and one instrumentation APK are required.' | tee "$evidence/device/preflight.log"
+    exit 3
+fi
+if [[ ! -f "$runner" ]]; then
+    echo 'The verified source commit does not contain the device runner.' | tee "$evidence/device/preflight.log"
+    exit 3
+fi
+
+run_device() (
+    (cd "$evidence" && sha256sum --check SHA256SUMS)
+    export ANDROID_HOME=/home/administrator/jenkins/android-cache/flutter-android-sdk
+    export ANDROID_SDK_ROOT="$ANDROID_HOME"
+    adb="$ANDROID_HOME/platform-tools/adb"
+    avdmanager="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
+    emulator="$ANDROID_HOME/emulator/emulator"
+    image='system-images;android-34;default;x86_64'
+    image_dir="$ANDROID_HOME/system-images/android-34/default/x86_64"
+    if [[ ! -x "$adb" || ! -x "$avdmanager" || ! -x "$emulator" || ! -d "$image_dir" || ! -w /dev/kvm ]]; then
+        echo 'The worker needs the Android 34 AOSP image, SDK host tools and write access to KVM.' >&2
+        return 3
+    fi
+
+    emulator_pid=''
+    adb_pid=''
+    home=$(mktemp -d "$PWD/native-android-emulator.XXXXXX")
+    export ANDROID_USER_HOME="$home/android"
+    export ANDROID_AVD_HOME="$home/avd"
+    export HOME="$home"
+    mkdir -p "$ANDROID_USER_HOME" "$ANDROID_AVD_HOME"
+    avd="learn-chess-${BUILD_NUMBER}"
+
+    cleanup() {
+        local exit_status=$?
+        trap - EXIT INT TERM
+        if [[ -n "$emulator_pid" ]]; then
+            kill -TERM "$emulator_pid" 2>/dev/null || true
+            for ((attempt = 0; attempt < 10; attempt++)); do
+                kill -0 "$emulator_pid" 2>/dev/null || break
+                sleep 1
+            done
+            kill -KILL "$emulator_pid" 2>/dev/null || true
+            wait "$emulator_pid" 2>/dev/null || true
+        fi
+        if [[ -n "$adb_pid" ]]; then
+            kill -TERM "$adb_pid" 2>/dev/null || true
+            wait "$adb_pid" 2>/dev/null || true
+        fi
+        rm -rf -- "$home"
+        exit "$exit_status"
+    }
+    trap cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    ports=$(python3 - <<'PY'
+import socket
+
+with socket.socket() as server:
+    server.bind(('127.0.0.1', 0))
+    for port in range(5584, 5682, 2):
+        with socket.socket() as console, socket.socket() as transport:
+            try:
+                console.bind(('127.0.0.1', port))
+                transport.bind(('127.0.0.1', port + 1))
+            except OSError:
+                continue
+            print(port, server.getsockname()[1])
+            break
+    else:
+        raise SystemExit('No free Android emulator port pair')
+PY
+)
+    read -r console_port server_port <<< "$ports"
+    serial="emulator-$console_port"
+    export ADB_SERVER_SOCKET="tcp:127.0.0.1:$server_port"
+    export ANDROID_ADB_SERVER_PORT="$server_port"
+    export ADB_MDNS_AUTO_CONNECT=0
+    unset ADB_VENDOR_KEYS ANDROID_SERIAL
+    env -u ADB_SERVER_SOCKET -u ANDROID_ADB_SERVER_PORT "$adb" -L "tcp:localhost:$server_port" \
+        --one-device learn-chess-ci-no-usb server nodaemon >"$evidence/device/adb-server.log" 2>&1 &
+    adb_pid=$!
+    printf 'no\\n' | "$avdmanager" create avd --name "$avd" --package "$image" --device pixel_2
+    if ! kill -0 "$adb_pid" 2>/dev/null || ! timeout 5 "$adb" devices >/dev/null; then
+        echo 'The private ADB server could not start.' >&2
+        return 1
+    fi
+    "$emulator" -avd "$avd" -port "$console_port" -no-window -no-audio -no-boot-anim -no-metrics \
+        -no-snapshot -gpu swiftshader_indirect -accel on \
+        > >(sed -u -e '/Sending adb public key/d' -e '/adb\\.pubkey/d' >"$evidence/device/emulator.log") 2>&1 &
+    emulator_pid=$!
+
+    for ((attempt = 0; attempt < 90; attempt++)); do
+        if ! kill -0 "$emulator_pid" 2>/dev/null; then
+            echo 'The ephemeral emulator exited before boot completed.' >&2
+            return 1
+        fi
+        if [[ "$(timeout 3 "$adb" -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\\r' || true)" == 1 ]]; then
+            python3 "$runner" --adb "$adb" --app-apk "${app_apks[0]}" --test-apk "${test_apks[0]}" \
+                --out "$evidence/device/results" --serial "$serial" --avd "$avd"
+            return
+        fi
+        sleep 2
+    done
+    echo 'The ephemeral emulator did not complete boot.' >&2
+    return 1
+)
+
+run_device 2>&1 | tee "$evidence/device/preflight.log"
+'''
+}
+
+def finishLearnChessEvidence() {
+    def aborted = currentBuild.currentResult == 'ABORTED'
+    def buildOutcome = env.NATIVE_ANDROID_BUILD_OUTCOME
+    if (buildOutcome == 'pending') {
+        buildOutcome = aborted ? 'aborted' : 'failure'
+    }
+    def deviceOutcome = env.NATIVE_ANDROID_DEVICE_OUTCOME ?: 'skipped'
+    if (deviceOutcome == 'pending') {
+        deviceOutcome = aborted ? 'aborted' : 'failure'
+    }
+
+    def publishedEvidence = false
+    try {
+        if (env.NATIVE_ANDROID_WORKSPACE_READY != 'true') {
+            return
+        }
+        catchError(buildResult: 'FAILURE', message: 'Could not archive native Android run evidence', catchInterruptions: false) {
+            sh 'mkdir -p evidence'
+            if (env.NATIVE_ANDROID_SOURCE_COMMIT && !env.NATIVE_ANDROID_OUTPUTS_COLLECTED) {
+                catchError(buildResult: 'FAILURE', message: 'Could not collect partial build outputs', catchInterruptions: false) {
+                    collectNativeAndroidEvidence(nativeAndroidProjects()['learn-chess'])
+                }
+            }
+            if (env.NATIVE_ANDROID_SOURCE_COMMIT && fileExists('source/tools/native-android-ci/summarize_build.py')) {
+                def summarize = 'python3 source/tools/native-android-ci/summarize_build.py --source source --evidence evidence'
+                if (buildOutcome == 'success') {
+                    summarize += ' --require-complete'
+                }
+                if (sh(returnStatus: true, script: summarize) != 0 && buildOutcome == 'success') {
+                    buildOutcome = 'failure'
+                    currentBuild.result = 'FAILURE'
+                }
+            }
+
+            dir('evidence') {
+                if (env.NATIVE_ANDROID_SOURCE_COMMIT) {
+                    writeFile file: 'source-commit.txt', text: env.NATIVE_ANDROID_SOURCE_COMMIT + '\n'
+                }
+                writeFile file: 'build.txt', text: "Repository: maksonlee/learn-chess\nBranch: main\nImage: ${env.NATIVE_ANDROID_IMAGE}\nBuild command exit: ${env.NATIVE_ANDROID_GRADLE_EXIT}\n"
+                def report = [
+                    repository: 'maksonlee/learn-chess', branch: 'main', jenkinsBuildUrl: env.BUILD_URL,
+                    requestedCommit: env.NATIVE_ANDROID_REQUESTED_COMMIT ?: null,
+                    verifiedTarget: env.NATIVE_ANDROID_VERIFIED_TARGET ?: null,
+                    verifiedCommit: env.NATIVE_ANDROID_SOURCE_COMMIT ?: null,
+                    cleanBeforeBuild: env.NATIVE_ANDROID_SOURCE_COMMIT ? true : null,
+                    cleanAfterBuild: env.NATIVE_ANDROID_SOURCE_UNCHANGED ? env.NATIVE_ANDROID_SOURCE_UNCHANGED == 'true' : null,
+                    buildImage: env.NATIVE_ANDROID_IMAGE, gradleExit: env.NATIVE_ANDROID_GRADLE_EXIT,
+                    build: buildOutcome, device: deviceOutcome, deviceExit: env.NATIVE_ANDROID_DEVICE_EXIT ?: 'not run',
+                    buildSummary: fileExists('build-summary.json') ? 'build-summary.json' : null,
+                    deviceSummary: fileExists('device/results/summary.json') ? 'device/results/summary.json' : null
+                ]
+                writeFile file: 'run.json', text: JsonOutput.prettyPrint(JsonOutput.toJson(report)) + '\n'
+                writeFile file: 'summary.md', text: """# Native Android CI
+
+- Repository: ${report.repository}
+- Jenkins build: ${report.jenkinsBuildUrl}
+- Requested commit: ${report.requestedCommit ?: 'manual main build'}
+- Verified checkout: ${report.verifiedCommit ?: 'unavailable'}
+- Checkout clean before / after build: ${report.cleanBeforeBuild} / ${report.cleanAfterBuild}
+- Build: ${report.build} (Gradle exit ${report.gradleExit})
+- Device: ${report.device} (runner exit ${report.deviceExit})
+
+See `build-summary.json` for build verification details, `gradle.log` for build output, `device/preflight.log` for device setup, and `device/results/summary.md` for device results when available. The APKs are available in `apk/` with checksums in `SHA256SUMS`.
+"""
+            }
+            sh 'tar -C evidence -czf ci-evidence.tar.gz .'
+            archiveArtifacts artifacts: 'evidence/**,ci-evidence.tar.gz', fingerprint: true, followSymlinks: false
+            publishedEvidence = true
+        }
+        catchError(buildResult: 'FAILURE', message: 'Could not publish native Android JUnit reports', catchInterruptions: false) {
+            junit testResults: 'evidence/junit/**/*.xml,evidence/device/results/junit/*.xml', allowEmptyResults: true, skipPublishingChecks: true
+        }
+    } finally {
+        reportLearnChessStatus('build', publishedEvidence || buildOutcome != 'success' ? buildOutcome : 'unavailable')
+        reportLearnChessStatus('device', publishedEvidence || deviceOutcome != 'success' ? deviceOutcome : 'unavailable')
+    }
+}
+
 pipeline {
     agent { label 'ssh-agent-with-docker' }
 
@@ -150,7 +440,6 @@ pipeline {
     stages {
         stage('Fetch source') {
             steps {
-                deleteDir()
                 script {
                     def isWebhook = !currentBuild.getBuildCauses('org.jenkinsci.plugins.gwt.GenericCause').isEmpty()
                     def project = params.PROJECT
@@ -169,10 +458,14 @@ pipeline {
                     }
 
                     env.NATIVE_ANDROID_PROJECT = project
+                    env.NATIVE_ANDROID_TRACE = (nativeAndroidProjects()[project].traceDevice == true).toString()
                     env.NATIVE_ANDROID_REQUESTED_COMMIT = requestedCommit
                     env.NATIVE_ANDROID_IMAGE = buildImages.android()
                     env.NATIVE_ANDROID_GRADLE_EXIT = 'not run'
+                    env.NATIVE_ANDROID_BUILD_OUTCOME = 'pending'
 
+                    deleteDir()
+                    env.NATIVE_ANDROID_WORKSPACE_READY = 'true'
                     dir('source') {
                         checkout(changelog: false, poll: false, scm: scmGit(
                             branches: [[name: 'refs/remotes/origin/main']],
@@ -183,7 +476,7 @@ pipeline {
                                 url: "git@github.com:maksonlee/${project}.git"
                             ]]
                         ))
-                        env.NATIVE_ANDROID_SOURCE_COMMIT = sh(returnStdout: true, script: '''#!/bin/bash
+                        env.NATIVE_ANDROID_VERIFIED_TARGET = sh(returnStdout: true, script: '''#!/bin/bash
 set -euo pipefail
 requested_commit="${NATIVE_ANDROID_REQUESTED_COMMIT:-}"
 expected_commit=$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')
@@ -193,11 +486,27 @@ if [[ -n "$requested_commit" ]]; then
         exit 1
     fi
     expected_commit="$requested_commit"
-    git checkout --detach "$expected_commit" >&2
+fi
+echo "$expected_commit"
+''').trim()
+                    }
+                    if (env.NATIVE_ANDROID_TRACE == 'true') {
+                        reportLearnChessStatus('build', 'pending')
+                        reportLearnChessStatus('device', 'pending')
+                    }
+                    dir('source') {
+                        env.NATIVE_ANDROID_SOURCE_COMMIT = sh(returnStdout: true, script: '''#!/bin/bash
+set -euo pipefail
+if [[ -n "${NATIVE_ANDROID_REQUESTED_COMMIT:-}" ]]; then
+    git checkout --detach "$NATIVE_ANDROID_VERIFIED_TARGET" >&2
 fi
 source_commit=$(git rev-parse --verify 'HEAD^{commit}')
-if [[ "$source_commit" != "$expected_commit" ]]; then
+if [[ "$source_commit" != "$NATIVE_ANDROID_VERIFIED_TARGET" ]]; then
     echo 'The checked-out commit does not match the expected main commit' >&2
+    exit 1
+fi
+if [[ "${NATIVE_ANDROID_TRACE:-}" == true && -n "$(git status --porcelain=v1)" ]]; then
+    echo 'The source checkout is dirty before build' >&2
     exit 1
 fi
 echo "$source_commit"
@@ -211,36 +520,75 @@ echo "$source_commit"
         stage('Build and check debug') {
             steps {
                 script {
-                    def cache = '/home/administrator/jenkins/android-cache'
-                    def androidUserHome = "${pwd()}/android-user-home"
-                    // AGP writes preferences and lock files alongside the read-only keystore.
-                    sh 'mkdir -p -- android-user-home'
-                    def args = buildContainer.resourceArgs() + [
-                        "--mount type=bind,src=${cache}/gradle,dst=/home/ubuntu/.gradle",
-                        "--mount type=bind,src=${cache}/flutter-android-sdk,dst=/home/ubuntu/Android,readonly",
-                        "--mount 'type=bind,src=/home/administrator/.android/debug.keystore,dst=${androidUserHome}/debug.keystore,readonly'"
-                    ]
-                    docker.image(env.NATIVE_ANDROID_IMAGE).inside(args.join(' ')) {
-                        withEnv(['GRADLE_USER_HOME=/home/ubuntu/.gradle', "ANDROID_USER_HOME=${androidUserHome}"]) {
-                            dir('source') {
-                                def gradleExit = sh(returnStatus: true, script: '''#!/bin/bash
-set -euo pipefail
-if [[ ! -w "$ANDROID_USER_HOME" ]]; then
-    echo 'The build container needs a writable Android user home' >&2
-    exit 2
-fi
-if [[ ! -r "$ANDROID_USER_HOME/debug.keystore" ]]; then
-    echo 'The existing worker debug keystore is unreadable in the build container' >&2
-    exit 2
-fi
-exec ./gradlew nativeAndroidCi --continue --console=plain --no-daemon --max-workers=2
-''')
-                                env.NATIVE_ANDROID_GRADLE_EXIT = gradleExit.toString()
-                                if (gradleExit != 0) {
-                                    error "nativeAndroidCi exited with status ${gradleExit}"
-                                }
-                            }
+                    if (env.NATIVE_ANDROID_TRACE == 'true') {
+                        def passed = false
+                        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) {
+                            buildNativeAndroidDebug()
+                            passed = true
                         }
+                        if (!passed) {
+                            env.NATIVE_ANDROID_BUILD_OUTCOME = 'failure'
+                        }
+                    } else {
+                        buildNativeAndroidDebug()
+                    }
+                }
+            }
+        }
+
+        stage('Collect build evidence') {
+            when { expression { env.NATIVE_ANDROID_TRACE == 'true' } }
+            steps {
+                script {
+                    env.NATIVE_ANDROID_OUTPUTS_COLLECTED = 'false'
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) {
+                        collectNativeAndroidEvidence(nativeAndroidProjects()[env.NATIVE_ANDROID_PROJECT])
+                        env.NATIVE_ANDROID_OUTPUTS_COLLECTED = 'true'
+                    }
+                    env.NATIVE_ANDROID_SOURCE_UNCHANGED = 'false'
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) {
+                        sh '''
+set -eu
+mkdir -p evidence
+git -C source rev-parse --verify 'HEAD^{commit}' > evidence/git-head-after-build.txt
+git -C source status --porcelain=v1 > evidence/git-status-after-build.txt
+test "$(cat evidence/git-head-after-build.txt)" = "$NATIVE_ANDROID_SOURCE_COMMIT"
+test ! -s evidence/git-status-after-build.txt
+'''
+                        env.NATIVE_ANDROID_SOURCE_UNCHANGED = 'true'
+                    }
+                    if (env.NATIVE_ANDROID_OUTPUTS_COLLECTED != 'true' || env.NATIVE_ANDROID_SOURCE_UNCHANGED != 'true') {
+                        env.NATIVE_ANDROID_BUILD_OUTCOME = 'failure'
+                    } else if (env.NATIVE_ANDROID_BUILD_OUTCOME == 'pending') {
+                        env.NATIVE_ANDROID_BUILD_OUTCOME = 'success'
+                    }
+                }
+            }
+        }
+
+        stage('Run Android device tests') {
+            when { expression { env.NATIVE_ANDROID_TRACE == 'true' && env.NATIVE_ANDROID_SOURCE_UNCHANGED == 'true' } }
+            steps {
+                script {
+                    env.NATIVE_ANDROID_DEVICE_OUTCOME = 'pending'
+                    def exitCode = null
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) {
+                        timeout(time: 70, unit: 'MINUTES') {
+                            exitCode = runNativeAndroidDevice()
+                        }
+                        env.NATIVE_ANDROID_DEVICE_EXIT = exitCode.toString()
+                        if (exitCode == 3) {
+                            env.NATIVE_ANDROID_DEVICE_OUTCOME = 'skipped'
+                        } else if (exitCode in [130, 143]) {
+                            env.NATIVE_ANDROID_DEVICE_OUTCOME = 'aborted'
+                            currentBuild.result = 'ABORTED'
+                        }
+                        if (exitCode != 0) {
+                            error "Native Android device verification exited with status ${exitCode}"
+                        }
+                    }
+                    if (env.NATIVE_ANDROID_DEVICE_OUTCOME == 'pending') {
+                        env.NATIVE_ANDROID_DEVICE_OUTCOME = exitCode == 0 ? 'success' : 'failure'
                     }
                 }
             }
@@ -250,7 +598,9 @@ exec ./gradlew nativeAndroidCi --continue --console=plain --no-daemon --max-work
     post {
         always {
             script {
-                if (env.NATIVE_ANDROID_SOURCE_COMMIT) {
+                if (env.NATIVE_ANDROID_TRACE == 'true') {
+                    finishLearnChessEvidence()
+                } else if (env.NATIVE_ANDROID_SOURCE_COMMIT) {
                     dir('evidence') {
                         writeFile file: 'source-commit.txt', text: env.NATIVE_ANDROID_SOURCE_COMMIT + '\n'
                         writeFile file: 'build.txt', text: "Repository: maksonlee/${env.NATIVE_ANDROID_PROJECT}\nBranch: main\nImage: ${env.NATIVE_ANDROID_IMAGE}\nBuild command exit: ${env.NATIVE_ANDROID_GRADLE_EXIT}\n"

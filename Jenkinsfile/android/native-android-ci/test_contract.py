@@ -11,7 +11,10 @@ from pathlib import Path
 
 BASH = os.environ.get("BASH", "bash")
 JENKINSFILE = Path(__file__).with_name("Jenkinsfile").read_text(encoding="utf-8")
-COLLECT, CHECKOUT, BUILD = re.findall(r"'''(#!/bin/bash\n.*?)'''", JENKINSFILE, re.S)
+COLLECT, BUILD, DEVICE, VERIFY, CHECKOUT = (
+    script.replace("\\\n", "").replace("\\\\", "\\")
+    for script in re.findall(r"'''(#!/bin/bash\n.*?)'''", JENKINSFILE, re.S)
+)
 
 LEARN_CHESS = {
     "DEBUG_APK_MODULES": "app",
@@ -75,7 +78,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(check.returncode, 0, check.stderr.decode())
 
     def test_embedded_bash_syntax(self):
-        for script in (COLLECT, CHECKOUT, BUILD):
+        for script in (COLLECT, BUILD, DEVICE, VERIFY, CHECKOUT):
             result = subprocess.run([BASH, "-n"], input=script.encode(), capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr.decode())
 
@@ -146,16 +149,22 @@ class ContractTest(unittest.TestCase):
 
         for settings in ({}, {"REQUESTED_COMMIT": ""}):
             with self.subTest(settings=settings):
-                manual = self.run_bash(CHECKOUT, self.source, settings)
+                target = self.run_bash(VERIFY, self.source, settings)
+                self.assertEqual(target.returncode, 0, target.stderr.decode())
+                self.assertEqual(target.stdout.decode().strip(), tip)
+                manual = self.run_bash(CHECKOUT, self.source, {**settings, "VERIFIED_TARGET": tip})
                 self.assertEqual(manual.returncode, 0, manual.stderr.decode())
                 self.assertEqual(manual.stdout.decode().strip(), tip)
 
-        webhook = self.run_bash(CHECKOUT, self.source, {"REQUESTED_COMMIT": pushed})
+        target = self.run_bash(VERIFY, self.source, {"REQUESTED_COMMIT": pushed})
+        self.assertEqual(target.returncode, 0, target.stderr.decode())
+        self.assertEqual(target.stdout.decode().strip(), pushed)
+        webhook = self.run_bash(CHECKOUT, self.source, {"REQUESTED_COMMIT": pushed, "VERIFIED_TARGET": pushed})
         self.assertEqual(webhook.returncode, 0, webhook.stderr.decode())
         self.assertEqual(webhook.stdout.decode().strip(), pushed)
         self.assertEqual(self.git("rev-parse", "HEAD"), pushed)
 
-        stale_manual = self.run_bash(CHECKOUT, self.source, {})
+        stale_manual = self.run_bash(CHECKOUT, self.source, {"VERIFIED_TARGET": tip})
         self.assertNotEqual(stale_manual.returncode, 0)
         self.assertIn("does not match", stale_manual.stderr.decode())
         self.assertFalse(stale_manual.stdout)
@@ -164,11 +173,47 @@ class ContractTest(unittest.TestCase):
         self.git("commit", "--quiet", "--allow-empty", "-m", "Outside main")
         outside = self.git("rev-parse", "HEAD")
         self.git("checkout", "--quiet", "--detach", tip)
-        rejected = self.run_bash(CHECKOUT, self.source, {"REQUESTED_COMMIT": outside})
+        rejected = self.run_bash(VERIFY, self.source, {"REQUESTED_COMMIT": outside})
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("could not be verified", rejected.stderr.decode())
         self.assertFalse(rejected.stdout)
         self.assertEqual(self.git("rev-parse", "HEAD"), tip)
+
+        (self.source / "unexpected.txt").write_text("unexpected workspace output", encoding="utf-8")
+        dirty = self.run_bash(CHECKOUT, self.source, {"VERIFIED_TARGET": tip, "TRACE": "true"})
+        self.assertNotEqual(dirty.returncode, 0)
+        self.assertIn("dirty before build", dirty.stderr.decode())
+
+    def test_traced_build_retains_plain_log_and_gradle_failure(self):
+        android_home = self.workspace / "android-user-home"
+        android_home.mkdir()
+        (android_home / "debug.keystore").touch()
+        gradlew = self.source / "gradlew"
+        gradlew.write_bytes(b"#!/bin/bash\nif [[ $1 == --version ]]; then echo 'Gradle 9.5.1'; exit; fi\necho 'check failed' >&2\nexit 7\n")
+        gradlew.chmod(0o755)
+        script = f'export ANDROID_USER_HOME="{android_home.as_posix()}"\n{BUILD}'
+
+        result = self.run_bash(script, self.source, {"TRACE": "true"})
+
+        self.assertEqual(result.returncode, 7, result.stderr.decode())
+        self.assertEqual((self.evidence / "gradle.log").read_text().strip(), "check failed")
+        self.assertEqual((self.evidence / "gradle-version.txt").read_text().strip(), "Gradle 9.5.1")
+        self.assertIn("nativeAndroidCi --continue", (self.evidence / "build-command.txt").read_text())
+
+    def test_device_skips_without_both_apks_or_runner_with_evidence(self):
+        for app, tests, reason in (
+            (False, False, "Exactly one app APK and one instrumentation APK"),
+            (True, True, "does not contain the device runner"),
+        ):
+            with self.subTest(app=app, tests=tests):
+                for enabled, name in ((app, "apk/debug/app.apk"), (tests, "apk/androidTest/test.apk")):
+                    if enabled:
+                        path = self.evidence / name
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.touch()
+                result = self.run_bash(DEVICE, self.workspace, {})
+                self.assertEqual(result.returncode, 3, result.stderr.decode())
+                self.assertIn(reason, (self.evidence / "device/preflight.log").read_text())
 
 
 if __name__ == "__main__":
