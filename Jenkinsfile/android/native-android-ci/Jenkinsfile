@@ -165,16 +165,23 @@ git rev-parse --verify HEAD
             steps {
                 script {
                     def cache = '/home/administrator/jenkins/android-cache'
+                    def androidUserHome = "${pwd()}/android-user-home"
+                    // AGP writes preferences and lock files alongside the read-only keystore.
+                    sh 'mkdir -p -- android-user-home'
                     def args = buildContainer.resourceArgs() + [
                         "--mount type=bind,src=${cache}/gradle,dst=/home/ubuntu/.gradle",
                         "--mount type=bind,src=${cache}/flutter-android-sdk,dst=/home/ubuntu/Android,readonly",
-                        '--mount type=bind,src=/home/administrator/.android/debug.keystore,dst=/home/ubuntu/.android/debug.keystore,readonly'
+                        "--mount 'type=bind,src=/home/administrator/.android/debug.keystore,dst=${androidUserHome}/debug.keystore,readonly'"
                     ]
                     docker.image(env.NATIVE_ANDROID_IMAGE).inside(args.join(' ')) {
-                        withEnv(['GRADLE_USER_HOME=/home/ubuntu/.gradle', 'ANDROID_USER_HOME=/home/ubuntu/.android']) {
+                        withEnv(['GRADLE_USER_HOME=/home/ubuntu/.gradle', "ANDROID_USER_HOME=${androidUserHome}"]) {
                             dir('source') {
                                 def gradleExit = sh(returnStatus: true, script: '''#!/bin/bash
 set -euo pipefail
+if [[ ! -w "$ANDROID_USER_HOME" ]]; then
+    echo 'The build container needs a writable Android user home' >&2
+    exit 2
+fi
 if [[ ! -r "$ANDROID_USER_HOME/debug.keystore" ]]; then
     echo 'The existing worker debug keystore is unreadable in the build container' >&2
     exit 2

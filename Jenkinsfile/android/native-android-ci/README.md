@@ -18,7 +18,7 @@ Build artifacts and reports appear under `evidence/`. `source-commit.txt` is the
 
 ## Worker and push setup
 
-Use an `ssh-agent-with-docker` worker and the pinned `buildImages.android()` image. The worker supplies the Gradle cache and a read-only Android SDK from `/home/administrator/jenkins/android-cache`. Provision the SDK platform and tools needed by each opted-in project. `learn-chess` uses Platform 37.0. The worker's existing `/home/administrator/.android/debug.keystore` is mounted read-only as the container's default Android debug keystore.
+Use an `ssh-agent-with-docker` worker and the pinned `buildImages.android()` image. The worker supplies the Gradle cache and a read-only Android SDK from `/home/administrator/jenkins/android-cache`. Provision the SDK platform and tools needed by each opted-in project. `learn-chess` uses Platform 37.0. Each build uses a writable Android user home under its workspace. The worker's existing `/home/administrator/.android/debug.keystore` is mounted there read-only as the container's default Android debug keystore.
 
 Configure `native-android-ci-webhook-token` as a Jenkins secret-text credential. Initialize the Generic Webhook Trigger from the Jenkinsfile settings when creating the job, or install it with the first manual run. To opt a repository in, add its production modules to `nativeAndroidProjects()` and configure its main-push sender with that token. The sender posts JSON to `${JENKINS_URL}/generic-webhook-trigger/invoke` with `Content-Type: application/json`, `X-GitHub-Event: push`, and the token in the `token` header.
 
