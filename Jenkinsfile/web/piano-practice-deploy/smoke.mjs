@@ -7,10 +7,14 @@ import { chromium } from 'playwright'
 
 const productionOrigin = 'https://piano.maksonlee.com/'
 const svgPath = '/resources/piano-practice-v1/scores/svg/repertoire/frere-jacques-bass.svg'
-// Verified CI #3, which also matches the release already on the public site.
+// Archived CI #3 uses the original lesson flow. CI #4 starts daily examples automatically.
 const legacyRelease = {
   id: 'ed7ff5d48ff1c9f51da4',
   checksums: '6d95687acd4a0c961b87176f9883618adf03bf1279006c8aed9093f3af33b247',
+}
+const automaticDailyRelease = {
+  id: 'e6f9e04743629ca7639e',
+  checksums: 'ca56e8a0788c2eebbc33281ef7fd359d95f9b8e0281a2b6d9079ec9dc6ab973e',
 }
 const firstTask = 'F01-press-release'
 const nextTask = 'F02-meet-middle'
@@ -119,7 +123,7 @@ async function verifyShell(url, files, releaseId) {
 }
 
 async function observeFirstDemo(page) {
-  // The daily example starts on its own, so track the visible cue before choosing input.
+  // Install before choosing input to cover archived builds that start the example automatically.
   await page.evaluate((task) => {
     const observer = new MutationObserver(() => {
       const cue = document.querySelector(
@@ -222,7 +226,7 @@ async function assertDailyBackup(page, url, saved) {
   )
 }
 
-async function walkDaily(page, context, url) {
+async function walkDaily(page, context, url, automaticExamples) {
   const turn = (task) =>
     page.locator(
       `[data-testid="daily-shell"][data-daily-state="turn"] [data-testid="learn-shell"][data-round-target="${task}"][data-status="running"]`,
@@ -233,9 +237,17 @@ async function walkDaily(page, context, url) {
       cursor: Number(shell.dataset.cursor),
       round: shell.querySelector('[data-testid="learn-shell"]')?.dataset.round,
     }))
+  const startExample = (task) =>
+    page
+      .locator(`[data-testid="learn-shell"][data-round-target="${task}"][data-stage="find"]`)
+      .getByTestId('daily-resume')
+      .click()
+
+  if (!automaticExamples) await startExample(firstTask)
   await turn(firstTask).waitFor({ state: 'visible' })
   await assertFirstDemo(page)
   await playFirstLesson(page)
+  if (!automaticExamples) await startExample(nextTask)
   await turn(nextTask).waitFor({ state: 'visible' })
   const saved = await snapshot()
   assert(
@@ -252,7 +264,16 @@ async function walkDaily(page, context, url) {
   await turn(nextTask).waitFor({ state: 'visible' })
   assert.deepEqual(await snapshot(), saved, 'Resuming moved the F02 cursor before learner input.')
   await assertDailyBackup(page, url, saved)
-  return { learnerFlow: 'daily', offlineSessionResumed: true, f01LearnerRounds: 1 }
+  return {
+    learnerFlow: 'daily',
+    exampleStart: automaticExamples ? 'automatic' : 'learner-ready',
+    offlineSessionResumed: true,
+    f01LearnerRounds: 1,
+  }
+}
+
+function matchesRelease(release, expected) {
+  return release.releaseId === expected.id && release.checksumsSha256 === expected.checksums
 }
 
 async function walkLearner(url, release, expectedScript, scoreDigest) {
@@ -285,13 +306,15 @@ async function walkLearner(url, release, expectedScript, scoreDigest) {
     await observeFirstDemo(page)
     await page.getByTestId('choose-simulator').click()
     await page.waitForURL((location) => !location.hash.startsWith('#setup/'))
-    const legacy = release.releaseId === legacyRelease.id && release.checksumsSha256 === legacyRelease.checksums
+    const legacy = matchesRelease(release, legacyRelease)
     assert.equal(
       new URL(page.url()).hash,
       legacy ? `#learn/F01/${firstTask}` : '#daily',
       `Unexpected first lesson route for release ${release.releaseId}.`,
     )
-    const flow = legacy ? await walkLegacy(page, context, stage) : await walkDaily(page, context, url)
+    const flow = legacy
+      ? await walkLegacy(page, context, stage)
+      : await walkDaily(page, context, url, matchesRelease(release, automaticDailyRelease))
     await verifyWorker()
     await page.goto(url + '#piece/frere-jacques-bass', { waitUntil: 'domcontentloaded' })
     await stage('find')
