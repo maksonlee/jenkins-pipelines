@@ -7,6 +7,13 @@ import { chromium } from 'playwright'
 
 const productionOrigin = 'https://piano.maksonlee.com/'
 const svgPath = '/resources/piano-practice-v1/scores/svg/repertoire/frere-jacques-bass.svg'
+// Verified CI #3, which also matches the release already on the public site.
+const legacyRelease = {
+  id: 'ed7ff5d48ff1c9f51da4',
+  checksums: '6d95687acd4a0c961b87176f9883618adf03bf1279006c8aed9093f3af33b247',
+}
+const firstTask = 'F01-press-release'
+const nextTask = 'F02-meet-middle'
 const timeout = 35_000
 const shellPaths = ['/', '/index.html', '/manifest.webmanifest', '/service-worker.js']
 const mediaTypes = {
@@ -111,7 +118,144 @@ async function verifyShell(url, files, releaseId) {
   return { expectedScript, assets: payloads.map(({ path, digest }) => ({ path, sha256: digest })) }
 }
 
-async function walkLearner(url, releaseId, expectedScript, scoreDigest) {
+async function observeFirstDemo(page) {
+  // The daily example starts on its own, so track the visible cue before choosing input.
+  await page.evaluate((task) => {
+    const observer = new MutationObserver(() => {
+      const cue = document.querySelector(
+        `[data-testid="learn-shell"][data-task="${task}"][data-stage="watching"] [data-pitch="62"][data-action="release"]`,
+      )
+      if (!cue?.getClientRects().length) return
+      document.documentElement.dataset.smokeObservedDemoLift = 'true'
+      observer.disconnect()
+    })
+    observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true })
+  }, firstTask)
+}
+
+async function assertFirstDemo(page) {
+  assert.equal(
+    await page.locator('html').getAttribute('data-smoke-observed-demo-lift'),
+    'true',
+    'The F01 example did not display a D4 lift.',
+  )
+}
+
+async function playFirstLesson(page) {
+  const pitch = (action) =>
+    page.locator(
+      `[data-testid="learn-shell"][data-task="${firstTask}"] [data-pitch="62"][data-action="${action}"]`,
+    )
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await pitch('press').waitFor({ state: 'visible' })
+    await page.keyboard.down('x')
+    await pitch('release').waitFor({ state: 'visible' })
+    assert.equal(await page.getByTestId('learn-shell').getAttribute('data-stage'), 'playing')
+    await page.keyboard.up('x')
+  }
+}
+
+async function walkLegacy(page, context, stage) {
+  await stage('find')
+  await page.getByTestId('learn-primary').click()
+  await stage('watching')
+  await stage('ready')
+  await assertFirstDemo(page)
+  assert.equal(await page.getByTestId('learn-evidence').count(), 0, 'Demo granted evidence.')
+
+  await page.getByTestId('learn-primary').click()
+  await stage('playing')
+  await playFirstLesson(page)
+  await stage('success')
+  await page.getByTestId('learn-primary').click()
+  await stage('find')
+  assert.match(page.url(), /#learn\/F02\//)
+
+  await context.setOffline(true)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await stage('find')
+  assert.match(page.url(), /#learn\/F02\//)
+  return { learnerFlow: 'legacy' }
+}
+
+async function assertDailyBackup(page, url, saved) {
+  // The learner-facing export is a committed snapshot, independent of IndexedDB internals.
+  await page.goto(url + '#progress', { waitUntil: 'domcontentloaded' })
+  await page.getByTestId('daily-progress').waitFor({ state: 'visible' })
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Export', exact: true }).click(),
+  ])
+  const backup = JSON.parse(await readFile(await download.path(), 'utf8'))
+  assert.equal(backup.format, 'piano-practice-progress')
+  assert.equal(backup.settings.profile, 'simulator')
+  assert.deepEqual(
+    backup.cursors.map(({ sessionId, profile }) => ({ sessionId, profile })),
+    [{ sessionId: saved.session, profile: 'simulator' }],
+  )
+  const session = backup.sessions.find(({ id }) => id === saved.session)
+  assert.equal(session?.cursor, saved.cursor, 'The persisted session cursor changed during offline resume.')
+  assert.equal(session.rounds[saved.cursor].id, saved.round, 'The persisted F02 round changed.')
+  const evidence = backup.evidence.filter(({ sessionId }) => sessionId === saved.session)
+  const models = evidence.filter(({ kind, targetId }) => kind === 'demo' && targetId === firstTask)
+  assert.equal(models.length, 1, 'Expected one committed, separate F01 demonstration.')
+  assert(models[0].activeDemoMs > 0 && !models[0].result, 'F01 demo must have listening time without a score.')
+  const plays = evidence.filter(({ kind }) => kind === 'learner')
+  assert.equal(plays.length, 1, 'Only one F01 learner turn should be saved; F02 had no input.')
+  const [played] = plays
+  assert.equal(played.targetId, firstTask)
+  assert.equal(played.profile, 'simulator')
+  assert.notEqual(played.roundId, models[0].roundId)
+  const { result } = played
+  assert(result?.passed && !result.interrupted && result.mode === 'guided', 'F01 learner turn did not pass.')
+  assert.equal(result.targetCount, 2)
+  assert.equal(result.matchedCount, 2)
+  assert.equal(result.extraCount, 0)
+  assert.equal(result.matches.length, 2)
+  assert.equal(new Set(result.matches.map(({ inputEventId }) => inputEventId)).size, 2)
+  assert(
+    result.matches.every(
+      ({ inputEventId, releasedAtMs }) =>
+        Number.isFinite(releasedAtMs) && !result.uncreditedInputEventIds.includes(inputEventId),
+    ),
+    'F01 requires two fresh, credited attacks and their real releases.',
+  )
+}
+
+async function walkDaily(page, context, url) {
+  const turn = (task) =>
+    page.locator(
+      `[data-testid="daily-shell"][data-daily-state="turn"] [data-testid="learn-shell"][data-round-target="${task}"][data-status="running"]`,
+    )
+  const snapshot = () =>
+    page.getByTestId('daily-shell').evaluate((shell) => ({
+      session: shell.dataset.session,
+      cursor: Number(shell.dataset.cursor),
+      round: shell.querySelector('[data-testid="learn-shell"]')?.dataset.round,
+    }))
+  await turn(firstTask).waitFor({ state: 'visible' })
+  await assertFirstDemo(page)
+  await playFirstLesson(page)
+  await turn(nextTask).waitFor({ state: 'visible' })
+  const saved = await snapshot()
+  assert(
+    saved.session && saved.round && Number.isInteger(saved.cursor) && saved.cursor >= 2,
+    'F02 did not expose a saved session, cursor and round.',
+  )
+
+  await context.setOffline(true)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  assert.equal(new URL(page.url()).hash, '#daily', 'Offline reload left the daily route.')
+  await page.locator('[data-testid="daily-shell"][data-daily-state="ready"]').waitFor({ state: 'visible' })
+  assert.deepEqual(await snapshot(), saved, 'Offline reload did not recover the committed F02 round.')
+  await page.getByTestId('daily-resume').click()
+  await turn(nextTask).waitFor({ state: 'visible' })
+  assert.deepEqual(await snapshot(), saved, 'Resuming moved the F02 cursor before learner input.')
+  await assertDailyBackup(page, url, saved)
+  return { learnerFlow: 'daily', offlineSessionResumed: true, f01LearnerRounds: 1 }
+}
+
+async function walkLearner(url, release, expectedScript, scoreDigest) {
   const browser = await chromium.launch({ timeout })
   try {
     const context = await browser.newContext({ locale: 'en-US' })
@@ -125,13 +269,11 @@ async function walkLearner(url, releaseId, expectedScript, scoreDigest) {
           document.querySelector('[data-testid="learn-shell"]')?.getAttribute('data-stage') === expected,
         name,
       )
-    const pitch = (action) =>
-      page.locator(`[data-testid="learn-shell"] [data-pitch="62"][data-action="${action}"]`)
     const verifyWorker = async () => {
       await page.waitForFunction(async (name) => {
         const names = (await caches.keys()).filter((cache) => cache.startsWith('piano-practice-'))
         return navigator.serviceWorker.controller && names.length === 1 && names[0] === name
-      }, `piano-practice-${releaseId}`)
+      }, `piano-practice-${release.releaseId}`)
       const src = await page.locator('script[type="module"][src]').getAttribute('src')
       assert.equal(src, expectedScript, 'Browser loaded an unexpected application script.')
     }
@@ -139,46 +281,17 @@ async function walkLearner(url, releaseId, expectedScript, scoreDigest) {
     assert((await page.goto(url, { waitUntil: 'domcontentloaded' }))?.ok(), 'Public page did not load.')
     await verifyWorker()
     await page.getByTestId('start-daily').click()
+    await page.waitForURL((location) => location.hash.startsWith('#setup/'))
+    await observeFirstDemo(page)
     await page.getByTestId('choose-simulator').click()
-    await stage('find')
-    assert.match(page.url(), /#learn\/F01\/F01-press-release$/)
-    await page.evaluate(() => {
-      const shell = document.querySelector('[data-testid="learn-shell"]')
-      const observer = new MutationObserver(() => {
-        if (
-          shell.getAttribute('data-stage') === 'watching' &&
-          shell.querySelector('[data-pitch="62"][data-action="release"]')
-        ) {
-          shell.dataset.smokeObservedDemoLift = 'true'
-          observer.disconnect()
-        }
-      })
-      observer.observe(shell, { childList: true, subtree: true, attributes: true })
-    })
-    await page.getByTestId('learn-primary').click()
-    await stage('watching')
-    await stage('ready')
-    assert.equal(await page.getByTestId('learn-shell').getAttribute('data-smoke-observed-demo-lift'), 'true')
-    assert.equal(await page.getByTestId('learn-evidence').count(), 0, 'Demo granted evidence.')
-
-    await page.getByTestId('learn-primary').click()
-    await stage('playing')
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      await pitch('press').waitFor({ state: 'visible' })
-      await page.keyboard.down('x')
-      await pitch('release').waitFor({ state: 'visible' })
-      await stage('playing')
-      await page.keyboard.up('x')
-    }
-    await stage('success')
-    await page.getByTestId('learn-primary').click()
-    await stage('find')
-    assert.match(page.url(), /#learn\/F02\//)
-
-    await context.setOffline(true)
-    await page.reload({ waitUntil: 'domcontentloaded' })
-    await stage('find')
-    assert.match(page.url(), /#learn\/F02\//)
+    await page.waitForURL((location) => !location.hash.startsWith('#setup/'))
+    const legacy = release.releaseId === legacyRelease.id && release.checksumsSha256 === legacyRelease.checksums
+    assert.equal(
+      new URL(page.url()).hash,
+      legacy ? `#learn/F01/${firstTask}` : '#daily',
+      `Unexpected first lesson route for release ${release.releaseId}.`,
+    )
+    const flow = legacy ? await walkLegacy(page, context, stage) : await walkDaily(page, context, url)
     await verifyWorker()
     await page.goto(url + '#piece/frere-jacques-bass', { waitUntil: 'domcontentloaded' })
     await stage('find')
@@ -199,7 +312,13 @@ async function walkLearner(url, releaseId, expectedScript, scoreDigest) {
     await stage('find')
     await verifyWorker()
     assert.deepEqual(errors, [], 'Browser page errors during smoke.')
-    return { chromium: browser.version(), firstLesson: 'F01', nextLesson: 'F02', offlineScore: svgPath }
+    return {
+      chromium: browser.version(),
+      firstLesson: 'F01',
+      nextLesson: 'F02',
+      ...flow,
+      offlineScore: svgPath,
+    }
   } finally {
     await browser.close()
   }
@@ -241,7 +360,7 @@ try {
   const url = local?.url ?? target
   report = { ...report, url, releaseId: release.releaseId }
   const { expectedScript, assets } = await verifyShell(url, files, release.releaseId)
-  const journey = await walkLearner(url, release.releaseId, expectedScript, files.get(svgPath.slice(1)).sha256)
+  const journey = await walkLearner(url, release, expectedScript, files.get(svgPath.slice(1)).sha256)
   report = { ...report, passed: true, script: expectedScript, assets, ...journey }
 } catch (error) {
   report.error = error.message
