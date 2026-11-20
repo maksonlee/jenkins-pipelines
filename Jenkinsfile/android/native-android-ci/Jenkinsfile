@@ -185,13 +185,14 @@ pipeline {
                         ))
                         env.NATIVE_ANDROID_SOURCE_COMMIT = sh(returnStdout: true, script: '''#!/bin/bash
 set -euo pipefail
+requested_commit="${NATIVE_ANDROID_REQUESTED_COMMIT:-}"
 expected_commit=$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')
-if [[ -n "$NATIVE_ANDROID_REQUESTED_COMMIT" ]]; then
-    if ! git merge-base --is-ancestor "$NATIVE_ANDROID_REQUESTED_COMMIT" "$expected_commit"; then
+if [[ -n "$requested_commit" ]]; then
+    if ! git merge-base --is-ancestor "$requested_commit" "$expected_commit"; then
         echo 'The pushed commit could not be verified as part of main' >&2
         exit 1
     fi
-    expected_commit="$NATIVE_ANDROID_REQUESTED_COMMIT"
+    expected_commit="$requested_commit"
     git checkout --detach "$expected_commit" >&2
 fi
 source_commit=$(git rev-parse --verify 'HEAD^{commit}')

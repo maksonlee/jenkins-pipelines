@@ -43,7 +43,7 @@ class ContractTest(unittest.TestCase):
         return self.run_bash(COLLECT, self.workspace, {**config, "GRADLE_EXIT": str(gradle_exit)})
 
     def run_bash(self, script, cwd, settings):
-        env = dict(os.environ)
+        env = {name: value for name, value in os.environ.items() if not name.startswith("NATIVE_ANDROID_")}
         env.update({f"NATIVE_ANDROID_{key}": value for key, value in settings.items()})
         return subprocess.run([BASH], cwd=cwd, input=script.encode(), capture_output=True, env=env)
 
@@ -144,25 +144,31 @@ class ContractTest(unittest.TestCase):
         tip = self.git("rev-parse", "HEAD")
         self.git("update-ref", "refs/remotes/origin/main", tip)
 
-        manual = self.run_bash(CHECKOUT, self.source, {"REQUESTED_COMMIT": ""})
-        self.assertEqual(manual.returncode, 0, manual.stderr.decode())
-        self.assertEqual(manual.stdout.decode().strip(), tip)
+        for settings in ({}, {"REQUESTED_COMMIT": ""}):
+            with self.subTest(settings=settings):
+                manual = self.run_bash(CHECKOUT, self.source, settings)
+                self.assertEqual(manual.returncode, 0, manual.stderr.decode())
+                self.assertEqual(manual.stdout.decode().strip(), tip)
 
         webhook = self.run_bash(CHECKOUT, self.source, {"REQUESTED_COMMIT": pushed})
         self.assertEqual(webhook.returncode, 0, webhook.stderr.decode())
         self.assertEqual(webhook.stdout.decode().strip(), pushed)
         self.assertEqual(self.git("rev-parse", "HEAD"), pushed)
 
-        stale_manual = self.run_bash(CHECKOUT, self.source, {"REQUESTED_COMMIT": ""})
+        stale_manual = self.run_bash(CHECKOUT, self.source, {})
         self.assertNotEqual(stale_manual.returncode, 0)
+        self.assertIn("does not match", stale_manual.stderr.decode())
         self.assertFalse(stale_manual.stdout)
 
         self.git("checkout", "--quiet", "--detach", pushed)
         self.git("commit", "--quiet", "--allow-empty", "-m", "Outside main")
         outside = self.git("rev-parse", "HEAD")
+        self.git("checkout", "--quiet", "--detach", tip)
         rejected = self.run_bash(CHECKOUT, self.source, {"REQUESTED_COMMIT": outside})
         self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("could not be verified", rejected.stderr.decode())
         self.assertFalse(rejected.stdout)
+        self.assertEqual(self.git("rev-parse", "HEAD"), tip)
 
 
 if __name__ == "__main__":
