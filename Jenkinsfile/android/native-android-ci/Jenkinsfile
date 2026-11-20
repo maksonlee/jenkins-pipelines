@@ -3,11 +3,23 @@
 def nativeAndroidProjects() {
     [
         'learn-chess': [
-            appModule: 'app',
+            debugApkModules: ['app'],
+            androidTestModules: ['app'],
+            lintModules: ['app'],
+            flatAppEvidence: true,
             unitTestTasks: [
                 'app': 'testDebugUnitTest',
                 'core/chess': 'test',
                 'core/lesson': 'test'
+            ]
+        ],
+        'cloud-cost-widgets': [
+            debugApkModules: ['apps/aws', 'apps/aws-wear'],
+            androidTestModules: ['providers/aws', 'apps/aws-wear'],
+            lintModules: ['apps/aws', 'apps/aws-wear', 'shared/core', 'providers/aws'],
+            unitTestTasks: [
+                'shared/core': 'testDebugUnitTest',
+                'providers/aws': 'testDebugUnitTest'
             ]
         ]
     ]
@@ -18,10 +30,17 @@ def nativeAndroidPushFilter() {
     '^push:maksonlee/(' + projects + '):refs/heads/main:false:(?!0{40}$)[0-9a-f]{40}$'
 }
 
-def collectNativeAndroidEvidence() {
-    sh '''#!/bin/bash
+def collectNativeAndroidEvidence(projectConfig) {
+    withEnv([
+        "NATIVE_ANDROID_DEBUG_APK_MODULES=${projectConfig.debugApkModules.join(' ')}",
+        "NATIVE_ANDROID_ANDROID_TEST_MODULES=${projectConfig.androidTestModules.join(' ')}",
+        "NATIVE_ANDROID_LINT_MODULES=${projectConfig.lintModules.join(' ')}",
+        "NATIVE_ANDROID_FLAT_APP_EVIDENCE=${projectConfig.flatAppEvidence == true}",
+        "NATIVE_ANDROID_UNIT_TEST_TASKS=${projectConfig.unitTestTasks.collect { module, task -> "${module}:${task}" }.join(' ')}"
+    ]) {
+        sh '''#!/bin/bash
 set -euo pipefail
-shopt -s nullglob
+shopt -s nullglob globstar
 evidence="$PWD/evidence"
 cd source
 missing=0
@@ -44,23 +63,45 @@ copy_outputs() {
     fi
 }
 
-while IFS=: read -r module task; do
-    copy_outputs "junit/$module" "$module/build/test-results/$task"/*.xml
-done <<< "$NATIVE_ANDROID_UNIT_TEST_TASKS"
-
-app_build="$NATIVE_ANDROID_APP_MODULE/build"
-copy_outputs lint "$app_build/reports/lint-results-debug.xml"
-for report in "$app_build/reports/lint-results-debug."{html,sarif,txt}; do
-    if [[ -f "$report" && ! -L "$report" ]]; then
-        mkdir -p "$evidence/lint"
-        cp -- "$report" "$evidence/lint/"
+module_evidence_directory() {
+    if [[ "$NATIVE_ANDROID_FLAT_APP_EVIDENCE" == true ]]; then
+        printf '%s' "$1"
+    else
+        printf '%s/%s' "$1" "$2"
     fi
+}
+
+read -r -a unit_test_tasks <<< "$NATIVE_ANDROID_UNIT_TEST_TASKS"
+for unit_test_task in "${unit_test_tasks[@]}"; do
+    IFS=: read -r module task <<< "$unit_test_task"
+    copy_outputs "junit/$module" "$module/build/test-results/$task"/*.xml
 done
-copy_outputs apk/debug "$app_build/outputs/apk/debug"/*.apk
-copy_outputs apk/androidTest "$app_build/outputs/apk/androidTest/debug"/*.apk
+
+read -r -a lint_modules <<< "$NATIVE_ANDROID_LINT_MODULES"
+for module in "${lint_modules[@]}"; do
+    destination=$(module_evidence_directory lint "$module")
+    report_base="$module/build/reports/lint-results-debug"
+    copy_outputs "$destination" "$report_base.xml"
+    for report in "$report_base."{html,sarif,txt}; do
+        if [[ -f "$report" && ! -L "$report" ]]; then
+            mkdir -p "$evidence/$destination"
+            cp -- "$report" "$evidence/$destination/"
+        fi
+    done
+done
+
+read -r -a debug_apk_modules <<< "$NATIVE_ANDROID_DEBUG_APK_MODULES"
+for module in "${debug_apk_modules[@]}"; do
+    copy_outputs "$(module_evidence_directory apk/debug "$module")" "$module/build/outputs/apk/debug"/*.apk
+done
+
+read -r -a android_test_modules <<< "$NATIVE_ANDROID_ANDROID_TEST_MODULES"
+for module in "${android_test_modules[@]}"; do
+    copy_outputs "$(module_evidence_directory apk/androidTest "$module")" "$module/build/outputs/apk/androidTest/debug"/*.apk
+done
 
 cd "$evidence"
-apks=(apk/debug/*.apk apk/androidTest/*.apk)
+apks=(apk/debug/**/*.apk apk/androidTest/**/*.apk)
 if (( ${#apks[@]} )); then
     sha256sum -- "${apks[@]}" > SHA256SUMS
 fi
@@ -70,6 +111,7 @@ if [[ "$NATIVE_ANDROID_GRADLE_EXIT" == 0 ]] && (( missing )); then
     exit 1
 fi
 '''
+    }
 }
 
 pipeline {
@@ -122,14 +164,11 @@ pipeline {
                         project = env.NATIVE_ANDROID_WEBHOOK_REPO.substring('maksonlee/'.length())
                         requestedCommit = env.NATIVE_ANDROID_WEBHOOK_SHA
                     }
-                    def projectConfig = nativeAndroidProjects()[project]
-                    if (projectConfig == null) {
+                    if (!nativeAndroidProjects().containsKey(project)) {
                         error 'Select an opted-in PROJECT. See the native Android CI project list.'
                     }
 
                     env.NATIVE_ANDROID_PROJECT = project
-                    env.NATIVE_ANDROID_APP_MODULE = projectConfig.appModule
-                    env.NATIVE_ANDROID_UNIT_TEST_TASKS = projectConfig.unitTestTasks.collect { module, task -> "${module}:${task}" }.join('\n')
                     env.NATIVE_ANDROID_REQUESTED_COMMIT = requestedCommit
                     env.NATIVE_ANDROID_IMAGE = buildImages.android()
                     env.NATIVE_ANDROID_GRADLE_EXIT = 'not run'
@@ -146,14 +185,21 @@ pipeline {
                         ))
                         env.NATIVE_ANDROID_SOURCE_COMMIT = sh(returnStdout: true, script: '''#!/bin/bash
 set -euo pipefail
+expected_commit=$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')
 if [[ -n "$NATIVE_ANDROID_REQUESTED_COMMIT" ]]; then
-    if ! git merge-base --is-ancestor "$NATIVE_ANDROID_REQUESTED_COMMIT" refs/remotes/origin/main; then
+    if ! git merge-base --is-ancestor "$NATIVE_ANDROID_REQUESTED_COMMIT" "$expected_commit"; then
         echo 'The pushed commit could not be verified as part of main' >&2
         exit 1
     fi
-    git checkout --detach "$NATIVE_ANDROID_REQUESTED_COMMIT" >&2
+    expected_commit="$NATIVE_ANDROID_REQUESTED_COMMIT"
+    git checkout --detach "$expected_commit" >&2
 fi
-git rev-parse --verify HEAD
+source_commit=$(git rev-parse --verify 'HEAD^{commit}')
+if [[ "$source_commit" != "$expected_commit" ]]; then
+    echo 'The checked-out commit does not match the expected main commit' >&2
+    exit 1
+fi
+echo "$source_commit"
 ''').trim()
                     }
                     currentBuild.description = "${project} main ${env.NATIVE_ANDROID_SOURCE_COMMIT.take(12)}"
@@ -209,7 +255,7 @@ exec ./gradlew nativeAndroidCi --continue --console=plain --no-daemon --max-work
                         writeFile file: 'build.txt', text: "Repository: maksonlee/${env.NATIVE_ANDROID_PROJECT}\nBranch: main\nImage: ${env.NATIVE_ANDROID_IMAGE}\nBuild command exit: ${env.NATIVE_ANDROID_GRADLE_EXIT}\n"
                     }
                     catchError(buildResult: 'FAILURE', message: 'Could not collect all required CI outputs', catchInterruptions: false) {
-                        collectNativeAndroidEvidence()
+                        collectNativeAndroidEvidence(nativeAndroidProjects()[env.NATIVE_ANDROID_PROJECT])
                     }
                     catchError(buildResult: 'FAILURE', message: 'Could not archive CI evidence', catchInterruptions: false) {
                         archiveArtifacts artifacts: 'evidence/**', fingerprint: true, followSymlinks: false
