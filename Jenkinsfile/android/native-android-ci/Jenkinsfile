@@ -1,0 +1,218 @@
+@Library('jenkins-shared-lib') _
+
+def nativeAndroidProjects() {
+    [
+        'learn-chess': [
+            appModule: 'app',
+            unitTestTasks: [
+                'app': 'testDebugUnitTest',
+                'core/chess': 'test',
+                'core/lesson': 'test'
+            ]
+        ]
+    ]
+}
+
+def nativeAndroidPushFilter() {
+    def projects = nativeAndroidProjects().keySet().join('|')
+    '^push:maksonlee/(' + projects + '):refs/heads/main:false:(?!0{40}$)[0-9a-f]{40}$'
+}
+
+def collectNativeAndroidEvidence() {
+    sh '''#!/bin/bash
+set -euo pipefail
+shopt -s nullglob
+evidence="$PWD/evidence"
+cd source
+missing=0
+
+copy_outputs() {
+    local destination=$1
+    shift
+    local count=0
+    local output
+    for output in "$@"; do
+        if [[ -f "$output" && ! -L "$output" ]]; then
+            mkdir -p "$evidence/$destination"
+            cp -- "$output" "$evidence/$destination/"
+            count=$((count + 1))
+        fi
+    done
+    if (( count == 0 )); then
+        echo "No CI output found for $destination" >&2
+        missing=1
+    fi
+}
+
+while IFS=: read -r module task; do
+    copy_outputs "junit/$module" "$module/build/test-results/$task"/*.xml
+done <<< "$NATIVE_ANDROID_UNIT_TEST_TASKS"
+
+app_build="$NATIVE_ANDROID_APP_MODULE/build"
+copy_outputs lint "$app_build/reports/lint-results-debug.xml"
+for report in "$app_build/reports/lint-results-debug."{html,sarif,txt}; do
+    if [[ -f "$report" && ! -L "$report" ]]; then
+        mkdir -p "$evidence/lint"
+        cp -- "$report" "$evidence/lint/"
+    fi
+done
+copy_outputs apk/debug "$app_build/outputs/apk/debug"/*.apk
+copy_outputs apk/androidTest "$app_build/outputs/apk/androidTest/debug"/*.apk
+
+cd "$evidence"
+apks=(apk/debug/*.apk apk/androidTest/*.apk)
+if (( ${#apks[@]} )); then
+    sha256sum -- "${apks[@]}" > SHA256SUMS
+fi
+
+if [[ "$NATIVE_ANDROID_GRADLE_EXIT" == 0 ]] && (( missing )); then
+    echo 'Gradle succeeded without all required CI outputs' >&2
+    exit 1
+fi
+'''
+}
+
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout()
+        buildDiscarder(logRotator(numToKeepStr: '5'))
+    }
+
+    parameters {
+        string(name: 'PROJECT', defaultValue: 'learn-chess', trim: true, description: 'Opted-in maksonlee GitHub project. Manual builds use main.')
+    }
+
+    triggers {
+        GenericTrigger(
+            genericVariables: [
+                [key: 'NATIVE_ANDROID_WEBHOOK_REPO', value: '$.repository.full_name'],
+                [key: 'NATIVE_ANDROID_WEBHOOK_REF', value: '$.ref'],
+                [key: 'NATIVE_ANDROID_WEBHOOK_DELETED', value: '$.deleted'],
+                [key: 'NATIVE_ANDROID_WEBHOOK_SHA', value: '$.after']
+            ],
+            genericHeaderVariables: [[key: 'X-GitHub-Event', regexpFilter: '']],
+            tokenCredentialId: 'native-android-ci-webhook-token',
+            causeString: 'GitHub main push: $NATIVE_ANDROID_WEBHOOK_REPO $NATIVE_ANDROID_WEBHOOK_SHA',
+            printContributedVariables: false,
+            printPostContent: false,
+            silentResponse: false,
+            regexpFilterText: '$x_github_event:$NATIVE_ANDROID_WEBHOOK_REPO:$NATIVE_ANDROID_WEBHOOK_REF:$NATIVE_ANDROID_WEBHOOK_DELETED:$NATIVE_ANDROID_WEBHOOK_SHA',
+            regexpFilterExpression: nativeAndroidPushFilter()
+        )
+    }
+
+    stages {
+        stage('Fetch source') {
+            steps {
+                deleteDir()
+                script {
+                    def isWebhook = !currentBuild.getBuildCauses('org.jenkinsci.plugins.gwt.GenericCause').isEmpty()
+                    def project = params.PROJECT
+                    def requestedCommit = ''
+                    if (isWebhook) {
+                        def event = [env.x_github_event, env.NATIVE_ANDROID_WEBHOOK_REPO, env.NATIVE_ANDROID_WEBHOOK_REF,
+                                     env.NATIVE_ANDROID_WEBHOOK_DELETED, env.NATIVE_ANDROID_WEBHOOK_SHA].join(':')
+                        if (!(event ==~ nativeAndroidPushFilter())) {
+                            error 'Expected a main push to an opted-in maksonlee project'
+                        }
+                        project = env.NATIVE_ANDROID_WEBHOOK_REPO.substring('maksonlee/'.length())
+                        requestedCommit = env.NATIVE_ANDROID_WEBHOOK_SHA
+                    }
+                    def projectConfig = nativeAndroidProjects()[project]
+                    if (projectConfig == null) {
+                        error 'Select an opted-in PROJECT. See the native Android CI project list.'
+                    }
+
+                    env.NATIVE_ANDROID_PROJECT = project
+                    env.NATIVE_ANDROID_APP_MODULE = projectConfig.appModule
+                    env.NATIVE_ANDROID_UNIT_TEST_TASKS = projectConfig.unitTestTasks.collect { module, task -> "${module}:${task}" }.join('\n')
+                    env.NATIVE_ANDROID_REQUESTED_COMMIT = requestedCommit
+                    env.NATIVE_ANDROID_IMAGE = buildImages.android()
+                    env.NATIVE_ANDROID_GRADLE_EXIT = 'not run'
+
+                    dir('source') {
+                        checkout(changelog: false, poll: false, scm: scmGit(
+                            branches: [[name: 'refs/remotes/origin/main']],
+                            extensions: [cloneOption(honorRefspec: true, noTags: true)],
+                            userRemoteConfigs: [[
+                                credentialsId: 'vault-github-ssh',
+                                refspec: '+refs/heads/main:refs/remotes/origin/main',
+                                url: "git@github.com:maksonlee/${project}.git"
+                            ]]
+                        ))
+                        env.NATIVE_ANDROID_SOURCE_COMMIT = sh(returnStdout: true, script: '''#!/bin/bash
+set -euo pipefail
+if [[ -n "$NATIVE_ANDROID_REQUESTED_COMMIT" ]]; then
+    if ! git merge-base --is-ancestor "$NATIVE_ANDROID_REQUESTED_COMMIT" refs/remotes/origin/main; then
+        echo 'The pushed commit could not be verified as part of main' >&2
+        exit 1
+    fi
+    git checkout --detach "$NATIVE_ANDROID_REQUESTED_COMMIT" >&2
+fi
+git rev-parse --verify HEAD
+''').trim()
+                    }
+                    currentBuild.description = "${project} main ${env.NATIVE_ANDROID_SOURCE_COMMIT.take(12)}"
+                }
+            }
+        }
+
+        stage('Build and check debug') {
+            steps {
+                script {
+                    def cache = '/home/administrator/jenkins/android-cache'
+                    def args = buildContainer.resourceArgs() + [
+                        "--mount type=bind,src=${cache}/gradle,dst=/home/ubuntu/.gradle",
+                        "--mount type=bind,src=${cache}/flutter-android-sdk,dst=/home/ubuntu/Android,readonly",
+                        '--mount type=bind,src=/home/administrator/.android/debug.keystore,dst=/home/ubuntu/.android/debug.keystore,readonly'
+                    ]
+                    docker.image(env.NATIVE_ANDROID_IMAGE).inside(args.join(' ')) {
+                        withEnv(['GRADLE_USER_HOME=/home/ubuntu/.gradle', 'ANDROID_USER_HOME=/home/ubuntu/.android']) {
+                            dir('source') {
+                                def gradleExit = sh(returnStatus: true, script: '''#!/bin/bash
+set -euo pipefail
+if [[ ! -r "$ANDROID_USER_HOME/debug.keystore" ]]; then
+    echo 'The existing worker debug keystore is unreadable in the build container' >&2
+    exit 2
+fi
+exec ./gradlew nativeAndroidCi --continue --console=plain --no-daemon --max-workers=2
+''')
+                                env.NATIVE_ANDROID_GRADLE_EXIT = gradleExit.toString()
+                                if (gradleExit != 0) {
+                                    error "nativeAndroidCi exited with status ${gradleExit}"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                if (env.NATIVE_ANDROID_SOURCE_COMMIT) {
+                    dir('evidence') {
+                        writeFile file: 'source-commit.txt', text: env.NATIVE_ANDROID_SOURCE_COMMIT + '\n'
+                        writeFile file: 'build.txt', text: "Repository: maksonlee/${env.NATIVE_ANDROID_PROJECT}\nBranch: main\nImage: ${env.NATIVE_ANDROID_IMAGE}\nBuild command exit: ${env.NATIVE_ANDROID_GRADLE_EXIT}\n"
+                    }
+                    catchError(buildResult: 'FAILURE', message: 'Could not collect all required CI outputs', catchInterruptions: false) {
+                        collectNativeAndroidEvidence()
+                    }
+                    catchError(buildResult: 'FAILURE', message: 'Could not archive CI evidence', catchInterruptions: false) {
+                        archiveArtifacts artifacts: 'evidence/**', fingerprint: true, followSymlinks: false
+                    }
+                    junit testResults: 'evidence/junit/**/*.xml', allowEmptyResults: true, skipPublishingChecks: true
+                }
+            }
+        }
+        cleanup {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}
