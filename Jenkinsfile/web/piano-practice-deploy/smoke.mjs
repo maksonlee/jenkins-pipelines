@@ -19,6 +19,8 @@ const automaticDailyRelease = {
 const firstTask = 'F01-press-release'
 const nextTask = 'F02-meet-middle'
 const timeout = 35_000
+const smokeStarted = performance.now()
+const reloads = []
 const shellPaths = ['/', '/index.html', '/manifest.webmanifest', '/service-worker.js']
 const mediaTypes = {
   '.html': 'text/html',
@@ -159,6 +161,81 @@ async function playFirstLesson(page) {
   }
 }
 
+async function reloadSnapshot(page) {
+  let snapshotDeadline
+  try {
+    return await Promise.race([
+      page.evaluate(async () => {
+        const controller = navigator.serviceWorker.controller
+        const pageState = {
+          path: location.pathname,
+          online: navigator.onLine,
+          controller: controller && {
+            path: new URL(controller.scriptURL).pathname,
+            state: controller.state,
+          },
+        }
+        const names = (await caches.keys()).filter((name) => /^piano-practice-[0-9a-f]{20}$/.test(name))
+        const cacheEntries = await Promise.all(
+          names.slice(0, 4).map(async (name) => ({
+            name,
+            hasIndex: Boolean(await caches.match('/index.html', { cacheName: name })),
+          })),
+        )
+        return { ...pageState, cacheCount: names.length, cacheEntries }
+      }),
+      // Evidence collection must not hold up the navigation if the browser is unresponsive.
+      new Promise((resolve) => {
+        snapshotDeadline = setTimeout(() => resolve(null), 250)
+      }),
+    ])
+  } catch {
+    return null
+  } finally {
+    clearTimeout(snapshotDeadline)
+  }
+}
+
+function reloadTime() {
+  return Math.round(performance.now() - smokeStarted)
+}
+
+async function observeReload(page, phase) {
+  const navigation = { phase, before: await reloadSnapshot(page), startedMs: reloadTime(), failures: [] }
+  reloads.push(navigation)
+  const origin = new URL(page.url()).origin
+  const onRequestFailed = (request) => {
+    if (!request.isNavigationRequest() || navigation.failures.length >= 4) return
+    try {
+      const url = new URL(request.url())
+      if (url.origin !== origin || request.frame() !== page.mainFrame()) return
+      navigation.failures.push({
+        path: url.pathname,
+        error: request.failure()?.errorText,
+        atMs: reloadTime(),
+      })
+    } catch {
+      // Some failed navigation requests have no frame yet.
+    }
+  }
+  page.on('requestfailed', onRequestFailed)
+  try {
+    const response = await page.reload({ waitUntil: 'domcontentloaded' })
+    const url = response && new URL(response.url())
+    navigation.response = response && {
+      path: url.origin === origin ? url.pathname : null,
+      status: response.status(),
+      fromServiceWorker: response.fromServiceWorker(),
+    }
+  } catch (error) {
+    navigation.failed = true
+    throw error
+  } finally {
+    navigation.finishedMs = reloadTime()
+    page.off('requestfailed', onRequestFailed)
+  }
+}
+
 async function walkLegacy(page, context, stage) {
   await stage('find')
   await page.getByTestId('learn-primary').click()
@@ -176,7 +253,7 @@ async function walkLegacy(page, context, stage) {
   assert.match(page.url(), /#learn\/F02\//)
 
   await context.setOffline(true)
-  await page.reload({ waitUntil: 'domcontentloaded' })
+  await observeReload(page, 'legacy F02 offline')
   await stage('find')
   assert.match(page.url(), /#learn\/F02\//)
   return { learnerFlow: 'legacy' }
@@ -256,7 +333,7 @@ async function walkDaily(page, context, url, automaticExamples) {
   )
 
   await context.setOffline(true)
-  await page.reload({ waitUntil: 'domcontentloaded' })
+  await observeReload(page, 'daily F02 offline')
   assert.equal(new URL(page.url()).hash, '#daily', 'Offline reload left the daily route.')
   await page.locator('[data-testid="daily-shell"][data-daily-state="ready"]').waitFor({ state: 'visible' })
   assert.deepEqual(await snapshot(), saved, 'Offline reload did not recover the committed F02 round.')
@@ -318,7 +395,7 @@ async function walkLearner(url, release, expectedScript, scoreDigest) {
     await verifyWorker()
     await page.goto(url + '#piece/frere-jacques-bass', { waitUntil: 'domcontentloaded' })
     await stage('find')
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await observeReload(page, 'Frère Jacques offline')
     await stage('find')
     const score = await page.evaluate(async (path) => {
       const response = await fetch(path)
@@ -331,7 +408,7 @@ async function walkLearner(url, release, expectedScript, scoreDigest) {
     }, svgPath)
     assert.deepEqual(score, { status: 200, sha256: scoreDigest }, 'Offline score did not match the release.')
     await context.setOffline(false)
-    await page.reload({ waitUntil: 'domcontentloaded' })
+    await observeReload(page, 'Frère Jacques after reconnecting')
     await stage('find')
     await verifyWorker()
     assert.deepEqual(errors, [], 'Browser page errors during smoke.')
@@ -359,7 +436,7 @@ assert.notEqual(
   'TLS certificate validation must remain enabled.',
 )
 let local
-let report = { schemaVersion: 1, target, startedAt: new Date().toISOString(), passed: false }
+let report = { schemaVersion: 1, target, startedAt: new Date().toISOString(), passed: false, reloads }
 try {
   const release = JSON.parse(await readFile(releasePath, 'utf8'))
   const checksumsBytes = await readFile(checksumsPath)
