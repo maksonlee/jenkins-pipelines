@@ -147,17 +147,21 @@ async function assertFirstDemo(page) {
   )
 }
 
-async function playFirstLesson(page) {
+async function playFirstLesson(page, allowLegacyKey = false) {
   const pitch = (action) =>
     page.locator(
       `[data-testid="learn-shell"][data-task="${firstTask}"] [data-pitch="62"][data-action="${action}"]`,
     )
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    await pitch('press').waitFor({ state: 'visible' })
-    await page.keyboard.down('x')
+    const keycap = pitch('press')
+    await keycap.waitFor({ state: 'visible' })
+    const shortcuts = await keycap.getAttribute('aria-keyshortcuts')
+    const key = shortcuts === null && allowLegacyKey ? 'x' : shortcuts?.trim().split(/\s+/, 1)[0]?.toLowerCase()
+    assert(key && /^[a-z;]$/.test(key), 'The F01 D4 key has no playable typing shortcut.')
+    await page.keyboard.down(key)
     await pitch('release').waitFor({ state: 'visible' })
     assert.equal(await page.getByTestId('learn-shell').getAttribute('data-stage'), 'playing')
-    await page.keyboard.up('x')
+    await page.keyboard.up(key)
   }
 }
 
@@ -246,7 +250,7 @@ async function walkLegacy(page, context, stage) {
 
   await page.getByTestId('learn-primary').click()
   await stage('playing')
-  await playFirstLesson(page)
+  await playFirstLesson(page, true)
   await stage('success')
   await page.getByTestId('learn-primary').click()
   await stage('find')
@@ -323,7 +327,7 @@ async function walkDaily(page, context, url, automaticExamples) {
   if (!automaticExamples) await startExample(firstTask)
   await turn(firstTask).waitFor({ state: 'visible' })
   await assertFirstDemo(page)
-  await playFirstLesson(page)
+  await playFirstLesson(page, automaticExamples)
   if (!automaticExamples) await startExample(nextTask)
   await turn(nextTask).waitFor({ state: 'visible' })
   const saved = await snapshot()
