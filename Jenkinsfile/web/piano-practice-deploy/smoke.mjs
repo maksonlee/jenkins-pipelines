@@ -240,7 +240,7 @@ async function observeReload(page, phase) {
   }
 }
 
-async function walkLegacy(page, context, stage) {
+async function walkLegacy(page, context, stage, verifyWorker) {
   await stage('find')
   await page.getByTestId('learn-primary').click()
   await stage('watching')
@@ -256,6 +256,7 @@ async function walkLegacy(page, context, stage) {
   await stage('find')
   assert.match(page.url(), /#learn\/F02\//)
 
+  await verifyWorker()
   await context.setOffline(true)
   await observeReload(page, 'legacy F02 offline')
   await stage('find')
@@ -307,7 +308,7 @@ async function assertDailyBackup(page, url, saved) {
   )
 }
 
-async function walkDaily(page, context, url, automaticExamples) {
+async function walkDaily(page, context, url, automaticExamples, verifyWorker) {
   const turn = (task) =>
     page.locator(
       `[data-testid="daily-shell"][data-daily-state="turn"] [data-testid="learn-shell"][data-round-target="${task}"][data-status="running"]`,
@@ -336,6 +337,7 @@ async function walkDaily(page, context, url, automaticExamples) {
     'F02 did not expose a saved session, cursor and round.',
   )
 
+  await verifyWorker()
   await context.setOffline(true)
   await observeReload(page, 'daily F02 offline')
   assert.equal(new URL(page.url()).hash, '#daily', 'Offline reload left the daily route.')
@@ -372,10 +374,15 @@ async function walkLearner(url, release, expectedScript, scoreDigest) {
         name,
       )
     const verifyWorker = async () => {
-      await page.waitForFunction(async (name) => {
-        const names = (await caches.keys()).filter((cache) => cache.startsWith('piano-practice-'))
-        return navigator.serviceWorker.controller && names.length === 1 && names[0] === name
-      }, `piano-practice-${release.releaseId}`)
+      // waitForFunction treats an async predicate's Promise as truthy before its value resolves.
+      await page.waitForFunction(() => navigator.serviceWorker.controller?.state === 'activated')
+      const cacheName = `piano-practice-${release.releaseId}`
+      const { names, hasIndex } = await page.evaluate(async (name) => ({
+        names: (await caches.keys()).filter((cache) => cache.startsWith('piano-practice-')),
+        hasIndex: Boolean(await caches.match('/index.html', { cacheName: name })),
+      }), cacheName)
+      assert.deepEqual(names, [cacheName], 'Browser did not have the exact offline release cache.')
+      assert(hasIndex, 'The active offline release cache did not contain /index.html.')
       const src = await page.locator('script[type="module"][src]').getAttribute('src')
       assert.equal(src, expectedScript, 'Browser loaded an unexpected application script.')
     }
@@ -394,8 +401,8 @@ async function walkLearner(url, release, expectedScript, scoreDigest) {
       `Unexpected first lesson route for release ${release.releaseId}.`,
     )
     const flow = legacy
-      ? await walkLegacy(page, context, stage)
-      : await walkDaily(page, context, url, matchesRelease(release, automaticDailyRelease))
+      ? await walkLegacy(page, context, stage, verifyWorker)
+      : await walkDaily(page, context, url, matchesRelease(release, automaticDailyRelease), verifyWorker)
     await verifyWorker()
     await page.goto(url + '#piece/frere-jacques-bass', { waitUntil: 'domcontentloaded' })
     await stage('find')
