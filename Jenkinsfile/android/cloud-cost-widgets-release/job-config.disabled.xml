@@ -1,13 +1,13 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
-  <description>Manual Cloud Spend for AWS 1.0.5 signed Android bundles and Play submission preflight.</description>
+  <description>Manual Cloud Spend for AWS 1.0.5 signing, preflight, and approved production submission.</description>
   <keepDependencies>false</keepDependencies>
   <properties>
     <hudson.model.ParametersDefinitionProperty>
       <parameterDefinitions>
         <hudson.model.StringParameterDefinition>
           <name>MODE</name>
-          <description>bundle-preflight or submission-preflight (uncommitted Play edit inspection only)</description>
+          <description>bundle-preflight, submission-preflight, or production-submit for the approved 1.0.5 bundles</description>
           <defaultValue>bundle-preflight</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>

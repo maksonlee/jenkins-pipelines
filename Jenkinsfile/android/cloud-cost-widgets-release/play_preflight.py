@@ -102,10 +102,13 @@ def sign_assertion(service):
     return signing_input + b"." + base64url(signature)
 
 
-def request_json(opener, request, *, allow_no_content=False, collect_error=None):
+def request_json(
+    opener, request, *, allow_no_content=False, collect_error=None,
+    timeout=HTTP_TIMEOUT_SECONDS,
+):
     status = None
     try:
-        with opener.open(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+        with opener.open(request, timeout=timeout) as response:
             status = response.status
             if status == 204 and allow_no_content:
                 return None, status

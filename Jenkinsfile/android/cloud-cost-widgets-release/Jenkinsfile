@@ -18,11 +18,12 @@ pipeline {
         disableConcurrentBuilds()
         skipDefaultCheckout()
         buildDiscarder(logRotator(numToKeepStr: '5'))
+        copyArtifactPermission('/android/cloud-cost-widgets-release')
     }
 
     parameters {
         string(name: 'MODE', defaultValue: 'bundle-preflight', trim: true,
-                description: 'bundle-preflight or submission-preflight (uncommitted Play edit inspection only)')
+                description: 'bundle-preflight, submission-preflight, or production-submit for the approved 1.0.5 bundles')
     }
 
     environment {
@@ -37,8 +38,8 @@ pipeline {
         stage('Fetch release pipeline') {
             steps {
                 script {
-                    if (!(params.MODE in ['bundle-preflight', 'submission-preflight'])) {
-                        error('Select bundle-preflight or submission-preflight')
+                    if (!(params.MODE in ['bundle-preflight', 'submission-preflight', 'production-submit'])) {
+                        error('Select bundle-preflight, submission-preflight, or production-submit')
                     }
                 }
                 deleteDir()
@@ -155,6 +156,42 @@ printf '%s\\n' '{"result":"failed","reason":"gradle-release-build-failed"}' > re
 set -euo pipefail
 printf '%s\\n' '{"result":"failed","reason":"bundle-verification-failed"}' > release-evidence/signed-bundles.json
 python3 "$RELEASE_TOOLS/verify_bundles.py" source release-evidence
+'''
+                    }
+                }
+            }
+        }
+
+        stage('Verify the approved signed bundles from build 2') {
+            when { expression { params.MODE == 'production-submit' } }
+            steps {
+                copyArtifacts(projectName: '/android/cloud-cost-widgets-release', selector: specific('2'),
+                        filter: 'release-evidence/source-commit.txt,release-evidence/pipeline-commit.txt,' +
+                                'release-evidence/upload-certificate-sha256.txt,release-evidence/signed-bundles.json,' +
+                                'release-evidence/bundles/SHA256SUMS,release-evidence/bundles/phone-1.0.5-100006.aab,' +
+                                'release-evidence/bundles/wear-1.0.5-200006.aab',
+                        target: 'signed-input', fingerprintArtifacts: true)
+                sh '''#!/bin/bash
+set -euo pipefail
+python3 "$RELEASE_TOOLS/verify_submission_artifacts.py" signed-input/release-evidence release-evidence/verified-input.json
+'''
+            }
+        }
+
+        stage('Submit both production releases to Google Play') {
+            when { expression { params.MODE == 'production-submit' } }
+            steps {
+                script {
+                    writeFile file: 'release-evidence/release-sequencing.txt', text:
+                            'Production submission authorized before completing project release verification.\n' +
+                            'Open evidence includes intended review access, live AWS, physical devices, Play-installed pairing, and final listing and privacy declarations.\n'
+                    writeFile file: 'release-evidence/production-submit.json', text:
+                            '{"result":"outcome-unavailable","reason":"verify-live-state-before-any-other-submission"}\n'
+                    withPlayService {
+                        sh '''#!/bin/bash
+set +x
+set -euo pipefail
+python3 "$RELEASE_TOOLS/play_publish.py" signed-input/release-evidence release-evidence/production-submit.json
 '''
                     }
                 }

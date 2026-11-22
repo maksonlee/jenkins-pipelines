@@ -42,7 +42,7 @@ GOOGLE_ERROR_REASONS = {
     "authError", "forbidden", "insufficientPermissions", "notFound", "accessNotConfigured",
     "applicationNotFound", "packageNotFound",
     "conflict", "duplicate", "rateLimitExceeded", "SERVICE_DISABLED",
-    "ACCESS_TOKEN_SCOPE_INSUFFICIENT", "IAM_PERMISSION_DENIED",
+    "ACCESS_TOKEN_SCOPE_INSUFFICIENT", "IAM_PERMISSION_DENIED", "CHANGES_ALREADY_IN_REVIEW",
 }
 MAX_ERROR_BYTES = 32_768
 LOCALE_PATTERN = re.compile(r"[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|[0-9]{3}))?")
@@ -56,7 +56,7 @@ def error_outcome(error):
     return outcome(error.result, error.http_status, **error.details)
 
 
-def google_error_details(response):
+def read_google_error(response):
     try:
         body = response.read(MAX_ERROR_BYTES + 1)
         if len(body) > MAX_ERROR_BYTES:
@@ -65,9 +65,10 @@ def google_error_details(response):
     except (OSError, http.client.HTTPException, ValueError, RecursionError):
         return {}
     error = content.get("error") if isinstance(content, dict) else None
-    if not isinstance(error, dict):
-        return {}
+    return error if isinstance(error, dict) else {}
 
+
+def filter_google_error(error):
     filtered = {}
     status = error.get("status")
     if isinstance(status, str) and status in GOOGLE_ERROR_STATUSES:
@@ -90,6 +91,10 @@ def google_error_details(response):
     return filtered
 
 
+def google_error_details(response):
+    return filter_google_error(read_google_error(response))
+
+
 def edit_request(opener, token, method, url):
     headers = {"Authorization": f"Bearer {token}"}
     if method == "POST":
@@ -101,6 +106,13 @@ def edit_request(opener, token, method, url):
         opener, request, allow_no_content=method == "DELETE",
         collect_error=google_error_details if method == "POST" else None,
     )
+
+
+def require_edit_id(content, status):
+    edit_id = content.get("id")
+    if not isinstance(edit_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", edit_id):
+        raise PreflightError("invalid_edit_receipt", status)
+    return edit_id
 
 
 def read_live_track(opener, token, track):
@@ -232,9 +244,7 @@ def run_preflight(encoded):
     edits_url = f"{APPLICATION_URL}/edits"
     try:
         receipt, status = edit_request(opener, token, "POST", edits_url)
-        edit_id = receipt.get("id")
-        if not isinstance(edit_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", edit_id):
-            raise PreflightError("invalid_edit_receipt", status)
+        edit_id = require_edit_id(receipt, status)
     except PreflightError as error:
         report["edit_insert"] = error_outcome(error)
         return report
