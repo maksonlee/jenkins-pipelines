@@ -33,105 +33,6 @@ def nativeAndroidPushFilter() {
     '^push:maksonlee/(' + projects + '):refs/heads/main:false:(?!0{40}$)[0-9a-f]{40}$'
 }
 
-def publishLearnChessStatus(phase, outcome) {
-    withEnv([
-        "NATIVE_ANDROID_STATUS_SHA=${env.NATIVE_ANDROID_VERIFIED_TARGET}",
-        "NATIVE_ANDROID_STATUS_PHASE=${phase}",
-        "NATIVE_ANDROID_STATUS_OUTCOME=${outcome}"
-    ]) {
-        // Keep the token out of the app checkout, Gradle, the emulator, and step arguments.
-        withCredentials([string(credentialsId: 'learn-chess-github-commit-status', variable: 'NATIVE_ANDROID_STATUS_TOKEN')]) {
-            sh '''#!/bin/bash
-set +x
-exec timeout 35 python3 -I - <<'PY'
-import json
-import os
-import re
-import sys
-from urllib import error, request
-
-BASE_URL = 'https://api.github.com/repos/maksonlee/learn-chess/statuses/'
-OUTCOMES = {
-    'pending': ('pending', 'in progress'),
-    'success': ('success', 'passed'),
-    'failure': ('failure', 'failed'),
-    'aborted': ('error', 'aborted'),
-    'skipped': ('error', 'skipped: see Jenkins'),
-    'unavailable': ('error', 'evidence unavailable'),
-}
-
-
-class NoRedirect(request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, new_url):
-        return None
-
-
-def publish(settings, opener):
-    sha = settings['NATIVE_ANDROID_STATUS_SHA']
-    token = settings['NATIVE_ANDROID_STATUS_TOKEN']
-    phase = settings['NATIVE_ANDROID_STATUS_PHASE']
-    outcome = settings['NATIVE_ANDROID_STATUS_OUTCOME']
-    if phase not in ('build', 'device') or outcome not in OUTCOMES:
-        raise RuntimeError('Expected a native Android build or device status')
-    state, description = OUTCOMES[outcome]
-    payload = {
-        'context': 'ci/jenkins/native-android/' + phase,
-        'state': state,
-        'description': f'Native Android {phase} {description}',
-        'target_url': settings['BUILD_URL'],
-    }
-    if not re.fullmatch(r'(?!0{40})[a-f0-9]{40}', sha) or not token.strip():
-        raise RuntimeError('A verified SHA and the dedicated GitHub status credential are required')
-    if not re.fullmatch(r'https://jenkins[.]maksonlee[.]com/job/android/job/native-android-ci/[1-9][0-9]*/', payload['target_url']):
-        raise RuntimeError('Expected the run-specific native Android Jenkins URL')
-    endpoint = BASE_URL + sha
-    message = request.Request(endpoint, data=json.dumps(payload).encode('utf-8'), method='POST', headers={
-        'Accept': 'application/vnd.github+json',
-        'Authorization': 'Bearer ' + token,
-        'Content-Type': 'application/json',
-        'X-GitHub-Api-Version': '2026-03-10',
-    })
-    try:
-        with opener.open(message, timeout=15) as response:
-            if response.status != 201:
-                raise RuntimeError(f'GitHub Commit Statuses returned HTTP {response.status}; expected HTTP 201')
-            receipt = json.loads(response.read(65536))
-    except error.HTTPError as problem:
-        permission = '; check repository scope and Commit statuses: write' if problem.code in (401, 403, 404) else ''
-        raise RuntimeError(f'GitHub Commit Statuses returned HTTP {problem.code}{permission}') from None
-    except (OSError, ValueError):
-        raise RuntimeError('GitHub Commit Statuses response could not be read') from None
-
-    if not isinstance(receipt, dict) or receipt.get('url') != endpoint or any(receipt.get(key) != value for key, value in payload.items()):
-        raise RuntimeError('GitHub status receipt SHA, state, context, description or target URL did not match')
-    return payload['context'], payload['state'], sha
-
-
-if __name__ == '__main__':
-    try:
-        context, state, sha = publish(os.environ, request.build_opener(request.ProxyHandler({}), NoRedirect()))
-    except RuntimeError as problem:
-        sys.exit(str(problem))
-    print(f'GitHub confirmed {context}: {state} for {sha}')
-PY
-'''
-        }
-    }
-}
-
-def reportLearnChessStatus(phase, outcome) {
-    if (env.NATIVE_ANDROID_PROJECT != 'learn-chess' || !env.NATIVE_ANDROID_REQUESTED_COMMIT ||
-        env.NATIVE_ANDROID_VERIFIED_TARGET != env.NATIVE_ANDROID_REQUESTED_COMMIT) {
-        return 'not applicable'
-    }
-    def sent = false
-    catchError(buildResult: 'FAILURE', message: "Could not publish GitHub ${phase} status", catchInterruptions: false) {
-        publishLearnChessStatus(phase, outcome)
-        sent = true
-    }
-    sent ? 'published' : 'failed'
-}
-
 def collectNativeAndroidEvidence(projectConfig) {
     withEnv([
         "NATIVE_ANDROID_DEBUG_APK_MODULES=${projectConfig.debugApkModules.join(' ')}",
@@ -392,6 +293,10 @@ run_device 2>&1 | tee "$evidence/device/preflight.log"
 }
 
 def finishLearnChessEvidence() {
+    if (env.NATIVE_ANDROID_WORKSPACE_READY != 'true') {
+        return
+    }
+
     def aborted = currentBuild.currentResult == 'ABORTED'
     def buildOutcome = env.NATIVE_ANDROID_BUILD_OUTCOME
     if (buildOutcome == 'pending') {
@@ -402,50 +307,43 @@ def finishLearnChessEvidence() {
         deviceOutcome = aborted ? 'aborted' : 'failure'
     }
 
-    def publishedEvidence = false
-    try {
-        if (env.NATIVE_ANDROID_WORKSPACE_READY != 'true') {
-            return
+    catchError(buildResult: 'FAILURE', message: 'Could not archive native Android run evidence', catchInterruptions: false) {
+        sh 'mkdir -p evidence'
+        if (env.NATIVE_ANDROID_SOURCE_COMMIT && !env.NATIVE_ANDROID_OUTPUTS_COLLECTED) {
+            catchError(buildResult: 'FAILURE', message: 'Could not collect partial build outputs', catchInterruptions: false) {
+                collectNativeAndroidEvidence(nativeAndroidProjects()['learn-chess'])
+            }
         }
-        catchError(buildResult: 'FAILURE', message: 'Could not archive native Android run evidence', catchInterruptions: false) {
-            sh 'mkdir -p evidence'
-            if (env.NATIVE_ANDROID_SOURCE_COMMIT && !env.NATIVE_ANDROID_OUTPUTS_COLLECTED) {
-                catchError(buildResult: 'FAILURE', message: 'Could not collect partial build outputs', catchInterruptions: false) {
-                    collectNativeAndroidEvidence(nativeAndroidProjects()['learn-chess'])
-                }
+        if (env.NATIVE_ANDROID_SOURCE_COMMIT && fileExists('source/tools/native-android-ci/summarize_build.py')) {
+            def summarize = 'python3 source/tools/native-android-ci/summarize_build.py --source source --evidence evidence'
+            if (buildOutcome == 'success') {
+                summarize += ' --require-complete'
             }
-            if (env.NATIVE_ANDROID_SOURCE_COMMIT && fileExists('source/tools/native-android-ci/summarize_build.py')) {
-                def summarize = 'python3 source/tools/native-android-ci/summarize_build.py --source source --evidence evidence'
-                if (buildOutcome == 'success') {
-                    summarize += ' --require-complete'
-                }
-                if (sh(returnStatus: true, script: summarize) != 0 && buildOutcome == 'success') {
-                    buildOutcome = 'failure'
-                    currentBuild.result = 'FAILURE'
-                }
+            if (sh(returnStatus: true, script: summarize) != 0 && buildOutcome == 'success') {
+                buildOutcome = 'failure'
+                currentBuild.result = 'FAILURE'
             }
+        }
 
-            dir('evidence') {
-                if (env.NATIVE_ANDROID_SOURCE_COMMIT) {
-                    writeFile file: 'source-commit.txt', text: env.NATIVE_ANDROID_SOURCE_COMMIT + '\n'
-                }
-                writeFile file: 'build.txt', text: "Repository: maksonlee/learn-chess\nBranch: main\nImage: ${env.NATIVE_ANDROID_IMAGE}\nBuild command exit: ${env.NATIVE_ANDROID_GRADLE_EXIT}\n"
-                def report = [
-                    repository: 'maksonlee/learn-chess', branch: 'main', jenkinsBuildUrl: env.BUILD_URL,
-                    requestedCommit: env.NATIVE_ANDROID_REQUESTED_COMMIT ?: null,
-                    verifiedTarget: env.NATIVE_ANDROID_VERIFIED_TARGET ?: null,
-                    verifiedCommit: env.NATIVE_ANDROID_SOURCE_COMMIT ?: null,
-                    cleanBeforeBuild: env.NATIVE_ANDROID_SOURCE_COMMIT ? true : null,
-                    cleanAfterBuild: env.NATIVE_ANDROID_SOURCE_UNCHANGED ? env.NATIVE_ANDROID_SOURCE_UNCHANGED == 'true' : null,
-                    buildImage: env.NATIVE_ANDROID_IMAGE, gradleExit: env.NATIVE_ANDROID_GRADLE_EXIT,
-                    build: buildOutcome, device: deviceOutcome, deviceExit: env.NATIVE_ANDROID_DEVICE_EXIT ?: 'not run',
-                    buildSummary: fileExists('build-summary.json') ? 'build-summary.json' : null,
-                    deviceSummary: fileExists('device/results/summary.json') ? 'device/results/summary.json' : null,
-                    pendingGitHubStatuses: [build: env.NATIVE_ANDROID_BUILD_PENDING_STATUS ?: 'not attempted',
-                                            device: env.NATIVE_ANDROID_DEVICE_PENDING_STATUS ?: 'not attempted']
-                ]
-                writeFile file: 'run.json', text: JsonOutput.prettyPrint(JsonOutput.toJson(report)) + '\n'
-                writeFile file: 'summary.md', text: """# Native Android CI
+        dir('evidence') {
+            if (env.NATIVE_ANDROID_SOURCE_COMMIT) {
+                writeFile file: 'source-commit.txt', text: env.NATIVE_ANDROID_SOURCE_COMMIT + '\n'
+            }
+            writeFile file: 'build.txt', text: "Repository: maksonlee/learn-chess\nBranch: main\nImage: ${env.NATIVE_ANDROID_IMAGE}\nBuild command exit: ${env.NATIVE_ANDROID_GRADLE_EXIT}\n"
+            def report = [
+                repository: 'maksonlee/learn-chess', branch: 'main', jenkinsBuildUrl: env.BUILD_URL,
+                requestedCommit: env.NATIVE_ANDROID_REQUESTED_COMMIT ?: null,
+                verifiedTarget: env.NATIVE_ANDROID_VERIFIED_TARGET ?: null,
+                verifiedCommit: env.NATIVE_ANDROID_SOURCE_COMMIT ?: null,
+                cleanBeforeBuild: env.NATIVE_ANDROID_SOURCE_COMMIT ? true : null,
+                cleanAfterBuild: env.NATIVE_ANDROID_SOURCE_UNCHANGED ? env.NATIVE_ANDROID_SOURCE_UNCHANGED == 'true' : null,
+                buildImage: env.NATIVE_ANDROID_IMAGE, gradleExit: env.NATIVE_ANDROID_GRADLE_EXIT,
+                build: buildOutcome, device: deviceOutcome, deviceExit: env.NATIVE_ANDROID_DEVICE_EXIT ?: 'not run',
+                buildSummary: fileExists('build-summary.json') ? 'build-summary.json' : null,
+                deviceSummary: fileExists('device/results/summary.json') ? 'device/results/summary.json' : null
+            ]
+            writeFile file: 'run.json', text: JsonOutput.prettyPrint(JsonOutput.toJson(report)) + '\n'
+            writeFile file: 'summary.md', text: """# Native Android CI
 
 - Repository: ${report.repository}
 - Jenkins build: ${report.jenkinsBuildUrl}
@@ -457,30 +355,12 @@ def finishLearnChessEvidence() {
 
 See `build-summary.json` for build verification details, `gradle.log` for build output, `device/preflight.log` for device setup, and `device/results/summary.md` for device results when available. The APKs are available in `apk/` with checksums in `SHA256SUMS`.
 """
-            }
-            sh 'tar -C evidence -czf ci-evidence.tar.gz .'
-            archiveArtifacts artifacts: 'evidence/**,ci-evidence.tar.gz', fingerprint: true, followSymlinks: false
-            publishedEvidence = true
         }
-        catchError(buildResult: 'FAILURE', message: 'Could not publish native Android JUnit reports', catchInterruptions: false) {
-            junit testResults: 'evidence/junit/**/*.xml,evidence/device/results/junit/*.xml', allowEmptyResults: true, skipPublishingChecks: true
-        }
-    } finally {
-        def buildStatus = publishedEvidence || buildOutcome != 'success' ? buildOutcome : 'unavailable'
-        def deviceStatus = publishedEvidence || deviceOutcome != 'success' ? deviceOutcome : 'unavailable'
-        def buildSent = reportLearnChessStatus('build', buildStatus)
-        def deviceSent = reportLearnChessStatus('device', deviceStatus)
-        if (env.NATIVE_ANDROID_WORKSPACE_READY == 'true' && buildSent != 'not applicable') {
-            catchError(buildResult: 'FAILURE', message: 'Could not archive GitHub status publication receipts', catchInterruptions: false) {
-                def summary = [
-                    commit: env.NATIVE_ANDROID_VERIFIED_TARGET, jenkinsBuildUrl: env.BUILD_URL,
-                    build: [pending: env.NATIVE_ANDROID_BUILD_PENDING_STATUS ?: 'not attempted', outcome: buildStatus, publication: buildSent],
-                    device: [pending: env.NATIVE_ANDROID_DEVICE_PENDING_STATUS ?: 'not attempted', outcome: deviceStatus, publication: deviceSent]
-                ]
-                writeFile file: 'github-status-publication.json', text: JsonOutput.prettyPrint(JsonOutput.toJson(summary)) + '\n'
-                archiveArtifacts artifacts: 'github-status-publication.json', followSymlinks: false
-            }
-        }
+        sh 'tar -C evidence -czf ci-evidence.tar.gz .'
+        archiveArtifacts artifacts: 'evidence/**,ci-evidence.tar.gz', fingerprint: true, followSymlinks: false
+    }
+    catchError(buildResult: 'FAILURE', message: 'Could not publish native Android JUnit reports', catchInterruptions: false) {
+        junit testResults: 'evidence/junit/**/*.xml,evidence/device/results/junit/*.xml', allowEmptyResults: true, skipPublishingChecks: true
     }
 }
 
@@ -569,12 +449,6 @@ if [[ -n "$requested_commit" ]]; then
 fi
 echo "$expected_commit"
 ''').trim()
-                    }
-                    if (env.NATIVE_ANDROID_TRACE == 'true') {
-                        env.NATIVE_ANDROID_BUILD_PENDING_STATUS = reportLearnChessStatus('build', 'pending')
-                        env.NATIVE_ANDROID_DEVICE_PENDING_STATUS = reportLearnChessStatus('device', 'pending')
-                    }
-                    dir('source') {
                         env.NATIVE_ANDROID_SOURCE_COMMIT = sh(returnStdout: true, script: '''#!/bin/bash
 set -euo pipefail
 if [[ -n "${NATIVE_ANDROID_REQUESTED_COMMIT:-}" ]]; then

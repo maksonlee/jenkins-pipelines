@@ -30,7 +30,7 @@ Artifacts and reports appear under `evidence/`. The job confirms the checkout ma
 
 ## Learn Chess build and device evidence
 
-Open the run-specific Jenkins URL on the commit, sign in, and download `ci-evidence.tar.gz` from the build artifacts. The archive contains both APKs, the Gradle and native test logs, diagnostics, JUnit XML, lint reports, and screenshots when those outputs were produced. Extract the bundle and run `sha256sum --check SHA256SUMS` in the extracted directory.
+For a push, open the **Jenkins queue acceptance** check in GitHub Actions and use its queue item and commit SHA to find the numbered Jenkins run. For a manual build, open the run from the Jenkins build history. Sign in to Jenkins and download `ci-evidence.tar.gz` from the run's artifacts. The archive contains both APKs, the Gradle and native test logs, diagnostics, JUnit XML, lint reports, and screenshots when those outputs were produced. Extract the bundle and run `sha256sum --check SHA256SUMS` in the extracted directory.
 
 `run.json` records the requested SHA, verified checkout, workspace checks, build URL, pinned image, and separate build and device outcomes. `build-summary.json` records the command, Gradle and Java runtime, pinned plugin versions, SDK platform metadata, unit and lint counts, production content validator totals, and each APK's size and SHA-256. `device/results/summary.json` records the device matrix, native tests, and screenshot evidence. The top `summary.md` and the native test `summary.md` accompany the reports. Partial results are retained when available for failed, skipped, or interrupted runs.
 
@@ -42,13 +42,9 @@ Use an `ssh-agent-with-docker` worker and the pinned `buildImages.android()` ima
 
 Configure `native-android-ci-webhook-token` as a Jenkins secret-text credential. Initialize the Generic Webhook Trigger from the Jenkinsfile settings when creating the job, or install it with the first manual run. To opt a repository in, add its production modules to `nativeAndroidProjects()` and configure its main-push sender with that token. The sender posts JSON to `${JENKINS_URL}/generic-webhook-trigger/invoke` with `Content-Type: application/json`, `X-GitHub-Event: push`, and the token in the `token` header.
 
-The `learn-chess` and `cloud-cost-widgets` workflows at `.github/workflows/native-android-ci.yml` read the token from each repository's `NATIVE_ANDROID_CI_WEBHOOK_TOKEN` Actions secret. A successful workflow run confirms Jenkins queue acceptance. The Jenkins build page shows the run and artifacts.
+The `learn-chess` and `cloud-cost-widgets` workflows at `.github/workflows/native-android-ci.yml` read the token from each repository's `NATIVE_ANDROID_CI_WEBHOOK_TOKEN` Actions secret. A successful workflow run confirms Jenkins queue acceptance. Jenkins records execution results and artifacts on the numbered build page.
 
 The trigger accepts a push only when `repository.full_name` identifies an opted-in repository, `ref` is `refs/heads/main`, `deleted` is false and `after` is a nonzero 40-character commit SHA. The job verifies that commit against the trusted repository's fetched `main` history before checking it out. Enable artifact access only for users authorized to see the opted-in projects.
-
-For a verified Learn Chess push, Jenkins sets `ci/jenkins/native-android/build` and `ci/jenkins/native-android/device` to pending after the history check, then publishes the two final outcomes with the build URL. Failure is a failed status. Aborted and skipped phases are GitHub error statuses with descriptions that identify the outcome. An unverified SHA is recorded in Jenkins when the workspace is available. GitHub receives execution statuses only for verified pushed SHAs. Manual runs produce Jenkins evidence. Rerun the GitHub workflow to queue the event SHA again. Jenkins reports in its serialized build order.
-
-Provision GitHub status publication by creating a fine-grained GitHub token for only `maksonlee/learn-chess` with **Commit statuses** set to **Read and write**. Save the token as Jenkins **Secret text** with ID `learn-chess-github-commit-status` in a credential store visible to `android/native-android-ci`. The job binds the token for its status request and checks GitHub's response against the exact SHA and Jenkins run URL. The authenticated `github-status-publication.json` artifact records which requests were confirmed. A missing credential or failed request is reported in Jenkins while the job continues collecting build and device results. See [GitHub Commit Statuses API permissions](https://docs.github.com/en/rest/commits/statuses#create-a-commit-status).
 
 ## Local contract checks
 
