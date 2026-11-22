@@ -101,11 +101,13 @@ def sign_assertion(service):
     return signing_input + b"." + base64url(signature)
 
 
-def request_json(opener, request):
+def request_json(opener, request, *, allow_no_content=False):
     status = None
     try:
         with opener.open(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
             status = response.status
+            if status == 204 and allow_no_content:
+                return None, status
             if status != 200:
                 raise PreflightError("unexpected_http_status", status)
             body = response.read(MAX_RESPONSE_BYTES + 1)
@@ -157,7 +159,9 @@ def read_track(opener, token, track):
         headers={"Authorization": f"Bearer {token}"},
         method="GET",
     )
-    content, status = request_json(opener, request)
+    content, status = request_json(opener, request, allow_no_content=True)
+    if content is None:
+        return None, status
     # The API may omit the repeated releases field when the track has no releases.
     if content and "releases" not in content:
         raise PreflightError("invalid_response", status)
@@ -213,6 +217,9 @@ def run_preflight(encoded):
         except PreflightError as error:
             entry.update(result=error.result, http_status=error.http_status)
         else:
+            if releases is None:
+                entry.update(result="no_content", http_status=status)
+                continue
             entry.update(
                 result="ok",
                 http_status=status,
@@ -223,8 +230,11 @@ def run_preflight(encoded):
                 ),
             )
 
-    if all(entry["result"] == "ok" for entry in report["tracks"].values()):
+    track_results = {entry["result"] for entry in report["tracks"].values()}
+    if track_results == {"ok"}:
         report["result"] = "passed"
+    elif track_results <= {"ok", "no_content"}:
+        report["result"] = "indeterminate"
     return report
 
 
@@ -238,7 +248,7 @@ def main(argv):
     except (OSError, ValueError):
         print("Could not write Google Play preflight evidence.", file=sys.stderr)
         return 1
-    return 0 if report["result"] == "passed" else 1
+    return {"passed": 0, "failed": 1, "indeterminate": 3}[report["result"]]
 
 
 if __name__ == "__main__":

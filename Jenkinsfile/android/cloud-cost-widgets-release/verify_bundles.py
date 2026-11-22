@@ -15,7 +15,7 @@ from pathlib import Path
 
 PACKAGE = 'com.maksonlee.cloudcost.aws'
 ANDROID = '{http://schemas.android.com/apk/res/android}'
-BUNDLETOOL = Path('/release-tools/bundletool-all-1.18.3.jar')
+BUNDLETOOL = Path('/home/administrator/jenkins/android-cache/tools/bundletool-all-1.18.3.jar')
 BUNDLETOOL_SHA = 'a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29'
 
 
@@ -118,12 +118,9 @@ def verify_bundle(bundle, form_factor, version, code, expected_signer):
 def archive_bundles(source, evidence):
     if sha256(BUNDLETOOL) != BUNDLETOOL_SHA:
         raise VerificationError('Worker bundletool SHA-256 differs from the pinned tool')
-    certificate = capture(
-        ['keytool', '-exportcert', '-keystore', os.environ['JKS_PATH'],
-         '-storepass:env', 'STORE_PASSWORD', '-alias', os.environ['KEY_ALIAS']],
-        'Vault-bound upload certificate read',
-    )
-    expected_signer = hashlib.sha256(certificate).hexdigest()
+    expected_signer = (evidence / 'upload-certificate-sha256.txt').read_text(encoding='ascii').strip()
+    if re.fullmatch(r'[a-f0-9]{64}', expected_signer) is None:
+        raise VerificationError('The Vault-bound public upload certificate fingerprint is invalid')
     version = os.environ['VERSION_NAME']
     bundles = []
     for form_factor, code, module in (

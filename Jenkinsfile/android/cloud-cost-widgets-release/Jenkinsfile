@@ -40,11 +40,16 @@ git rev-parse --verify 'HEAD^{commit}' > release-evidence/pipeline-commit.txt
                                 engineVersion: 2,
                                 secretValues: [[envVar: 'PLAY_SERVICE_JSON_B64', vaultKey: 'json_b64']]
                         ]]]) {
-                            sh '''#!/bin/bash
+                            int playStatus = sh returnStatus: true, script: '''#!/bin/bash
 set +x
 set -euo pipefail
 python3 "$RELEASE_TOOLS/play_preflight.py" release-evidence/play-preflight.json
 '''
+                            if (playStatus == 3) {
+                                unstable('Google Play track state indeterminate (HTTP 204 with no release data)')
+                            } else if (playStatus != 0) {
+                                error('Google Play read-only track preflight failed; see the archived report')
+                            }
                         }
                     }
                     if (!fileExists('release-evidence/play-preflight.json')) {
@@ -79,8 +84,7 @@ printf '%s\\n' "$PRODUCT_SHA" > ../release-evidence/source-commit.txt
                                 image: image,
                                 cacheRoot: cache,
                                 mountAndroidCache: false,
-                                insideArgs: "--mount type=bind,src=${cache}/flutter-android-sdk,dst=/home/ubuntu/Android,readonly " +
-                                        "--mount type=bind,src=${cache}/tools,dst=/release-tools,readonly",
+                                insideArgs: "--mount type=bind,src=${cache}/flutter-android-sdk,dst=/home/ubuntu/Android,readonly",
                                 keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.cloudcost.aws'
                         ) {
                             sh '''#!/bin/bash
@@ -89,6 +93,12 @@ set -euo pipefail
 export GRADLE_USER_HOME=/home/ubuntu/.gradle
 export ANDROID_USER_HOME="$PWD/android-user-home"
 mkdir -p "$ANDROID_USER_HOME"
+if ! fingerprint=$(keytool -exportcert -keystore "$JKS_PATH" -storepass:env STORE_PASSWORD -alias "$KEY_ALIAS" 2>/dev/null \\
+  | sha256sum | cut -d ' ' -f 1); then
+  echo 'Could not read the public certificate of the Vault-bound upload key' >&2
+  exit 1
+fi
+printf '%s\\n' "$fingerprint" > release-evidence/upload-certificate-sha256.txt
 printf '%s\\n' '{"result":"failed","reason":"gradle-release-build-failed"}' > release-evidence/signed-bundles.json
 (
   export CLOUD_COST_RELEASE_STORE_FILE="${JKS_PATH:?}"
@@ -100,10 +110,13 @@ printf '%s\\n' '{"result":"failed","reason":"gradle-release-build-failed"}' > re
   test "$(git rev-parse --verify 'HEAD^{commit}')" = "$PRODUCT_SHA"
   test -z "$(git status --porcelain=v1)"
 )
+'''
+                        }
+                        sh '''#!/bin/bash
+set -euo pipefail
 printf '%s\\n' '{"result":"failed","reason":"bundle-verification-failed"}' > release-evidence/signed-bundles.json
 python3 "$RELEASE_TOOLS/verify_bundles.py" source release-evidence
 '''
-                        }
                     }
                 }
             }

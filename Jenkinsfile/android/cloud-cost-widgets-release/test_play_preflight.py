@@ -32,9 +32,9 @@ PUBLISHED = "RELEASE_LIFECYCLE_STATE_PUBLISHED"
 DRAFT = "RELEASE_LIFECYCLE_STATE_DRAFT"
 
 
-def response(value):
-    result = io.BytesIO(json.dumps(value).encode())
-    result.status = 200
+def response(value, status=200):
+    result = io.BytesIO(b"" if status == 204 else json.dumps(value).encode())
+    result.status = status
     return result
 
 
@@ -138,6 +138,31 @@ class PlayPreflightTest(unittest.TestCase):
                 self.assertNotIn("SENSITIVE", json.dumps(report))
                 self.assertNotIn("sensitive-url", json.dumps(report))
 
+    def test_no_content_with_an_ok_track_is_indeterminate(self):
+        self.opener.open.side_effect = [
+            response({"access_token": ACCESS_TOKEN}),
+            response(None, 204),
+            response({"releases": []}),
+        ]
+        report = play_preflight.run_preflight(ENCODED_ACCOUNT)
+
+        self.assertEqual(report["result"], "indeterminate")
+        self.assertEqual(report["tracks"]["production"], {
+            "expected_version_code": 100006, "result": "no_content", "http_status": 204,
+        })
+        self.assertEqual(report["tracks"]["wear:production"]["result"], "ok")
+        self.assertFalse(report["tracks"]["wear:production"]["expected_version_code_visible"])
+
+    def test_no_content_with_an_http_error_still_fails(self):
+        self.opener.open.side_effect = [
+            response({"access_token": ACCESS_TOKEN}), http_error(403), response(None, 204),
+        ]
+        report = play_preflight.run_preflight(ENCODED_ACCOUNT)
+
+        self.assertEqual(report["result"], "failed")
+        self.assertEqual(report["tracks"]["production"]["result"], "forbidden")
+        self.assertEqual(report["tracks"]["wear:production"]["result"], "no_content")
+
     def test_malformed_track_response_fails_without_copying_server_fields(self):
         invalid_responses = [
             {"error": {}},
@@ -169,6 +194,7 @@ class PlayPreflightTest(unittest.TestCase):
             ("", "missing_credentials", None, None),
             ("invalid!", "invalid_credentials", None, None),
             (ENCODED_ACCOUNT, "http_error", 400, http_error(400)),
+            (ENCODED_ACCOUNT, "unexpected_http_status", 204, response(None, 204)),
             (ENCODED_ACCOUNT, "invalid_response", 200, response({"access_token": "fake\nkey"})),
             (ENCODED_ACCOUNT, "request_failed", None, TimeoutError("SENSITIVE_TIMEOUT")),
         ]
@@ -197,6 +223,24 @@ class PlayPreflightTest(unittest.TestCase):
             self.assertEqual(json.loads(evidence)["oauth"]["result"], "signing_failed")
             self.assertNotIn("SENSITIVE_COMMAND", evidence)
             self.opener.open.assert_not_called()
+
+    def test_cli_reports_both_tracks_with_no_content_as_indeterminate(self):
+        self.opener.open.side_effect = [
+            response({"access_token": ACCESS_TOKEN}), response(None, 204), response(None, 204),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "play-preflight.json"
+            with patch.dict(os.environ, PLAY_SERVICE_JSON_B64=ENCODED_ACCOUNT):
+                result = play_preflight.main(["play_preflight.py", str(path)])
+
+            self.assertEqual(result, 3)
+            evidence = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(evidence["result"], "indeterminate")
+            for track in evidence["tracks"].values():
+                self.assertEqual(track["result"], "no_content")
+                self.assertEqual(track["http_status"], 204)
+                self.assertNotIn("releases", track)
+                self.assertNotIn("expected_version_code_visible", track)
 
     def test_redirect_is_blocked_without_forwarding_token(self):
         client = SimulatedRedirect()
