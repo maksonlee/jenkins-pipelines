@@ -18,7 +18,6 @@ UPLOAD_URL = (
     "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/"
     f"applications/com.maksonlee.cloudcost.aws/edits/{EDIT_ID}/bundles?uploadType=media"
 )
-VALIDATE_URL = f"{EDIT_URL}:validate"
 COMMIT_URL = f"{EDIT_URL}:commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW"
 PHONE = 100006
 WEAR = 200006
@@ -34,7 +33,7 @@ def response(value=None, status=200):
 
 def http_error(status, message="", reason=None):
     document = {"error": {
-        "status": "FAILED_PRECONDITION",
+        "status": "PERMISSION_DENIED" if status == 403 else "FAILED_PRECONDITION",
         "message": message,
         "details": [{
             "@type": "type.googleapis.com/google.rpc.ErrorInfo",
@@ -78,7 +77,7 @@ def edit_snapshot(catalog=None):
 def completed_precommit():
     return [
         *edit_snapshot(), response(bundle(PHONE)), response(bundle(WEAR)),
-        staged("production", PHONE), staged("wear:production", WEAR), response({"id": EDIT_ID}),
+        staged("production", PHONE), staged("wear:production", WEAR),
     ]
 
 
@@ -129,7 +128,7 @@ class PlayPublishTest(unittest.TestCase):
             ("POST", UPLOAD_URL), ("POST", UPLOAD_URL),
             ("PUT", f"{EDIT_URL}/tracks/production"),
             ("PUT", f"{EDIT_URL}/tracks/wear:production"),
-            ("POST", VALIDATE_URL), ("POST", COMMIT_URL),
+            ("POST", COMMIT_URL),
             ("GET", f"{APP_URL}/tracks/production/releases"),
             ("GET", f"{APP_URL}/tracks/wear:production/releases"),
         ])
@@ -150,7 +149,6 @@ class PlayPublishTest(unittest.TestCase):
                 }],
             })
         self.assertIsNone(req[10].data)
-        self.assertIsNone(req[11].data)
 
     def test_invalid_archive_never_reaches_oauth(self):
         self.loader.side_effect = publish.ArtifactVerificationError("PRIVATE_PATH")
@@ -202,6 +200,17 @@ class PlayPublishTest(unittest.TestCase):
                 else:
                     self.assertEqual(report["commit"]["prerequisite"], "draft_app")
                 self.assertEqual(self.operations()[-2:], [("POST", COMMIT_URL), ("DELETE", EDIT_URL)])
+
+    def test_commit_permission_denied_stops_after_cleaning_own_edit(self):
+        report = self.run_with(*completed_precommit(), http_error(403), response(status=204))
+
+        self.assertEqual(report["result"], "rejected")
+        self.assertEqual(report["commit"], {
+            "result": "forbidden", "http_status": 403, "google_status": "PERMISSION_DENIED",
+        })
+        self.assertEqual(report["cleanup"], {"result": "deleted", "http_status": 204})
+        self.assertEqual(self.operations()[-2:], [("POST", COMMIT_URL), ("DELETE", EDIT_URL)])
+        self.assertEqual(self.operations().count(("POST", COMMIT_URL)), 1)
 
     def test_ambiguous_commit_only_reconciles_exact_target_versions(self):
         cases = [

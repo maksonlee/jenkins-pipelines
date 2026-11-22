@@ -141,8 +141,8 @@ def stage_target_tracks(opener, token, edit_url, report):
     return True
 
 
-def action_request(opener, token, edit_url, edit_id, action):
-    receipt, status = publisher_request(opener, token, "POST", f"{edit_url}:{action}")
+def commit_edit(opener, token, edit_url, edit_id):
+    receipt, status = publisher_request(opener, token, "POST", f"{edit_url}:commit?{COMMIT_QUERY}")
     if require_edit_id(receipt, status) != edit_id:
         raise PreflightError("edit_receipt_mismatch", status)
     return status
@@ -205,16 +205,10 @@ def publish_edit(opener, token, edit_id, bundles, report):
             return
         if not stage_target_tracks(opener, token, edit_url, report):
             return
-        try:
-            status = action_request(opener, token, edit_url, edit_id, "validate")
-        except PreflightError as error:
-            report["validation"] = error_outcome(error)
-            return
-        report["validation"] = outcome("validated", status)
 
         cleanup_allowed = False
         try:
-            status = action_request(opener, token, edit_url, edit_id, f"commit?{COMMIT_QUERY}")
+            status = commit_edit(opener, token, edit_url, edit_id)
         except PreflightError as error:
             report["commit"] = error_outcome(error)
             if error.http_status in {400, 401, 403, 404, 409, 412, 422}:
@@ -258,7 +252,6 @@ def run_publish(input_directory, encoded):
         "edit_tracks": {track: outcome() for track in TRACKS},
         "uploads": {track: outcome() for track in TRACKS},
         "track_updates": {track: outcome() for track in TRACKS},
-        "validation": outcome(),
         "commit": outcome(),
         "review_observation": {"result": "not_attempted"},
         "cleanup": outcome(),
