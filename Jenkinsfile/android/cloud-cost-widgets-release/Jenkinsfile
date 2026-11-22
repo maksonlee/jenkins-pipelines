@@ -1,0 +1,122 @@
+@Library('jenkins-shared-lib') _
+
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout()
+        buildDiscarder(logRotator(numToKeepStr: '5'))
+    }
+
+    environment {
+        PRODUCT_SHA = 'f6cce0cc9e7aa060b3013a447c220d149b31f80b'
+        VERSION_NAME = '1.0.5'
+        PHONE_VERSION_CODE = '100006'
+        WEAR_VERSION_CODE = '200006'
+        RELEASE_TOOLS = 'Jenkinsfile/android/cloud-cost-widgets-release'
+    }
+
+    stages {
+        stage('Fetch release pipeline') {
+            steps {
+                deleteDir()
+                checkout scm
+                sh '''#!/bin/bash
+set -euo pipefail
+mkdir release-evidence
+git rev-parse --verify 'HEAD^{commit}' > release-evidence/pipeline-commit.txt
+'''
+            }
+        }
+
+        stage('Read Google Play production tracks') {
+            steps {
+                script {
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) {
+                        withVault([vaultSecrets: [[
+                                path: 'secret/jenkins/mobile/shared/play-service',
+                                engineVersion: 2,
+                                secretValues: [[envVar: 'PLAY_SERVICE_JSON_B64', vaultKey: 'json_b64']]
+                        ]]]) {
+                            sh '''#!/bin/bash
+set +x
+set -euo pipefail
+python3 "$RELEASE_TOOLS/play_preflight.py" release-evidence/play-preflight.json
+'''
+                        }
+                    }
+                    if (!fileExists('release-evidence/play-preflight.json')) {
+                        writeFile file: 'release-evidence/play-preflight.json', text: '{"result":"failed","reason":"binding-or-runtime-failed","tracks":{}}\n'
+                    }
+                }
+            }
+        }
+
+        stage('Build and verify signed phone and Wear bundles') {
+            steps {
+                script {
+                    writeFile file: 'release-evidence/signed-bundles.json', text: '{"result":"failed","reason":"source-checkout-failed"}\n'
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) {
+                        dir('source') {
+                            git branch: 'main', credentialsId: 'vault-github-ssh',
+                                    url: 'git@github.com:maksonlee/cloud-cost-widgets.git'
+                            sh '''#!/bin/bash
+set -euo pipefail
+git merge-base --is-ancestor "$PRODUCT_SHA" HEAD
+git checkout --detach "$PRODUCT_SHA"
+test "$(git rev-parse --verify 'HEAD^{commit}')" = "$PRODUCT_SHA"
+test -z "$(git status --porcelain=v1)"
+printf '%s\\n' "$PRODUCT_SHA" > ../release-evidence/source-commit.txt
+'''
+                        }
+                        def cache = '/home/administrator/jenkins/android-cache'
+                        def image = buildImages.android()
+                        writeFile file: 'release-evidence/build-image.txt', text: image + '\n'
+                        writeFile file: 'release-evidence/signed-bundles.json', text: '{"result":"failed","reason":"signing-environment-failed"}\n'
+                        withAndroidReleaseEnv(
+                                image: image,
+                                cacheRoot: cache,
+                                mountAndroidCache: false,
+                                insideArgs: "--mount type=bind,src=${cache}/flutter-android-sdk,dst=/home/ubuntu/Android,readonly " +
+                                        "--mount type=bind,src=${cache}/tools,dst=/release-tools,readonly",
+                                keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.cloudcost.aws'
+                        ) {
+                            sh '''#!/bin/bash
+set +x
+set -euo pipefail
+export GRADLE_USER_HOME=/home/ubuntu/.gradle
+export ANDROID_USER_HOME="$PWD/android-user-home"
+mkdir -p "$ANDROID_USER_HOME"
+printf '%s\\n' '{"result":"failed","reason":"gradle-release-build-failed"}' > release-evidence/signed-bundles.json
+(
+  export CLOUD_COST_RELEASE_STORE_FILE="${JKS_PATH:?}"
+  export CLOUD_COST_RELEASE_STORE_PASSWORD="${STORE_PASSWORD:?}"
+  export CLOUD_COST_RELEASE_KEY_ALIAS="${KEY_ALIAS:?}"
+  export CLOUD_COST_RELEASE_KEY_PASSWORD="${KEY_PASSWORD:?}"
+  cd source
+  ./gradlew :apps:aws:bundleRelease :apps:aws-wear:bundleRelease --continue --console=plain --no-daemon --max-workers=2
+  test "$(git rev-parse --verify 'HEAD^{commit}')" = "$PRODUCT_SHA"
+  test -z "$(git status --porcelain=v1)"
+)
+printf '%s\\n' '{"result":"failed","reason":"bundle-verification-failed"}' > release-evidence/signed-bundles.json
+python3 "$RELEASE_TOOLS/verify_bundles.py" source release-evidence
+'''
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'release-evidence/*.json,release-evidence/*.txt,release-evidence/bundles/*',
+                    allowEmptyArchive: true, followSymlinks: false, fingerprint: true
+        }
+        cleanup {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}
