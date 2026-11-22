@@ -1,8 +1,19 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
-  <description>Manual Cloud Spend for AWS 1.0.5 signed Android bundles and read-only Play production track checks.</description>
+  <description>Manual Cloud Spend for AWS 1.0.5 signed Android bundles and Play submission preflight.</description>
   <keepDependencies>false</keepDependencies>
-  <properties/>
+  <properties>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <name>MODE</name>
+          <description>bundle-preflight or submission-preflight (uncommitted Play edit inspection only)</description>
+          <defaultValue>bundle-preflight</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
   <definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition" plugin="workflow-cps">
     <scm class="hudson.plugins.git.GitSCM" plugin="git">
       <configVersion>2</configVersion>

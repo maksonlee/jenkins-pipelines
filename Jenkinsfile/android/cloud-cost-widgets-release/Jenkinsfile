@@ -1,5 +1,15 @@
 @Library('jenkins-shared-lib') _
 
+def withPlayService(Closure body) {
+    withVault([vaultSecrets: [[
+            path: 'secret/jenkins/mobile/shared/play-service',
+            engineVersion: 2,
+            secretValues: [[envVar: 'PLAY_SERVICE_JSON_B64', vaultKey: 'json_b64']]
+    ]]]) {
+        body()
+    }
+}
+
 pipeline {
     agent { label 'ssh-agent-with-docker' }
 
@@ -8,6 +18,11 @@ pipeline {
         disableConcurrentBuilds()
         skipDefaultCheckout()
         buildDiscarder(logRotator(numToKeepStr: '5'))
+    }
+
+    parameters {
+        string(name: 'MODE', defaultValue: 'bundle-preflight', trim: true,
+                description: 'bundle-preflight or submission-preflight (uncommitted Play edit inspection only)')
     }
 
     environment {
@@ -21,6 +36,11 @@ pipeline {
     stages {
         stage('Fetch release pipeline') {
             steps {
+                script {
+                    if (!(params.MODE in ['bundle-preflight', 'submission-preflight'])) {
+                        error('Select bundle-preflight or submission-preflight')
+                    }
+                }
                 deleteDir()
                 checkout scm
                 sh '''#!/bin/bash
@@ -32,14 +52,11 @@ git rev-parse --verify 'HEAD^{commit}' > release-evidence/pipeline-commit.txt
         }
 
         stage('Read Google Play production tracks') {
+            when { expression { params.MODE == 'bundle-preflight' } }
             steps {
                 script {
                     catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) {
-                        withVault([vaultSecrets: [[
-                                path: 'secret/jenkins/mobile/shared/play-service',
-                                engineVersion: 2,
-                                secretValues: [[envVar: 'PLAY_SERVICE_JSON_B64', vaultKey: 'json_b64']]
-                        ]]]) {
+                        withPlayService {
                             int playStatus = sh returnStatus: true, script: '''#!/bin/bash
 set +x
 set -euo pipefail
@@ -59,7 +76,29 @@ python3 "$RELEASE_TOOLS/play_preflight.py" release-evidence/play-preflight.json
             }
         }
 
+        stage('Check Google Play submission access') {
+            when { expression { params.MODE == 'submission-preflight' } }
+            steps {
+                script {
+                    writeFile file: 'release-evidence/expected-product-commit.txt', text: env.PRODUCT_SHA + '\n'
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) {
+                        withPlayService {
+                            sh '''#!/bin/bash
+set +x
+set -euo pipefail
+python3 "$RELEASE_TOOLS/play_submission_preflight.py" release-evidence/submission-preflight.json
+'''
+                        }
+                    }
+                    if (!fileExists('release-evidence/submission-preflight.json')) {
+                        writeFile file: 'release-evidence/submission-preflight.json', text: '{"result":"failed","reason":"binding-or-runtime-failed"}\n'
+                    }
+                }
+            }
+        }
+
         stage('Build and verify signed phone and Wear bundles') {
+            when { expression { params.MODE == 'bundle-preflight' } }
             steps {
                 script {
                     writeFile file: 'release-evidence/signed-bundles.json', text: '{"result":"failed","reason":"source-checkout-failed"}\n'

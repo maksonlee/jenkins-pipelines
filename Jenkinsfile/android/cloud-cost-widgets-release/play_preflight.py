@@ -37,10 +37,11 @@ RELEASE_STATES = {
 
 
 class PreflightError(Exception):
-    def __init__(self, result, http_status=None):
+    def __init__(self, result, http_status=None, details=None):
         super().__init__(result)
         self.result = result
         self.http_status = http_status
+        self.details = details or {}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -101,7 +102,7 @@ def sign_assertion(service):
     return signing_input + b"." + base64url(signature)
 
 
-def request_json(opener, request, *, allow_no_content=False):
+def request_json(opener, request, *, allow_no_content=False, collect_error=None):
     status = None
     try:
         with opener.open(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
@@ -113,13 +114,14 @@ def request_json(opener, request, *, allow_no_content=False):
             body = response.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as error:
         status = error.code
-        error.close()
+        with error:
+            details = collect_error(error) if collect_error else None
         result = {401: "unauthorized", 403: "forbidden", 404: "not_found"}.get(
             status, "http_error"
         )
         if 300 <= status < 400:
             result = "redirect_blocked"
-        raise PreflightError(result, status) from None
+        raise PreflightError(result, status, details) from None
     except (OSError, http.client.HTTPException, ValueError):
         raise PreflightError("request_failed", status) from None
 
