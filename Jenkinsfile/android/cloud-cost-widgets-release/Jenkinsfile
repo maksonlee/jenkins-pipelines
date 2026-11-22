@@ -23,7 +23,7 @@ pipeline {
 
     parameters {
         string(name: 'MODE', defaultValue: 'bundle-preflight', trim: true,
-                description: 'bundle-preflight, submission-preflight, or production-submit for the approved 1.0.5 bundles')
+                description: 'bundle-preflight, submission-preflight, or closed-alpha-submit for the approved 1.0.5 phone bundle')
     }
 
     environment {
@@ -38,8 +38,8 @@ pipeline {
         stage('Fetch release pipeline') {
             steps {
                 script {
-                    if (!(params.MODE in ['bundle-preflight', 'submission-preflight', 'production-submit'])) {
-                        error('Select bundle-preflight, submission-preflight, or production-submit')
+                    if (!(params.MODE in ['bundle-preflight', 'submission-preflight', 'closed-alpha-submit'])) {
+                        error('Select bundle-preflight, submission-preflight, or closed-alpha-submit')
                     }
                 }
                 deleteDir()
@@ -163,7 +163,7 @@ python3 "$RELEASE_TOOLS/verify_bundles.py" source release-evidence
         }
 
         stage('Verify the approved signed bundles from build 2') {
-            when { expression { params.MODE == 'production-submit' } }
+            when { expression { params.MODE == 'closed-alpha-submit' } }
             steps {
                 copyArtifacts(projectName: '/android/cloud-cost-widgets-release', selector: specific('2'),
                         filter: 'release-evidence/source-commit.txt,release-evidence/pipeline-commit.txt,' +
@@ -178,20 +178,20 @@ python3 "$RELEASE_TOOLS/verify_submission_artifacts.py" signed-input/release-evi
             }
         }
 
-        stage('Submit both production releases to Google Play') {
-            when { expression { params.MODE == 'production-submit' } }
+        stage('Submit the phone release to Closed testing Alpha') {
+            when { expression { params.MODE == 'closed-alpha-submit' } }
             steps {
                 script {
                     writeFile file: 'release-evidence/release-sequencing.txt', text:
-                            'Production submission authorized before completing project release verification.\n' +
+                            'Requested release target is Closed testing Alpha for the phone app, version 100005 to 100006.\n' +
                             'Open evidence includes intended review access, live AWS, physical devices, Play-installed pairing, and final listing and privacy declarations.\n'
-                    writeFile file: 'release-evidence/production-submit.json', text:
+                    writeFile file: 'release-evidence/closed-alpha-submit.json', text:
                             '{"result":"outcome-unavailable","reason":"verify-live-state-before-any-other-submission"}\n'
                     withPlayService {
                         sh '''#!/bin/bash
 set +x
 set -euo pipefail
-python3 "$RELEASE_TOOLS/play_publish.py" signed-input/release-evidence release-evidence/production-submit.json
+python3 "$RELEASE_TOOLS/play_publish.py" signed-input/release-evidence release-evidence/closed-alpha-submit.json
 '''
                     }
                 }

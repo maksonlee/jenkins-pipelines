@@ -1,4 +1,4 @@
-"""Submit only the reviewed 1.0.5 Android App Bundles to Google Play."""
+"""Advance the existing phone closed Alpha from 100005 to the reviewed 100006."""
 
 import json
 import os
@@ -8,13 +8,13 @@ import urllib.request
 from pathlib import Path
 
 from play_preflight import (
-    APPLICATION_URL, HTTP_TIMEOUT_SECONDS, PACKAGE_NAME, TRACKS, NoRedirect,
+    APPLICATION_URL, HTTP_TIMEOUT_SECONDS, PACKAGE_NAME, TRACKS as PRODUCTION_TRACKS, NoRedirect,
     PreflightError, get_access_token, request_json,
 )
 from play_submission_preflight import (
     BUNDLE_SHA256, SOURCE_SHA, edit_request, error_outcome,
     filter_google_error, outcome, read_edit_section, read_google_error, read_live_track,
-    require_edit_id, summarize_bundles, summarize_edit_track,
+    repeated_field, require_edit_id, summarize_bundles, summarize_edit_track,
 )
 from verify_submission_artifacts import ArtifactVerificationError, load_bundles
 
@@ -23,6 +23,11 @@ RELEASE_NOTES = (
     "Phone budget details show AWS forecast spending alongside the budget target when a "
     "forecast is available. Technical details start collapsed and can be opened below Budget settings."
 )
+PHONE_ALPHA = "alpha"
+PHONE_PREDECESSOR = 100005
+PHONE_CANDIDATE = 100006
+TRACKS = {PHONE_ALPHA: PHONE_CANDIDATE}
+PUBLISHED = "RELEASE_LIFECYCLE_STATE_PUBLISHED"
 UPLOAD_URL = (
     "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/"
     f"{PACKAGE_NAME}/edits"
@@ -33,7 +38,7 @@ UPLOAD_TIMEOUT_SECONDS = 120
 SUBMITTED_STATES = {
     "RELEASE_LIFECYCLE_STATE_IN_REVIEW",
     "RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED",
-    "RELEASE_LIFECYCLE_STATE_PUBLISHED",
+    PUBLISHED,
 }
 PREREQUISITE_PATTERNS = {
     "draft_app": r"only releases with status draft|\bon (?:a )?draft app\b",
@@ -53,7 +58,7 @@ PREREQUISITE_PATTERNS = {
 def publish_error_details(response):
     error = read_google_error(response)
     filtered = filter_google_error(error)
-    if response.code not in {400, 403, 409, 412}:
+    if response.code not in {400, 403, 404, 409, 412}:
         return filtered
     message = error.get("message")
     if isinstance(message, str):
@@ -75,7 +80,7 @@ def publisher_request(
 
 
 def inspect_bundle_catalog(content, status):
-    snapshot = summarize_bundles(content, status)
+    snapshot = summarize_bundles(content, status, TRACKS)
     codes = {bundle["versionCode"] for bundle in content.get("bundles", [])}
     # Phone and Wear reserve separate 100,000-code ranges in the app's release scheme.
     newer = {
@@ -88,6 +93,86 @@ def inspect_bundle_catalog(content, status):
         snapshot["newer_version_codes"] = newer
         snapshot["unexpected_version_codes"] = unexpected
     return snapshot
+
+
+def summarize_track_inventory(content, status):
+    empty_inventory = {"kind": "androidpublisher#tracksListResponse"}
+    if not content:
+        raise PreflightError("invalid_response", status)
+    inventory = repeated_field(content, "tracks", status, empty_inventory)
+    targets = {track: outcome("missing", status) for track in TRACKS}
+    seen = set()
+    unrelated_pending = False
+    for entry in inventory:
+        track = entry.get("track")
+        if not isinstance(track, str) or not track.strip() or track in seen:
+            raise PreflightError("invalid_response", status)
+        seen.add(track)
+        snapshot = summarize_edit_track(entry, status, track)
+        if track not in TRACKS:
+            unrelated_pending |= snapshot["result"] == "pending_release"
+            continue
+        custom_targeting = any(
+            raw.get("countryTargeting", {}) != {} or "userFraction" in raw
+            for raw in entry.get("releases", [])
+        )
+        snapshot["result"] = "incompatible_release"
+        if not custom_targeting:
+            for code, result in ((PHONE_PREDECESSOR, "predecessor"), (PHONE_CANDIDATE, "candidate")):
+                if snapshot["releases"] == [{"status": "completed", "version_codes": [code]}]:
+                    snapshot["result"] = result
+        targets[track] = snapshot
+    return outcome("unrelated_pending" if unrelated_pending else "ok", status, targets=targets)
+
+
+def check_live_tracks(opener, token, report):
+    for track in report["live_tracks"]:
+        report["live_tracks"][track] = read_live_track(opener, token, track)
+    for track, snapshot in report["live_tracks"].items():
+        status = snapshot["result"]
+        if status not in {"ok", "no_content", "pending_release"} and not (
+            track in TRACKS and status == "not_found"
+        ):
+            return False
+    for track, snapshot in report["live_tracks"].items():
+        releases = snapshot.get("releases", [])
+        expected = [
+            [{"lifecycle_state": PUBLISHED, "version_codes": [code]}]
+            for code in (PHONE_PREDECESSOR, PHONE_CANDIDATE)
+        ]
+        incompatible = track == PHONE_ALPHA and releases and releases not in expected
+        if snapshot["result"] == "pending_release" or incompatible:
+            report["result"] = "blocked"
+            report["failure"] = "target_track_changed" if track in TRACKS else "unrelated_pending_release"
+            return False
+    return True
+
+
+def check_edit_tracks(opener, token, edit_url, report):
+    inventory = read_edit_section(
+        opener, token, f"{edit_url}/tracks", summarize_track_inventory,
+    )
+    report["track_inventory"] = inventory
+    if "targets" in inventory:
+        report["edit_tracks"] = inventory.pop("targets")
+    if inventory["result"] == "unrelated_pending":
+        report.update(result="blocked", failure="unrelated_pending_release")
+        return False
+    if inventory["result"] != "ok":
+        return False
+
+    snapshot = report["edit_tracks"][PHONE_ALPHA]
+    live_track = report["live_tracks"][PHONE_ALPHA]
+    if snapshot["result"] not in {"predecessor", "candidate"}:
+        report.update(result="blocked", failure="target_track_changed")
+        return False
+    live_releases = live_track.get("releases", [])
+    if live_releases and live_releases[0]["version_codes"] != snapshot["releases"][0]["version_codes"]:
+        report.update(result="blocked", failure="target_track_changed")
+        return False
+    if live_track["result"] in {"not_found", "no_content"}:
+        live_track["inventory_verified"] = True
+    return True
 
 
 def upload_missing_bundles(opener, token, edit_id, bundles, report):
@@ -184,22 +269,20 @@ def publish_edit(opener, token, edit_id, bundles, report):
         report["bundle_catalog"] = read_edit_section(
             opener, token, f"{edit_url}/bundles", inspect_bundle_catalog,
         )
-        for track in TRACKS:
-            report["edit_tracks"][track] = read_edit_section(
-                opener, token, f"{edit_url}/tracks/{track}", summarize_edit_track, track,
-            )
-        snapshots = report["edit_tracks"].values()
-        if any(snapshot.get("releases") for snapshot in snapshots):
-            report["result"] = "blocked"
-            report["failure"] = "target_track_changed"
+        if not check_edit_tracks(opener, token, edit_url, report):
             return
         if report["bundle_catalog"]["result"] == "candidate_conflict":
             report["result"] = "blocked"
             report["failure"] = "candidate_conflict"
             return
-        if report["bundle_catalog"]["result"] != "ok" or any(
-            snapshot["result"] != "ok" for snapshot in snapshots
-        ):
+        if report["bundle_catalog"]["result"] != "ok":
+            return
+        if report["edit_tracks"][PHONE_ALPHA]["result"] == "candidate":
+            candidate = report["bundle_catalog"]["candidates"][PHONE_ALPHA]
+            if candidate["result"] == "hash_matches":
+                report["result"] = "already_current"
+            else:
+                report.update(result="blocked", failure="current_candidate_hash_unverified")
             return
         if not upload_missing_bundles(opener, token, edit_id, bundles, report):
             return
@@ -231,6 +314,8 @@ def publish_edit(opener, token, edit_id, bundles, report):
             report["cleanup"] = cleanup_edit(opener, token, edit_url)
             if report["cleanup"]["result"] != "deleted":
                 report["failure"] = "cleanup_failed"
+                if report["result"] == "already_current":
+                    report["result"] = "failed"
 
 
 def run_publish(input_directory, encoded):
@@ -244,11 +329,13 @@ def run_publish(input_directory, encoded):
             track: {"version_code": code, "sha256": BUNDLE_SHA256[code]}
             for track, code in TRACKS.items()
         },
+        "predecessor_version_code": PHONE_PREDECESSOR,
         "artifact_verification": outcome(),
         "oauth": outcome(),
-        "live_tracks": {track: outcome() for track in TRACKS},
+        "live_tracks": {track: outcome() for track in (*TRACKS, *PRODUCTION_TRACKS)},
         "edit_insert": outcome(),
         "bundle_catalog": outcome(),
+        "track_inventory": outcome(),
         "edit_tracks": {track: outcome() for track in TRACKS},
         "uploads": {track: outcome() for track in TRACKS},
         "track_updates": {track: outcome() for track in TRACKS},
@@ -270,14 +357,7 @@ def run_publish(input_directory, encoded):
         report["oauth"] = error_outcome(error)
         return report
     report["oauth"] = outcome("ok", status)
-    for track in TRACKS:
-        report["live_tracks"][track] = read_live_track(opener, token, track)
-    snapshots = report["live_tracks"].values()
-    if any(snapshot["result"] not in {"ok", "no_content", "pending_release"} for snapshot in snapshots):
-        return report
-    if any(snapshot.get("releases") for snapshot in snapshots):
-        report["result"] = "blocked"
-        report["failure"] = "target_track_changed"
+    if not check_live_tracks(opener, token, report):
         return report
 
     try:
@@ -299,9 +379,9 @@ def main(argv):
     try:
         Path(argv[2]).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     except (OSError, ValueError):
-        print("Could not write Google Play production submission evidence.", file=sys.stderr)
+        print("Could not write Google Play Alpha submission evidence.", file=sys.stderr)
         return 1
-    return 0 if report["result"] in {"committed", "submission_observed"} else 1
+    return 0 if report["result"] in {"already_current", "committed", "submission_observed"} else 1
 
 
 if __name__ == "__main__":
