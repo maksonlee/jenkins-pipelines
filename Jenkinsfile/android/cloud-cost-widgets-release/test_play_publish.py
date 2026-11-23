@@ -31,6 +31,11 @@ RELEASE_INPUTS = {
     "SIGNED_BUILD": "17",
     "SIGNED_SHA256": SIGNED_DIGEST,
 }
+QUOTA_RELEASE_INPUTS = {
+    **RELEASE_INPUTS,
+    "PIPELINE_SHA": "54a15793cca9cf2b3dd3fae3f5e2a080951e9565",
+    "SIGNED_BUILD": "8",
+}
 IN_REVIEW = "RELEASE_LIFECYCLE_STATE_IN_REVIEW"
 NOT_SENT = "RELEASE_LIFECYCLE_STATE_NOT_SENT_FOR_REVIEW"
 PUBLISHED = "RELEASE_LIFECYCLE_STATE_PUBLISHED"
@@ -106,18 +111,57 @@ def completed_precommit():
     return [*edit_snapshot(), response(bundle(PHONE)), response(track("alpha", PHONE))]
 
 
+def quota_error(status=403):
+    return http_error(status, "Listing releases quota exceeded. PRIVATE_TEXT")
+
+
+def trusted_quota_archive():
+    published_tracks = {"alpha": PREDECESSOR, "internal": 100005, "wear:internal": 200005}
+    tracks = {
+        name: {"result": "ok", "http_status": 200, "releases": [{
+            "lifecycle_state": PUBLISHED, "version_codes": [code],
+        }]}
+        for name, code in published_tracks.items()
+    }
+    tracks.update({
+        "production": {"result": "no_content", "http_status": 204},
+        "wear:production": {"result": "no_content", "http_status": 204},
+    })
+    return {
+        "package_name": "com.maksonlee.cloudcost.aws",
+        "result": "checked",
+        "oauth": {"result": "ok", "http_status": 200},
+        "tracks": tracks,
+    }
+
+
+def quota_inventory():
+    return [track("alpha", PREDECESSOR), track("internal", 100005), track("wear:internal", 200005)]
+
+
+def quota_snapshot(*, catalog=None, tracks=None):
+    return edit_snapshot(
+        catalog=[{"versionCode": PREDECESSOR, "sha256": PREDECESSOR_DIGEST}] if catalog is None else catalog,
+        tracks=quota_inventory() if tracks is None else tracks,
+        live_checks=[quota_error() for _ in range(5)],
+    )
+
+
 class PlayPublishTest(unittest.TestCase):
     def setUp(self):
         self.opener = Mock(spec=urllib.request.OpenerDirector)
         opener_patch = patch.object(urllib.request, "build_opener", return_value=self.opener)
         loader_patch = patch.object(publish, "load_phone_bundle", return_value=PHONE_BUNDLE)
         oauth_patch = patch.object(publish, "get_access_token", return_value=("PRIVATE_TOKEN", 200))
+        archive_patch = patch.object(publish, "read_archive", return_value=json.dumps(trusted_quota_archive()).encode())
         opener_patch.start()
         self.loader = loader_patch.start()
         self.oauth = oauth_patch.start()
+        self.archive = archive_patch.start()
         self.addCleanup(opener_patch.stop)
         self.addCleanup(loader_patch.stop)
         self.addCleanup(oauth_patch.stop)
+        self.addCleanup(archive_patch.stop)
 
     def run_with(self, *responses, release_inputs=RELEASE_INPUTS):
         self.opener.open.side_effect = responses
@@ -142,6 +186,8 @@ class PlayPublishTest(unittest.TestCase):
         )
 
         self.assertEqual(report["result"], "committed")
+        self.assertEqual(report["lifecycle_validation"], {"result": "fresh"})
+        self.archive.assert_not_called()
         self.assertEqual(report["version_name"], "1.0.6")
         self.assertEqual(report["build_number"], 17)
         self.assertEqual(report["source_sha"], RELEASE_INPUTS["PRODUCT_SHA"])
@@ -195,6 +241,98 @@ class PlayPublishTest(unittest.TestCase):
             }],
         })
         self.assertIsNone(requests[10].data)
+
+    def test_exact_quota_fallback_uses_trusted_archive_and_fresh_inventory(self):
+        report = self.run_with(
+            *quota_snapshot(), response(bundle()), response(track(
+                "alpha", PHONE, releaseNotes=list(reversed(publish.RELEASE_NOTES)),
+            )),
+            response({"id": EDIT_ID}), quota_error(),
+            release_inputs=QUOTA_RELEASE_INPUTS,
+        )
+        self.assertEqual(report["result"], "committed")
+        validation = report["lifecycle_validation"]
+        self.assertEqual(validation["result"], "quota_fallback")
+        self.assertEqual(validation["archive_build"], 8)
+        self.assertEqual(validation["fresh_inventory"], "verified")
+        self.assertEqual(validation["quota_tracks"], [
+            "alpha", "production", "wear:production", "internal", "wear:internal",
+        ])
+        self.archive.assert_called_once_with(Path("synthetic-archive").resolve(), "alpha-status.json")
+        self.assertEqual(report["track_updates"]["alpha"]["matched_note_locales"], ["en-US", "zh-TW"])
+        self.assertEqual(report["review_observation"]["tracks"]["alpha"]["quota"], "listing_releases_quota_exceeded")
+        self.assertEqual(self.mutations(), [
+            ("POST", f"{APP_URL}/edits"), ("POST", UPLOAD_URL),
+            ("PUT", f"{EDIT_URL}/tracks/alpha"), ("POST", COMMIT_URL),
+        ])
+
+    def test_quota_fallback_rejects_untrusted_archive_and_nonquota_error(self):
+        self.archive.return_value = json.dumps({
+            **trusted_quota_archive(), "package_name": "PRIVATE_WRONG_PACKAGE",
+        }).encode()
+        report = self.run_with(*[quota_error() for _ in range(5)], release_inputs=QUOTA_RELEASE_INPUTS)
+        self.assertEqual(report["failure"], "quota_archive_unverified")
+        self.assertEqual(self.mutations(), [])
+
+        self.opener.open.reset_mock()
+        self.archive.reset_mock()
+        report = self.run_with(*[quota_error() for _ in range(5)])
+        self.assertEqual(report["failure"], "quota_archive_unverified")
+        self.archive.assert_not_called()
+        self.assertEqual(self.mutations(), [])
+
+        for other in (http_error(403, "Permission denied"), quota_error(429)):
+            with self.subTest(error=other):
+                self.opener.open.reset_mock()
+                self.run_with(other, *[quota_error() for _ in range(4)], release_inputs=QUOTA_RELEASE_INPUTS)
+                self.archive.assert_not_called()
+                self.assertEqual(self.mutations(), [])
+
+    def test_quota_fallback_requires_matching_fresh_available_reads(self):
+        for state, code, failure in (
+            (PUBLISHED, 200006, "quota_lifecycle_mismatch"),
+            (IN_REVIEW, 200005, "unrelated_pending_release"),
+        ):
+            with self.subTest(state=state):
+                self.opener.open.reset_mock()
+                report = self.run_with(
+                    *[quota_error() for _ in range(4)], live("wear:internal", code, state),
+                    release_inputs=QUOTA_RELEASE_INPUTS,
+                )
+                self.assertEqual(report["failure"], failure)
+                self.assertEqual(self.mutations(), [])
+
+    def test_quota_fallback_rejects_missing_or_changed_inventory(self):
+        for tracks in (
+            quota_inventory()[1:],
+            [*quota_inventory(), track("PRIVATE_UNRELATED", 100004)],
+            [*quota_inventory()[:-1], track("wear:internal", 200006)],
+            [*quota_inventory(), track("PRIVATE_UNRELATED", 100004, status="draft")],
+        ):
+            with self.subTest(track_count=len(tracks)):
+                self.opener.open.reset_mock()
+                report = self.run_with(
+                    *quota_snapshot(tracks=tracks), response(status=204), release_inputs=QUOTA_RELEASE_INPUTS,
+                )
+                self.assertEqual(report["result"], "blocked")
+                self.assertIn(report["failure"], {"quota_inventory_mismatch", "unrelated_pending_release"})
+                self.assertEqual(self.mutations(), [("POST", f"{APP_URL}/edits"), ("DELETE", EDIT_URL)])
+
+    def test_quota_fallback_requires_exact_predecessor_signed_hash(self):
+        report = self.run_with(
+            *quota_snapshot(catalog=[]), response(status=204), release_inputs=QUOTA_RELEASE_INPUTS,
+        )
+        self.assertEqual(report["failure"], "quota_predecessor_hash_unavailable")
+        self.assertEqual(self.mutations(), [("POST", f"{APP_URL}/edits"), ("DELETE", EDIT_URL)])
+
+    def test_staged_wrong_notes_do_not_commit(self):
+        report = self.run_with(
+            *edit_snapshot(), response(bundle()),
+            response(track("alpha", PHONE, releaseNotes=[{"language": "en-US", "text": "PRIVATE_WRONG"}])),
+            response(status=204),
+        )
+        self.assertEqual(report["track_updates"]["alpha"]["result"], "track_receipt_notes_mismatch")
+        self.assertEqual(self.mutations()[-2:], [("PUT", f"{EDIT_URL}/tracks/alpha"), ("DELETE", EDIT_URL)])
 
     def test_invalid_archive_never_reaches_oauth(self):
         self.loader.side_effect = publish.ArtifactVerificationError("PRIVATE_PATH")

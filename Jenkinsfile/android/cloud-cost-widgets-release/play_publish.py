@@ -8,6 +8,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
+from play_alpha_status import lifecycle_error
 from play_preflight import (
     APPLICATION_URL, HTTP_TIMEOUT_SECONDS, PACKAGE_NAME, TRACKS as PRODUCTION_TRACKS, NoRedirect,
     PreflightError, get_access_token, request_json,
@@ -17,7 +18,7 @@ from play_submission_preflight import (
     filter_google_error, outcome, read_edit_section, read_google_error, read_live_track,
     repeated_field, require_edit_id, summarize_bundles, summarize_edit_track,
 )
-from verify_submission_artifacts import ArtifactVerificationError, load_phone_bundle
+from verify_submission_artifacts import ArtifactVerificationError, load_phone_bundle, read_archive
 
 
 RELEASE_NOTES = [
@@ -37,6 +38,12 @@ VERSION_NAME = "1.0.6"
 TRACKS = {PHONE_ALPHA: PHONE_CANDIDATE}
 GUARDED_TRACKS = (*TRACKS, *PRODUCTION_TRACKS, "internal", "wear:internal")
 PUBLISHED = "RELEASE_LIFECYCLE_STATE_PUBLISHED"
+QUOTA_BUILD = 8
+QUOTA_PIPELINE_SHA = "54a15793cca9cf2b3dd3fae3f5e2a080951e9565"
+QUOTA_REASON = "listing_releases_quota_exceeded"
+QUOTA_EXPECTED_ACTIVE = {
+    PHONE_ALPHA: PHONE_PREDECESSOR, "internal": 100005, "wear:internal": 200005,
+}
 UPLOAD_URL = (
     "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/"
     f"{PACKAGE_NAME}/edits"
@@ -117,13 +124,14 @@ def inspect_bundle_catalog(content, status, signed_digest):
     return snapshot
 
 
-def summarize_track_inventory(content, status):
+def summarize_track_inventory(content, status, require_quota_inventory=False):
     empty_inventory = {"kind": "androidpublisher#tracksListResponse"}
     if not content:
         raise PreflightError("invalid_response", status)
     inventory = repeated_field(content, "tracks", status, empty_inventory)
     targets = {track: outcome("missing", status) for track in TRACKS}
     seen = set()
+    quota_active = {}
     unrelated_pending = False
     for entry in inventory:
         track = entry.get("track")
@@ -131,27 +139,79 @@ def summarize_track_inventory(content, status):
             raise PreflightError("invalid_response", status)
         seen.add(track)
         snapshot = summarize_edit_track(entry, status, track)
-        if track not in TRACKS:
-            unrelated_pending |= snapshot["result"] == "pending_release"
-            continue
         custom_targeting = any(
             raw.get("countryTargeting", {}) != {} or "userFraction" in raw
             for raw in entry.get("releases", [])
         )
+        if require_quota_inventory and snapshot["releases"]:
+            quota_active[track] = (snapshot["releases"], custom_targeting)
+        if track not in TRACKS:
+            unrelated_pending |= snapshot["result"] == "pending_release"
+            continue
         snapshot["result"] = "incompatible_release"
         if not custom_targeting:
             for code, result in ((PHONE_PREDECESSOR, "predecessor"), (PHONE_CANDIDATE, "candidate")):
                 if snapshot["releases"] == [{"status": "completed", "version_codes": [code]}]:
                     snapshot["result"] = result
         targets[track] = snapshot
-    return outcome("unrelated_pending" if unrelated_pending else "ok", status, targets=targets)
+    if unrelated_pending:
+        return outcome("unrelated_pending", status, targets=targets)
+    if require_quota_inventory:
+        expected = {
+            track: ([{"status": "completed", "version_codes": [code]}], False)
+            for track, code in QUOTA_EXPECTED_ACTIVE.items()
+        }
+        if quota_active != expected:
+            return outcome("inventory_mismatch", status, targets=targets)
+    return outcome("ok", status, targets=targets)
 
 
-def check_live_tracks(opener, token, report):
+def check_quota_archive(input_directory, report, quota_tracks):
+    if report["build_number"] != QUOTA_BUILD or report["source_pipeline_sha"] != QUOTA_PIPELINE_SHA:
+        report.update(result="blocked", failure="quota_archive_unverified")
+        return False
+    try:
+        archive_bytes = read_archive(input_directory.resolve(), "alpha-status.json")
+        archive = json.loads(archive_bytes)
+    except (ArtifactVerificationError, OSError, ValueError, RecursionError):
+        report.update(result="blocked", failure="quota_archive_unverified")
+        return False
+    expected = {
+        track: outcome("ok", 200, releases=[{"lifecycle_state": PUBLISHED, "version_codes": [code]}])
+        for track, code in QUOTA_EXPECTED_ACTIVE.items()
+    }
+    expected.update({track: outcome("no_content", 204) for track in PRODUCTION_TRACKS})
+    if (
+        not isinstance(archive, dict)
+        or archive.get("package_name") != PACKAGE_NAME
+        or archive.get("result") != "checked"
+        or archive.get("oauth") != outcome("ok", 200)
+        or archive.get("tracks") != expected
+    ):
+        report.update(result="blocked", failure="quota_archive_unverified")
+        return False
+    if any(report["live_tracks"][track] != expected[track] for track in GUARDED_TRACKS if track not in quota_tracks):
+        report.update(result="blocked", failure="quota_lifecycle_mismatch")
+        return False
+    report["lifecycle_validation"] = {
+        "result": "quota_fallback",
+        "quota_tracks": quota_tracks,
+        "archive_build": QUOTA_BUILD,
+        "archive_sha256": hashlib.sha256(archive_bytes).hexdigest(),
+        "fresh_inventory": "not_attempted",
+    }
+    return True
+
+
+def check_live_tracks(opener, token, input_directory, report):
     for track in report["live_tracks"]:
-        report["live_tracks"][track] = read_live_track(opener, token, track)
+        report["live_tracks"][track] = read_live_track(opener, token, track, collect_error=lifecycle_error)
+    quota_tracks = []
     for track, snapshot in report["live_tracks"].items():
         result = snapshot["result"]
+        if result == "forbidden" and snapshot["http_status"] == 403 and snapshot.get("quota") == QUOTA_REASON:
+            quota_tracks.append(track)
+            continue
         if result == "pending_release":
             failure = "target_track_changed" if track == PHONE_ALPHA else "unrelated_pending_release"
             report.update(result="blocked", failure=failure)
@@ -171,18 +231,29 @@ def check_live_tracks(opener, token, report):
                 return False
         elif result not in {"ok", "no_content"}:
             return False
+    if quota_tracks:
+        return check_quota_archive(input_directory, report, quota_tracks)
+    report["lifecycle_validation"] = {"result": "fresh"}
     return True
 
 
 def check_edit_tracks(opener, token, edit_url, report):
+    quota_fallback = report["lifecycle_validation"]["result"] == "quota_fallback"
     inventory = read_edit_section(
-        opener, token, f"{edit_url}/tracks", summarize_track_inventory,
+        opener, token, f"{edit_url}/tracks", summarize_track_inventory, quota_fallback,
     )
     report["track_inventory"] = inventory
     if "targets" in inventory:
         report["edit_tracks"] = inventory.pop("targets")
+    if quota_fallback:
+        report["lifecycle_validation"]["fresh_inventory"] = (
+            "verified" if inventory["result"] == "ok" else inventory["result"]
+        )
     if inventory["result"] == "unrelated_pending":
         report.update(result="blocked", failure="unrelated_pending_release")
+        return False
+    if inventory["result"] == "inventory_mismatch":
+        report.update(result="blocked", failure="quota_inventory_mismatch")
         return False
     if inventory["result"] != "ok":
         return False
@@ -192,6 +263,8 @@ def check_edit_tracks(opener, token, edit_url, report):
     if snapshot["result"] not in {"predecessor", "candidate"}:
         report.update(result="blocked", failure="target_track_changed")
         return False
+    if quota_fallback:
+        return True
     if live_track["releases"][0]["version_codes"] != snapshot["releases"][0]["version_codes"]:
         report.update(result="blocked", failure="target_track_changed")
         return False
@@ -241,10 +314,20 @@ def stage_target_tracks(opener, token, edit_url, report):
             snapshot = summarize_edit_track(receipt, status, track)
             if snapshot["releases"] != [expected_release]:
                 raise PreflightError("track_receipt_mismatch", status)
+            staged_release = receipt["releases"][0]
+            matched_notes = {}
+            if "releaseNotes" in staged_release:
+                notes = staged_release["releaseNotes"]
+                if (
+                    not isinstance(notes, list) or len(notes) != len(RELEASE_NOTES)
+                    or not all(note in notes for note in RELEASE_NOTES)
+                ):
+                    raise PreflightError("track_receipt_notes_mismatch", status)
+                matched_notes["matched_note_locales"] = [note["language"] for note in RELEASE_NOTES]
         except PreflightError as error:
             report["track_updates"][track] = error_outcome(error)
             return False
-        report["track_updates"][track] = outcome("staged", status, release=expected_release)
+        report["track_updates"][track] = outcome("staged", status, release=expected_release, **matched_notes)
     return True
 
 
@@ -258,7 +341,7 @@ def commit_edit(opener, token, edit_url, edit_id):
 def observe_submission(opener, token):
     tracks = {}
     for track, code in TRACKS.items():
-        snapshot = read_live_track(opener, token, track)
+        snapshot = read_live_track(opener, token, track, collect_error=lifecycle_error)
         states = {
             release["lifecycle_state"] for release in snapshot.get("releases", [])
             if release["version_codes"] == [code]
@@ -267,6 +350,8 @@ def observe_submission(opener, token):
             snapshot["result"], snapshot["http_status"],
             expected_version_code=code, lifecycle_states=sorted(states),
         )
+        if "quota" in snapshot:
+            tracks[track]["quota"] = snapshot["quota"]
     observed = all(
         entry["lifecycle_states"] and set(entry["lifecycle_states"]) <= SUBMITTED_STATES
         for entry in tracks.values()
@@ -306,8 +391,12 @@ def publish_edit(opener, token, edit_id, phone_bundle, signed_digest, report):
             else:
                 report.update(result="blocked", failure="current_candidate_hash_unverified")
             return
-        if report["bundle_catalog"]["predecessor"]["result"] == "hash_conflict":
+        predecessor = report["bundle_catalog"]["predecessor"]["result"]
+        if predecessor == "hash_conflict":
             report.update(result="blocked", failure="predecessor_hash_conflict")
+            return
+        if report["lifecycle_validation"]["result"] == "quota_fallback" and predecessor != "hash_matches":
+            report.update(result="blocked", failure="quota_predecessor_hash_unavailable")
             return
         if not upload_phone_bundle(opener, token, edit_id, phone_bundle, signed_digest, report):
             return
@@ -356,6 +445,7 @@ def run_publish(input_directory, encoded, release_inputs):
         "artifact_verification": outcome(),
         "oauth": outcome(),
         "live_tracks": {track: outcome() for track in GUARDED_TRACKS},
+        "lifecycle_validation": {"result": "not_attempted"},
         "edit_insert": outcome(),
         "bundle_catalog": outcome(),
         "track_inventory": outcome(),
@@ -397,7 +487,7 @@ def run_publish(input_directory, encoded, release_inputs):
         report["oauth"] = error_outcome(error)
         return report
     report["oauth"] = outcome("ok", status)
-    if not check_live_tracks(opener, token, report):
+    if not check_live_tracks(opener, token, input_directory, report):
         return report
 
     try:

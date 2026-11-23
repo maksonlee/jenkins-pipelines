@@ -7,19 +7,19 @@
       <parameterDefinitions>
         <hudson.model.StringParameterDefinition>
           <name>MODE</name>
-          <description>alpha-status, phone-alpha-preflight, or closed-alpha-submit for the approved 1.0.6 phone bundle</description>
+          <description>alpha-status, phone-alpha-preflight, closed-alpha-submit, or alpha-receipt-audit</description>
           <defaultValue>alpha-status</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
           <name>SIGNED_BUILD</name>
-          <description>Approved phone-alpha-preflight build number, required for closed-alpha-submit</description>
+          <description>Approved phone-alpha-preflight build number for submission or receipt audit</description>
           <defaultValue/>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
           <name>SIGNED_SHA256</name>
-          <description>Approved phone bundle archive SHA-256, required for closed-alpha-submit</description>
+          <description>Approved phone bundle archive SHA-256 for submission or receipt audit</description>
           <defaultValue/>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
