@@ -7,10 +7,32 @@ import urllib.request
 from pathlib import Path
 
 from play_preflight import PACKAGE_NAME, NoRedirect, PreflightError, get_access_token
-from play_submission_preflight import error_outcome, outcome, read_live_track
+from play_submission_preflight import error_outcome, filter_google_error, outcome, read_google_error, read_live_track
 
 
 TRACK_NAMES = ('alpha', 'internal', 'production', 'wear:internal', 'wear:production')
+QUOTA_REASONS = {
+    'dailyLimitExceeded', 'quotaExceeded', 'rateLimitExceeded', 'userRateLimitExceeded',
+    'QUOTA_EXCEEDED', 'RATE_LIMIT_EXCEEDED',
+}
+
+
+def lifecycle_error(response):
+    error = read_google_error(response)
+    safe_details = filter_google_error(error)
+    message = error.get('message')
+    if isinstance(message, str) and 'listing releases quota exceeded' in message.casefold():
+        safe_details['quota'] = 'listing_releases_quota_exceeded'
+    reasons = {
+        item['reason']
+        for field in ('errors', 'details')
+        if isinstance(error.get(field), list)
+        for item in error[field]
+        if isinstance(item, dict) and isinstance(item.get('reason'), str) and item['reason'] in QUOTA_REASONS
+    }
+    if reasons:
+        safe_details['quota_reasons'] = sorted(reasons)
+    return safe_details
 
 
 def read_status(encoded):
@@ -22,7 +44,7 @@ def read_status(encoded):
         report['oauth'] = error_outcome(error)
         return report
     report['oauth'] = outcome('ok', status)
-    report['tracks'] = {track: read_live_track(opener, token, track) for track in TRACK_NAMES}
+    report['tracks'] = {track: read_live_track(opener, token, track, collect_error=lifecycle_error) for track in TRACK_NAMES}
     alpha = report['tracks']['alpha']
     if alpha['http_status'] in {200, 204} and alpha['result'] in {'ok', 'pending_release', 'no_content'}:
         report['result'] = 'checked'

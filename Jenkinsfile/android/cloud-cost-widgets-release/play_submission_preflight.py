@@ -115,9 +115,9 @@ def require_edit_id(content, status):
     return edit_id
 
 
-def read_live_track(opener, token, track):
+def read_live_track(opener, token, track, *, collect_error=None):
     try:
-        releases, status = read_track(opener, token, track)
+        releases, status = read_track(opener, token, track, collect_error=collect_error)
     except PreflightError as error:
         return error_outcome(error)
     if releases is None:

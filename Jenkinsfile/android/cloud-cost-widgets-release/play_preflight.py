@@ -158,13 +158,13 @@ def get_access_token(opener, encoded):
     return token, status
 
 
-def read_track(opener, token, track):
+def read_track(opener, token, track, *, collect_error=None):
     request = urllib.request.Request(
         f"{APPLICATION_URL}/tracks/{track}/releases",
         headers={"Authorization": f"Bearer {token}"},
         method="GET",
     )
-    content, status = request_json(opener, request, allow_no_content=True)
+    content, status = request_json(opener, request, allow_no_content=True, collect_error=collect_error)
     if content is None:
         return None, status
     # The API may omit the repeated releases field when the track has no releases.
