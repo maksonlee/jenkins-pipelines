@@ -14,8 +14,8 @@ from pathlib import Path
 
 
 PACKAGE = 'com.maksonlee.cloudcost.aws'
-VERSION_NAME = '1.0.7'
-PHONE_VERSION_CODE = '100008'
+VERSION_NAME = '1.0.8'
+PHONE_VERSION_CODE = '100009'
 PHONE_BUNDLE_FILENAME = f'phone-{VERSION_NAME}-{PHONE_VERSION_CODE}.aab'
 UPLOAD_CERTIFICATE_SHA256 = 'e11bc3918c83d0082bf28b72f2f99bc6f2867c38559f701cf4fdce0f3702cec7'
 ANDROID = '{http://schemas.android.com/apk/res/android}'

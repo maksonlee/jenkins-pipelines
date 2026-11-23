@@ -20,10 +20,10 @@ UPLOAD_URL = (
 )
 COMMIT_URL = f"{EDIT_URL}:commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW"
 ALPHA_URL = f"{APP_URL}/tracks/alpha/releases"
-PHONE = 100008
-PREDECESSOR = 100007
-PREDECESSOR_DIGEST = "911bd0a5c5383ff3348b2b692a5a94ba9a41a57d9dfb4f4703f86f3100bcbae9"
-PHONE_BUNDLE = b"verified test phone bytes for 1.0.7"
+PHONE = 100009
+PREDECESSOR = 100008
+PREDECESSOR_DIGEST = "32ed81f2f4d6e5ca32fed0818526758746dcbbdfb3fc49b8c72c983d61c40d59"
+PHONE_BUNDLE = b"verified test phone bytes for 1.0.8"
 SIGNED_DIGEST = hashlib.sha256(PHONE_BUNDLE).hexdigest()
 RELEASE_INPUTS = {
     "PRODUCT_SHA": "a" * 40,
@@ -40,12 +40,12 @@ NO_CONTENT = {"result": "no_content", "http_status": 204}
 TRACK_NAMES = ("alpha", "production", "wear:production", "internal", "wear:internal")
 EXPECTED_NOTES = [
     {"language": "en-US", "text": (
-        "The phone widget picker now shows a demo preview. Tap a home-screen widget to open "
-        "its budget details. Connected budgets can be refreshed manually from their details."
+        "Tap an unconfigured home-screen widget to choose a budget, or open the app’s Settings "
+        "to configure it. Select one budget before saving."
     )},
     {"language": "zh-TW", "text": (
-        "手機的小工具選擇器現在會顯示示範預覽。點一下桌面小工具即可開啟預算詳細資料。"
-        "已連接的預算可在詳情頁手動重新整理。"
+        "點一下尚未設定的桌面小工具即可選擇預算，也可以到 App 的「設定」重新設定原本的小工具。"
+        "選定一筆預算後才能儲存。"
     )},
 ]
 
@@ -176,7 +176,7 @@ class PlayPublishTest(unittest.TestCase):
         )
 
         self.assertEqual(report["result"], "committed")
-        self.assertEqual(report["version_name"], "1.0.7")
+        self.assertEqual(report["version_name"], "1.0.8")
         self.assertEqual(report["build_number"], 17)
         self.assertEqual(report["source_sha"], RELEASE_INPUTS["PRODUCT_SHA"])
         self.assertEqual(report["source_pipeline_sha"], RELEASE_INPUTS["PIPELINE_SHA"])
@@ -209,15 +209,16 @@ class PlayPublishTest(unittest.TestCase):
         self.assertEqual(requests[3].get_header("Content-type"), "application/octet-stream")
         self.assertEqual(json.loads(requests[4].data), {
             "track": "alpha",
-            "releases": [{"versionCodes": ["100008"], "status": "completed", "releaseNotes": EXPECTED_NOTES}],
+            "releases": [{"versionCodes": ["100009"], "status": "completed", "releaseNotes": EXPECTED_NOTES}],
         })
         self.assertIsNone(requests[5].data)
 
-    def test_quota_archive_requires_current_inventory_and_attests_audited_history(self):
+    def test_non_alpha_quota_archive_requires_current_inventory_and_attests_audited_history(self):
+        quota_tracks = TRACK_NAMES[1:]
         report = self.run_with(
             *completed_precommit(), response({"id": EDIT_ID}),
             http_error(403, "Listing releases quota exceeded. PRIVATE_TEXT"),
-            archive=preflight(quota_tracks=TRACK_NAMES),
+            archive=preflight(quota_tracks=quota_tracks),
         )
 
         self.assertEqual(report["result"], "committed")
@@ -225,16 +226,27 @@ class PlayPublishTest(unittest.TestCase):
         self.assertEqual(validation["result"], "quota_fallback")
         self.assertEqual(validation["archive_build"], 17)
         self.assertEqual(validation["fresh_inventory"], "verified")
-        self.assertEqual(validation["quota_tracks"], list(TRACK_NAMES))
-        self.assertEqual(validation["historical_evidence_builds"], {
-            "alpha": 12, "production": 8, "wear:production": 8, "internal": 8, "wear:internal": 8,
-        })
+        self.assertEqual(validation["quota_tracks"], list(quota_tracks))
+        self.assertEqual(validation["historical_evidence_builds"], {track: 15 for track in quota_tracks})
         self.assertEqual(report["review_observation"]["result"], "unconfirmed")
         self.assertEqual(report["review_observation"]["tracks"]["alpha"]["quota"], QUOTA_REASON)
         self.assertEqual(self.mutations(), [
             ("POST", f"{APP_URL}/edits"), ("POST", UPLOAD_URL),
             ("PUT", f"{EDIT_URL}/tracks/alpha"), ("POST", COMMIT_URL),
         ])
+
+    def test_alpha_quota_stops_before_oauth_even_with_other_tracks_attested(self):
+        for quota_tracks in (("alpha",), TRACK_NAMES):
+            with self.subTest(quota_tracks=quota_tracks):
+                report = self.run_with(archive=preflight(quota_tracks=quota_tracks))
+                self.assertEqual(report["result"], "blocked")
+                self.assertEqual(report["failure"], "alpha_preflight_quota_unverified")
+                self.assertEqual(report["blocking_track"], "alpha")
+                self.assertEqual(report["preflight_tracks"]["alpha"], {
+                    "result": "forbidden", "http_status": 403, "quota": QUOTA_REASON,
+                })
+        self.oauth.assert_not_called()
+        self.opener.open.assert_not_called()
 
     def test_exact_same_track_not_sent_predecessor_is_allowed(self):
         unsent = observed(PREDECESSOR, NOT_SENT)
@@ -250,7 +262,7 @@ class PlayPublishTest(unittest.TestCase):
                 )
                 self.assertEqual(report["result"], "committed")
                 self.assertEqual(report["review_observation"]["result"], "observed_not_sent_for_review")
-                self.assertEqual(report["lifecycle_validation"]["historical_evidence_builds"], {"wear:production": 8})
+                self.assertEqual(report["lifecycle_validation"]["historical_evidence_builds"], {"wear:production": 15})
                 self.assertEqual(self.operations().count(("POST", COMMIT_URL)), 1)
 
     def test_nonquota_errors_and_conflicting_observations_stop_before_oauth(self):
@@ -260,6 +272,9 @@ class PlayPublishTest(unittest.TestCase):
             ("alpha", NO_CONTENT),
             ("alpha", verified_track(PHONE)),
             ("alpha", {"result": "pending_release", "http_status": 200, "releases": [observed(PREDECESSOR, IN_REVIEW)]}),
+            ("alpha", {"result": "pending_release", "http_status": 200, "releases": [
+                observed(PREDECESSOR, IN_REVIEW), observed(PREDECESSOR - 1),
+            ]}),
             ("alpha", {"result": "pending_release", "http_status": 200, "releases": [observed(PHONE, NOT_SENT)]}),
             ("wear:internal", {"result": "pending_release", "http_status": 200, "releases": [observed(200005, NOT_SENT)]}),
             ("wear:internal", verified_track(200006)),
@@ -279,7 +294,7 @@ class PlayPublishTest(unittest.TestCase):
             (preflight(age_minutes=-1), "preflight_outside_age_limit"),
             ({**preflight(), "observed_at": "2026-11-23T09:59:00"}, "preflight_timestamp_invalid"),
             ({**preflight(), "package_name": "PRIVATE_PACKAGE"}, "preflight_archive_unverified"),
-            ({**preflight(quota_tracks=("alpha",)), "result": "checked"}, "preflight_archive_unverified"),
+            ({**preflight(quota_tracks=("internal",)), "result": "checked"}, "preflight_archive_unverified"),
         ]
         for archive, failure in cases:
             with self.subTest(failure=failure):
@@ -303,7 +318,7 @@ class PlayPublishTest(unittest.TestCase):
                 self.opener.open.reset_mock()
                 report = self.run_with(
                     *edit_snapshot(tracks=tracks), response(status=204),
-                    archive=preflight(quota_tracks=("alpha",)),
+                    archive=preflight(quota_tracks=("wear:internal",)),
                 )
                 self.assertEqual(report["failure"], failure)
                 self.assertEqual(self.mutations(), [("POST", f"{APP_URL}/edits"), ("DELETE", EDIT_URL)])

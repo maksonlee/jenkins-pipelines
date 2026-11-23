@@ -8,7 +8,7 @@ import verify_bundles as verifier
 from verify_bundles import VerificationError, require_signature, signer_fingerprint, verify_manifest
 
 
-def manifest(version_code, minimum, target, feature='', metadata='', version='1.0.7'):
+def manifest(version_code, minimum, target, feature='', metadata='', version='1.0.8'):
     return f'''<manifest xmlns:android="http://schemas.android.com/apk/res/android"
         package="com.maksonlee.cloudcost.aws" android:versionName="{version}" android:versionCode="{version_code}">
         <uses-sdk android:minSdkVersion="{minimum}" android:targetSdkVersion="{target}"/>
@@ -22,20 +22,20 @@ STANDALONE = '<meta-data android:name="com.google.android.wearable.standalone" a
 
 class ManifestTest(unittest.TestCase):
     def test_phone_and_standalone_watch(self):
-        phone = verify_manifest(manifest('100008', '26', '36'), '1.0.7', '100008', 'phone')
+        phone = verify_manifest(manifest('100009', '26', '36'), '1.0.8', '100009', 'phone')
         wear = verify_manifest(manifest('200006', '30', '35', WATCH, STANDALONE, version='1.0.5'), '1.0.5', '200006', 'wear')
         self.assertEqual((phone['form_factor'], wear['form_factor']), ('phone', 'wear'))
 
     def test_rejects_wrong_version_wrong_target_or_swapped_form_factor(self):
         for xml in (
-            manifest('100008', '26', '36', version='1.0.6'),
-            manifest('100007', '26', '36'),
+            manifest('100009', '26', '36', version='1.0.7'),
+            manifest('100008', '26', '36'),
             manifest('200006', '26', '36'),
-            manifest('100008', '26', '35'),
-            manifest('100008', '26', '36', WATCH),
+            manifest('100009', '26', '35'),
+            manifest('100009', '26', '36', WATCH),
         ):
             with self.subTest(manifest=xml), self.assertRaises(VerificationError):
-                verify_manifest(xml, '1.0.7', '100008', 'phone')
+                verify_manifest(xml, '1.0.8', '100009', 'phone')
 
     def test_rejects_optional_watch_hardware_or_missing_standalone_declaration(self):
         for xml in (
@@ -85,26 +85,26 @@ class PhoneArchiveTest(unittest.TestCase):
         tool.write_bytes(b'bundletool fixture')
         self.enterContext(patch.multiple(verifier, BUNDLETOOL=tool, BUNDLETOOL_SHA=verifier.sha256(tool)))
         self.enterContext(patch.dict('os.environ', {
-            'PRODUCT_SHA': self.source_commit, 'VERSION_NAME': '1.0.7', 'PHONE_VERSION_CODE': '100008',
+            'PRODUCT_SHA': self.source_commit, 'VERSION_NAME': '1.0.8', 'PHONE_VERSION_CODE': '100009',
         }))
 
     def test_only_phone_bundle_is_verified_and_archived(self):
-        result = verify_manifest(manifest('100008', '26', '36'), '1.0.7', '100008', 'phone') | {
+        result = verify_manifest(manifest('100009', '26', '36'), '1.0.8', '100009', 'phone') | {
             'sha256': verifier.sha256(self.bundle),
             'upload_certificate_sha256': verifier.UPLOAD_CERTIFICATE_SHA256,
         }
         with patch.object(verifier, 'verify_bundle', return_value=result) as verify:
             verifier.archive_phone_bundle(self.root, self.evidence)
-        verify.assert_called_once_with(self.bundle, 'phone', '1.0.7', '100008', verifier.UPLOAD_CERTIFICATE_SHA256)
+        verify.assert_called_once_with(self.bundle, 'phone', '1.0.8', '100009', verifier.UPLOAD_CERTIFICATE_SHA256)
         archive = self.evidence / 'bundles'
-        self.assertEqual({path.name for path in archive.iterdir()}, {'phone-1.0.7-100008.aab', 'SHA256SUMS'})
-        self.assertEqual((archive / 'phone-1.0.7-100008.aab').read_bytes(), self.bundle.read_bytes())
+        self.assertEqual({path.name for path in archive.iterdir()}, {'phone-1.0.8-100009.aab', 'SHA256SUMS'})
+        self.assertEqual((archive / 'phone-1.0.8-100009.aab').read_bytes(), self.bundle.read_bytes())
         self.assertEqual((archive / 'SHA256SUMS').read_text(encoding='ascii').splitlines(), [
-            f"{result['sha256']}  phone-1.0.7-100008.aab",
+            f"{result['sha256']}  phone-1.0.8-100009.aab",
         ])
         report = json.loads((self.evidence / 'signed-bundles.json').read_text(encoding='utf-8'))
         self.assertEqual(report['source_commit'], self.source_commit)
-        self.assertEqual(report['bundles'], [result | {'file': 'phone-1.0.7-100008.aab'}])
+        self.assertEqual(report['bundles'], [result | {'file': 'phone-1.0.8-100009.aab'}])
 
     def test_rejects_untrusted_signing_certificate_before_checking_bundle(self):
         self.certificate.write_text('0' * 64 + '\n', encoding='ascii')

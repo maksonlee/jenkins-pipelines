@@ -18,7 +18,7 @@ class SubmissionArtifactTest(unittest.TestCase):
         self.digest = hashlib.sha256(self.input_bytes).hexdigest()
         self.source_commit = 'ab' * 20
         self.pipeline_commit = 'cd' * 20
-        self.bundle = self.root / 'bundles' / 'phone-1.0.7-100008.aab'
+        self.bundle = self.root / 'bundles' / 'phone-1.0.8-100009.aab'
         for name, value in (
             ('source-commit.txt', self.source_commit),
             ('pipeline-commit.txt', self.pipeline_commit),
@@ -31,7 +31,7 @@ class SubmissionArtifactTest(unittest.TestCase):
             'source_commit': self.source_commit,
             'bundletool_sha256': verifier.BUNDLETOOL_SHA,
             'bundles': [{
-                'package': 'com.maksonlee.cloudcost.aws', 'version_name': '1.0.7', 'version_code': '100008',
+                'package': 'com.maksonlee.cloudcost.aws', 'version_name': '1.0.8', 'version_code': '100009',
                 'min_sdk': '26', 'target_sdk': '36', 'form_factor': 'phone', 'sha256': self.digest,
                 'upload_certificate_sha256': verifier.UPLOAD_CERTIFICATE_SHA256, 'file': self.bundle.name,
             }],
@@ -68,7 +68,7 @@ class SubmissionArtifactTest(unittest.TestCase):
     def test_rejects_wrong_target_or_signer_in_report(self):
         bundle = self.report['bundles'][0]
         for field, wrong_value in (
-            ('form_factor', 'wear'), ('version_name', '1.0.6'), ('version_code', '100007'), ('target_sdk', '35'),
+            ('form_factor', 'wear'), ('version_name', '1.0.7'), ('version_code', '100008'), ('target_sdk', '35'),
             ('upload_certificate_sha256', '0' * 64),
         ):
             original = bundle[field]
@@ -113,4 +113,4 @@ class SubmissionArtifactTest(unittest.TestCase):
         self.assertEqual(report['source_commit'], self.source_commit)
         self.assertEqual(report['source_pipeline_commit'], self.pipeline_commit)
         self.assertEqual(report['source_build'], 17)
-        self.assertEqual(report['bundle_sha256'], {'100008': self.digest})
+        self.assertEqual(report['bundle_sha256'], {'100009': self.digest})

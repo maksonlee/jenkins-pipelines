@@ -31,9 +31,9 @@ pipeline {
     }
 
     environment {
-        PRODUCT_SHA = '8e0cfc4697d073acdb22a97b397a79382fafed02'
-        VERSION_NAME = '1.0.7'
-        PHONE_VERSION_CODE = '100008'
+        PRODUCT_SHA = 'f549ab2b64335770bb923a9559b34cc85521cce3'
+        VERSION_NAME = '1.0.8'
+        PHONE_VERSION_CODE = '100009'
         RELEASE_TOOLS = 'Jenkinsfile/android/cloud-cost-widgets-release'
     }
 
@@ -166,7 +166,7 @@ python3 "$RELEASE_TOOLS/verify_submission_artifacts.py" signed-input/release-evi
             steps {
                 script {
                     writeFile file: 'release-evidence/release-sequencing.txt', text:
-                            'Requested release target is Closed testing Alpha for the phone app, version 100007 to 100008.\n' +
+                            'Requested release target is Closed testing Alpha for the phone app, version 100008 to 100009.\n' +
                             'Open evidence includes intended review access, live AWS, physical devices, Play-installed pairing, and final listing and privacy declarations.\n'
                     writeFile file: 'release-evidence/closed-alpha-submit.json', text:
                             '{"result":"outcome-unavailable","reason":"verify-live-state-before-any-other-submission"}\n'

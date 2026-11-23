@@ -1,4 +1,4 @@
-"""Advance the existing phone closed Alpha from 100007 to the signed 100008."""
+"""Advance the existing phone closed Alpha from 100008 to the signed 100009."""
 
 import hashlib
 import json
@@ -24,32 +24,31 @@ from verify_submission_artifacts import ArtifactVerificationError, load_phone_bu
 
 RELEASE_NOTES = [
     {"language": "en-US", "text": (
-        "The phone widget picker now shows a demo preview. Tap a home-screen widget to open "
-        "its budget details. Connected budgets can be refreshed manually from their details."
+        "Tap an unconfigured home-screen widget to choose a budget, or open the app’s Settings "
+        "to configure it. Select one budget before saving."
     )},
     {"language": "zh-TW", "text": (
-        "手機的小工具選擇器現在會顯示示範預覽。點一下桌面小工具即可開啟預算詳細資料。"
-        "已連接的預算可在詳情頁手動重新整理。"
+        "點一下尚未設定的桌面小工具即可選擇預算，也可以到 App 的「設定」重新設定原本的小工具。"
+        "選定一筆預算後才能儲存。"
     )},
 ]
 PHONE_ALPHA = "alpha"
-PHONE_PRIOR_PUBLISHED = 100006
-PHONE_PREDECESSOR = 100007
-PHONE_PREDECESSOR_DIGEST = "911bd0a5c5383ff3348b2b692a5a94ba9a41a57d9dfb4f4703f86f3100bcbae9"
-PHONE_CANDIDATE = 100008
-VERSION_NAME = "1.0.7"
+PHONE_PRIOR_PUBLISHED = 100007
+PHONE_PREDECESSOR = 100008
+PHONE_PREDECESSOR_DIGEST = "32ed81f2f4d6e5ca32fed0818526758746dcbbdfb3fc49b8c72c983d61c40d59"
+PHONE_CANDIDATE = 100009
+VERSION_NAME = "1.0.8"
 TRACKS = {PHONE_ALPHA: PHONE_CANDIDATE}
 GUARDED_TRACKS = (*TRACKS, *PRODUCTION_TRACKS, "internal", "wear:internal")
 PUBLISHED = "RELEASE_LIFECYCLE_STATE_PUBLISHED"
 NOT_SENT = "RELEASE_LIFECYCLE_STATE_NOT_SENT_FOR_REVIEW"
 QUOTA_REASON = "listing_releases_quota_exceeded"
 MAX_PREFLIGHT_AGE_SECONDS = 30 * 60
-# Build #12 verified the prior Alpha bundle in a fresh edit. Build #8 recorded the other tracks.
+# Build #14 committed the signed predecessor. Build #15 observed it in review and checked the other tracks.
 EXPECTED_ACTIVE = {
     PHONE_ALPHA: PHONE_PREDECESSOR, "internal": 100005, "wear:internal": 200005,
 }
-ALPHA_AUDIT_BUILD = 12
-OTHER_TRACKS_AUDIT_BUILD = 8
+OTHER_TRACKS_AUDIT_BUILD = 15
 UPLOAD_URL = (
     "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/"
     f"{PACKAGE_NAME}/edits"
@@ -212,6 +211,10 @@ def check_preflight_archive(input_directory, report):
             and snapshot.get("http_status") == 403
             and snapshot.get("quota") == QUOTA_REASON
         ):
+            if track == PHONE_ALPHA:
+                report["preflight_tracks"][track] = outcome("forbidden", 403, quota=QUOTA_REASON)
+                report.update(result="blocked", failure="alpha_preflight_quota_unverified", blocking_track=track)
+                return False
             quota_tracks.append(track)
             proven_tracks[track] = outcome("forbidden", 403, quota=QUOTA_REASON)
             continue
@@ -243,8 +246,7 @@ def check_preflight_archive(input_directory, report):
     }
     if quota_tracks:
         report["lifecycle_validation"]["historical_evidence_builds"] = {
-            track: ALPHA_AUDIT_BUILD if track == PHONE_ALPHA else OTHER_TRACKS_AUDIT_BUILD
-            for track in quota_tracks
+            track: OTHER_TRACKS_AUDIT_BUILD for track in quota_tracks
         }
     return True
 
