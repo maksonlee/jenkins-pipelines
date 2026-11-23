@@ -27,14 +27,14 @@ class AlphaAuditTest(unittest.TestCase):
             (None, "cd" * 32, False, {"en-US": "absent", "zh-TW": "absent"}),
         ):
             with self.subTest(observed=observed, notes=note_results):
-                release = {"status": "completed", "versionCodes": ["100007"]}
+                release = {"status": "completed", "versionCodes": ["100008"]}
                 if notes is not None:
                     release["releaseNotes"] = notes
                 opener = Mock()
                 opener.open.side_effect = [
                     response({"id": "PRIVATE_EDIT"}),
                     response({"track": "alpha", "releases": [release]}),
-                    response({"bundles": [{"versionCode": 100007, "sha256": digest}]}),
+                    response({"bundles": [{"versionCode": 100008, "sha256": digest}]}),
                     response(status=204),
                 ]
                 with patch.object(audit.urllib.request, "build_opener", return_value=opener), \

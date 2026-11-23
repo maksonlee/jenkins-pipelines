@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 from play_preflight import PACKAGE_NAME, NoRedirect, PreflightError, get_access_token
@@ -44,10 +45,19 @@ def read_status(encoded):
         report['oauth'] = error_outcome(error)
         return report
     report['oauth'] = outcome('ok', status)
+    report['observed_at'] = datetime.now(timezone.utc).isoformat()
     report['tracks'] = {track: read_live_track(opener, token, track, collect_error=lifecycle_error) for track in TRACK_NAMES}
-    alpha = report['tracks']['alpha']
-    if alpha['http_status'] in {200, 204} and alpha['result'] in {'ok', 'pending_release', 'no_content'}:
-        report['result'] = 'checked'
+    quota_limited = False
+    for track in report['tracks'].values():
+        if track['http_status'] == 200 and track['result'] in {'ok', 'pending_release'}:
+            continue
+        if track['http_status'] == 204 and track['result'] == 'no_content':
+            continue
+        if track['http_status'] == 403 and track.get('quota') == 'listing_releases_quota_exceeded':
+            quota_limited = True
+            continue
+        return report
+    report['result'] = 'quota_limited' if quota_limited else 'checked'
     return report
 
 
@@ -56,7 +66,7 @@ def main():
         raise SystemExit('Usage: play_alpha_status.py REPORT_PATH')
     report = read_status(os.environ.pop('PLAY_SERVICE_JSON_B64', ''))
     Path(sys.argv[1]).write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
-    return 0 if report['result'] == 'checked' else 1
+    return 0 if report['result'] in {'checked', 'quota_limited'} else 1
 
 
 if __name__ == '__main__':

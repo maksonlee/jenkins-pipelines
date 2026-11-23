@@ -1,4 +1,4 @@
-"""Advance the existing phone closed Alpha from 100006 to the signed 100007."""
+"""Advance the existing phone closed Alpha from 100007 to the signed 100008."""
 
 import hashlib
 import json
@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from play_alpha_status import lifecycle_error
@@ -14,7 +15,7 @@ from play_preflight import (
     PreflightError, get_access_token, request_json,
 )
 from play_submission_preflight import (
-    BUNDLE_SHA256, edit_request, error_outcome,
+    edit_request, error_outcome,
     filter_google_error, outcome, read_edit_section, read_google_error, read_live_track,
     repeated_field, require_edit_id, summarize_bundles, summarize_edit_track,
 )
@@ -23,27 +24,32 @@ from verify_submission_artifacts import ArtifactVerificationError, load_phone_bu
 
 RELEASE_NOTES = [
     {"language": "en-US", "text": (
-        "Phone home-screen widgets show one budget, start at 2×1, and open budget details when tapped. "
-        "The app icon has more room inside the launcher mask."
+        "The phone widget picker now shows a demo preview. Tap a home-screen widget to open "
+        "its budget details. Connected budgets can be refreshed manually from their details."
     )},
     {"language": "zh-TW", "text": (
-        "手機桌面小工具每張顯示一筆預算，預設為 2×1。點一下即可開啟預算詳細資料。"
-        "App 圖示的雲朵在遮罩內保留更多留白。"
+        "手機的小工具選擇器現在會顯示示範預覽。點一下桌面小工具即可開啟預算詳細資料。"
+        "已連接的預算可在詳情頁手動重新整理。"
     )},
 ]
 PHONE_ALPHA = "alpha"
-PHONE_PREDECESSOR = 100006
-PHONE_CANDIDATE = 100007
-VERSION_NAME = "1.0.6"
+PHONE_PRIOR_PUBLISHED = 100006
+PHONE_PREDECESSOR = 100007
+PHONE_PREDECESSOR_DIGEST = "911bd0a5c5383ff3348b2b692a5a94ba9a41a57d9dfb4f4703f86f3100bcbae9"
+PHONE_CANDIDATE = 100008
+VERSION_NAME = "1.0.7"
 TRACKS = {PHONE_ALPHA: PHONE_CANDIDATE}
 GUARDED_TRACKS = (*TRACKS, *PRODUCTION_TRACKS, "internal", "wear:internal")
 PUBLISHED = "RELEASE_LIFECYCLE_STATE_PUBLISHED"
-QUOTA_BUILD = 8
-QUOTA_PIPELINE_SHA = "54a15793cca9cf2b3dd3fae3f5e2a080951e9565"
+NOT_SENT = "RELEASE_LIFECYCLE_STATE_NOT_SENT_FOR_REVIEW"
 QUOTA_REASON = "listing_releases_quota_exceeded"
-QUOTA_EXPECTED_ACTIVE = {
+MAX_PREFLIGHT_AGE_SECONDS = 30 * 60
+# Build #12 verified the prior Alpha bundle in a fresh edit. Build #8 recorded the other tracks.
+EXPECTED_ACTIVE = {
     PHONE_ALPHA: PHONE_PREDECESSOR, "internal": 100005, "wear:internal": 200005,
 }
+ALPHA_AUDIT_BUILD = 12
+OTHER_TRACKS_AUDIT_BUILD = 8
 UPLOAD_URL = (
     "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/"
     f"{PACKAGE_NAME}/edits"
@@ -109,29 +115,28 @@ def inspect_bundle_catalog(content, status, signed_digest):
         snapshot["newer_version_codes"] = newer
         snapshot["unexpected_version_codes"] = unexpected
     predecessor_hash = hashes.get(PHONE_PREDECESSOR)
-    expected_predecessor_hash = BUNDLE_SHA256[PHONE_PREDECESSOR]
     if predecessor_hash is None:
         comparison = "hash_unavailable"
-    elif isinstance(predecessor_hash, str) and predecessor_hash.lower() == expected_predecessor_hash:
+    elif isinstance(predecessor_hash, str) and predecessor_hash.lower() == PHONE_PREDECESSOR_DIGEST:
         comparison = "hash_matches"
     else:
         comparison = "hash_conflict"
     snapshot["predecessor"] = {
         "version_code": PHONE_PREDECESSOR,
-        "expected_sha256": expected_predecessor_hash,
+        "expected_sha256": PHONE_PREDECESSOR_DIGEST,
         "result": comparison,
     }
     return snapshot
 
 
-def summarize_track_inventory(content, status, require_quota_inventory=False):
+def summarize_track_inventory(content, status):
     empty_inventory = {"kind": "androidpublisher#tracksListResponse"}
     if not content:
         raise PreflightError("invalid_response", status)
     inventory = repeated_field(content, "tracks", status, empty_inventory)
     targets = {track: outcome("missing", status) for track in TRACKS}
     seen = set()
-    quota_active = {}
+    active = {}
     unrelated_pending = False
     for entry in inventory:
         track = entry.get("track")
@@ -143,132 +148,124 @@ def summarize_track_inventory(content, status, require_quota_inventory=False):
             raw.get("countryTargeting", {}) != {} or "userFraction" in raw
             for raw in entry.get("releases", [])
         )
-        if require_quota_inventory and snapshot["releases"]:
-            quota_active[track] = (snapshot["releases"], custom_targeting)
+        if snapshot["releases"]:
+            active[track] = (snapshot["releases"], custom_targeting)
         if track not in TRACKS:
             unrelated_pending |= snapshot["result"] == "pending_release"
             continue
-        snapshot["result"] = "incompatible_release"
-        if not custom_targeting:
-            for code, result in ((PHONE_PREDECESSOR, "predecessor"), (PHONE_CANDIDATE, "candidate")):
-                if snapshot["releases"] == [{"status": "completed", "version_codes": [code]}]:
-                    snapshot["result"] = result
+        compatible = snapshot["releases"] == [{"status": "completed", "version_codes": [PHONE_PREDECESSOR]}]
+        snapshot["result"] = "predecessor" if compatible and not custom_targeting else "incompatible_release"
         targets[track] = snapshot
     if unrelated_pending:
         return outcome("unrelated_pending", status, targets=targets)
-    if require_quota_inventory:
-        expected = {
-            track: ([{"status": "completed", "version_codes": [code]}], False)
-            for track, code in QUOTA_EXPECTED_ACTIVE.items()
-        }
-        if quota_active != expected:
-            return outcome("inventory_mismatch", status, targets=targets)
+    expected = {
+        track: ([{"status": "completed", "version_codes": [code]}], False)
+        for track, code in EXPECTED_ACTIVE.items()
+    }
+    if active != expected:
+        return outcome("inventory_mismatch", status, targets=targets)
     return outcome("ok", status, targets=targets)
 
 
-def check_quota_archive(input_directory, report, quota_tracks):
-    if report["build_number"] != QUOTA_BUILD or report["source_pipeline_sha"] != QUOTA_PIPELINE_SHA:
-        report.update(result="blocked", failure="quota_archive_unverified")
-        return False
+def published_release(code):
+    return {"lifecycle_state": PUBLISHED, "version_codes": [code]}
+
+
+def check_preflight_archive(input_directory, report):
     try:
         archive_bytes = read_archive(input_directory.resolve(), "alpha-status.json")
         archive = json.loads(archive_bytes)
     except (ArtifactVerificationError, OSError, ValueError, RecursionError):
-        report.update(result="blocked", failure="quota_archive_unverified")
+        report.update(result="blocked", failure="preflight_archive_unverified")
         return False
-    expected = {
-        track: outcome("ok", 200, releases=[{"lifecycle_state": PUBLISHED, "version_codes": [code]}])
-        for track, code in QUOTA_EXPECTED_ACTIVE.items()
-    }
-    expected.update({track: outcome("no_content", 204) for track in PRODUCTION_TRACKS})
     if (
         not isinstance(archive, dict)
         or archive.get("package_name") != PACKAGE_NAME
-        or archive.get("result") != "checked"
+        or archive.get("result") not in ("checked", "quota_limited")
         or archive.get("oauth") != outcome("ok", 200)
-        or archive.get("tracks") != expected
+        or not isinstance(archive.get("tracks"), dict)
+        or set(archive["tracks"]) != set(GUARDED_TRACKS)
     ):
-        report.update(result="blocked", failure="quota_archive_unverified")
+        report.update(result="blocked", failure="preflight_archive_unverified")
         return False
-    if any(report["live_tracks"][track] != expected[track] for track in GUARDED_TRACKS if track not in quota_tracks):
-        report.update(result="blocked", failure="quota_lifecycle_mismatch")
+    try:
+        observed_at = datetime.fromisoformat(archive.get("observed_at", "").replace("Z", "+00:00"))
+        if observed_at.utcoffset() != timedelta(0):
+            raise ValueError("expected UTC observation")
+        age = (datetime.now(timezone.utc) - observed_at).total_seconds()
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        report.update(result="blocked", failure="preflight_timestamp_invalid")
         return False
+    if not 0 <= age <= MAX_PREFLIGHT_AGE_SECONDS:
+        report.update(result="blocked", failure="preflight_outside_age_limit")
+        return False
+
+    quota_tracks = []
+    proven_tracks = {}
+    for track in GUARDED_TRACKS:
+        snapshot = archive["tracks"][track]
+        if not isinstance(snapshot, dict) or type(snapshot.get("http_status")) is not int:
+            report.update(result="blocked", failure="preflight_track_unverified", blocking_track=track)
+            return False
+        if (
+            snapshot.get("result") == "forbidden"
+            and snapshot.get("http_status") == 403
+            and snapshot.get("quota") == QUOTA_REASON
+        ):
+            quota_tracks.append(track)
+            proven_tracks[track] = outcome("forbidden", 403, quota=QUOTA_REASON)
+            continue
+        if track in EXPECTED_ACTIVE:
+            allowed = [outcome("ok", 200, releases=[published_release(EXPECTED_ACTIVE[track])])]
+        else:
+            allowed = [outcome("no_content", 204)]
+        if track == PHONE_ALPHA:
+            unsent = {"lifecycle_state": NOT_SENT, "version_codes": [PHONE_PREDECESSOR]}
+            previous = published_release(PHONE_PRIOR_PUBLISHED)
+            for releases in ([unsent], [unsent, previous], [previous, unsent]):
+                allowed.append(outcome("pending_release", 200, releases=releases))
+        if snapshot not in allowed:
+            report.update(result="blocked", failure="preflight_track_unverified", blocking_track=track)
+            return False
+        proven_tracks[track] = snapshot
+    if bool(quota_tracks) != (archive["result"] == "quota_limited"):
+        report.update(result="blocked", failure="preflight_archive_unverified")
+        return False
+
+    report["preflight_tracks"] = proven_tracks
     report["lifecycle_validation"] = {
-        "result": "quota_fallback",
+        "result": "quota_fallback" if quota_tracks else "signed_preflight",
         "quota_tracks": quota_tracks,
-        "archive_build": QUOTA_BUILD,
+        "archive_build": report["build_number"],
         "archive_sha256": hashlib.sha256(archive_bytes).hexdigest(),
+        "observed_at": observed_at.isoformat(),
         "fresh_inventory": "not_attempted",
     }
-    return True
-
-
-def check_live_tracks(opener, token, input_directory, report):
-    for track in report["live_tracks"]:
-        report["live_tracks"][track] = read_live_track(opener, token, track, collect_error=lifecycle_error)
-    quota_tracks = []
-    for track, snapshot in report["live_tracks"].items():
-        result = snapshot["result"]
-        if result == "forbidden" and snapshot["http_status"] == 403 and snapshot.get("quota") == QUOTA_REASON:
-            quota_tracks.append(track)
-            continue
-        if result == "pending_release":
-            failure = "target_track_changed" if track == PHONE_ALPHA else "unrelated_pending_release"
-            report.update(result="blocked", failure=failure)
-            return False
-        if track == PHONE_ALPHA:
-            if result in {"no_content", "not_found"}:
-                report.update(result="blocked", failure="target_lifecycle_unverified")
-                return False
-            if result != "ok":
-                return False
-            expected = [
-                [{"lifecycle_state": PUBLISHED, "version_codes": [code]}]
-                for code in (PHONE_PREDECESSOR, PHONE_CANDIDATE)
-            ]
-            if snapshot["releases"] not in expected:
-                report.update(result="blocked", failure="target_track_changed")
-                return False
-        elif result not in {"ok", "no_content"}:
-            return False
     if quota_tracks:
-        return check_quota_archive(input_directory, report, quota_tracks)
-    report["lifecycle_validation"] = {"result": "fresh"}
+        report["lifecycle_validation"]["historical_evidence_builds"] = {
+            track: ALPHA_AUDIT_BUILD if track == PHONE_ALPHA else OTHER_TRACKS_AUDIT_BUILD
+            for track in quota_tracks
+        }
     return True
 
 
 def check_edit_tracks(opener, token, edit_url, report):
-    quota_fallback = report["lifecycle_validation"]["result"] == "quota_fallback"
     inventory = read_edit_section(
-        opener, token, f"{edit_url}/tracks", summarize_track_inventory, quota_fallback,
+        opener, token, f"{edit_url}/tracks", summarize_track_inventory,
     )
     report["track_inventory"] = inventory
     if "targets" in inventory:
         report["edit_tracks"] = inventory.pop("targets")
-    if quota_fallback:
-        report["lifecycle_validation"]["fresh_inventory"] = (
-            "verified" if inventory["result"] == "ok" else inventory["result"]
-        )
+    report["lifecycle_validation"]["fresh_inventory"] = (
+        "verified" if inventory["result"] == "ok" else inventory["result"]
+    )
     if inventory["result"] == "unrelated_pending":
         report.update(result="blocked", failure="unrelated_pending_release")
         return False
     if inventory["result"] == "inventory_mismatch":
-        report.update(result="blocked", failure="quota_inventory_mismatch")
+        report.update(result="blocked", failure="fresh_inventory_mismatch")
         return False
-    if inventory["result"] != "ok":
-        return False
-
-    snapshot = report["edit_tracks"][PHONE_ALPHA]
-    live_track = report["live_tracks"][PHONE_ALPHA]
-    if snapshot["result"] not in {"predecessor", "candidate"}:
-        report.update(result="blocked", failure="target_track_changed")
-        return False
-    if quota_fallback:
-        return True
-    if live_track["releases"][0]["version_codes"] != snapshot["releases"][0]["version_codes"]:
-        report.update(result="blocked", failure="target_track_changed")
-        return False
-    return True
+    return inventory["result"] == "ok"
 
 
 def upload_phone_bundle(opener, token, edit_id, phone_bundle, signed_digest, report):
@@ -356,7 +353,13 @@ def observe_submission(opener, token):
         entry["lifecycle_states"] and set(entry["lifecycle_states"]) <= SUBMITTED_STATES
         for entry in tracks.values()
     )
-    return {"result": "observed_submitted" if observed else "unconfirmed", "tracks": tracks}
+    if observed:
+        result = "observed_submitted"
+    elif tracks[PHONE_ALPHA]["lifecycle_states"] == [NOT_SENT]:
+        result = "observed_not_sent_for_review"
+    else:
+        result = "unconfirmed"
+    return {"result": result, "tracks": tracks}
 
 
 def cleanup_edit(opener, token, edit_url):
@@ -384,19 +387,12 @@ def publish_edit(opener, token, edit_id, phone_bundle, signed_digest, report):
             return
         if report["bundle_catalog"]["result"] != "ok":
             return
-        if report["edit_tracks"][PHONE_ALPHA]["result"] == "candidate":
-            candidate = report["bundle_catalog"]["candidates"][PHONE_ALPHA]
-            if candidate["result"] == "hash_matches":
-                report["result"] = "already_current"
-            else:
-                report.update(result="blocked", failure="current_candidate_hash_unverified")
-            return
         predecessor = report["bundle_catalog"]["predecessor"]["result"]
         if predecessor == "hash_conflict":
             report.update(result="blocked", failure="predecessor_hash_conflict")
             return
-        if report["lifecycle_validation"]["result"] == "quota_fallback" and predecessor != "hash_matches":
-            report.update(result="blocked", failure="quota_predecessor_hash_unavailable")
+        if predecessor != "hash_matches":
+            report.update(result="blocked", failure="predecessor_hash_unavailable")
             return
         if not upload_phone_bundle(opener, token, edit_id, phone_bundle, signed_digest, report):
             return
@@ -428,8 +424,6 @@ def publish_edit(opener, token, edit_id, phone_bundle, signed_digest, report):
             report["cleanup"] = cleanup_edit(opener, token, edit_url)
             if report["cleanup"]["result"] != "deleted":
                 report["failure"] = "cleanup_failed"
-                if report["result"] == "already_current":
-                    report["result"] = "failed"
 
 
 def run_publish(input_directory, encoded, release_inputs):
@@ -444,7 +438,7 @@ def run_publish(input_directory, encoded, release_inputs):
         "predecessor_version_code": PHONE_PREDECESSOR,
         "artifact_verification": outcome(),
         "oauth": outcome(),
-        "live_tracks": {track: outcome() for track in GUARDED_TRACKS},
+        "preflight_tracks": {},
         "lifecycle_validation": {"result": "not_attempted"},
         "edit_insert": outcome(),
         "bundle_catalog": outcome(),
@@ -479,6 +473,8 @@ def run_publish(input_directory, encoded, release_inputs):
         report["artifact_verification"] = outcome("hash_mismatch")
         return report
     report["artifact_verification"] = outcome("verified")
+    if not check_preflight_archive(input_directory, report):
+        return report
 
     opener = urllib.request.build_opener(NoRedirect())
     try:
@@ -487,8 +483,6 @@ def run_publish(input_directory, encoded, release_inputs):
         report["oauth"] = error_outcome(error)
         return report
     report["oauth"] = outcome("ok", status)
-    if not check_live_tracks(opener, token, input_directory, report):
-        return report
 
     try:
         receipt, status = edit_request(opener, token, "POST", EDIT_ROOT)
@@ -511,7 +505,7 @@ def main(argv):
     except (OSError, ValueError):
         print("Could not write Google Play Alpha submission evidence.", file=sys.stderr)
         return 1
-    return 0 if report["result"] in {"already_current", "committed", "submission_observed"} else 1
+    return 0 if report["result"] in {"committed", "submission_observed"} else 1
 
 
 if __name__ == "__main__":

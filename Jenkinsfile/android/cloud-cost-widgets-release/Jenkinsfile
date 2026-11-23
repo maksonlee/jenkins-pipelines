@@ -31,10 +31,9 @@ pipeline {
     }
 
     environment {
-        PRODUCT_SHA = '68d15b24ff58e9b1415670d03d628bdb9fd212d0'
-        VERSION_NAME = '1.0.6'
-        PHONE_VERSION_CODE = '100007'
-        APPROVED_SIGNING_PIPELINE_SHA = '54a15793cca9cf2b3dd3fae3f5e2a080951e9565'
+        PRODUCT_SHA = '8e0cfc4697d073acdb22a97b397a79382fafed02'
+        VERSION_NAME = '1.0.7'
+        PHONE_VERSION_CODE = '100008'
         RELEASE_TOOLS = 'Jenkinsfile/android/cloud-cost-widgets-release'
     }
 
@@ -59,8 +58,7 @@ git rev-parse --verify 'HEAD^{commit}' > release-evidence/pipeline-commit.txt
 '''
                 script {
                     if (params.MODE in ['closed-alpha-submit', 'alpha-receipt-audit']) {
-                        env.PIPELINE_SHA = params.SIGNED_BUILD == '8' ? env.APPROVED_SIGNING_PIPELINE_SHA :
-                                readFile('release-evidence/pipeline-commit.txt').trim()
+                        env.PIPELINE_SHA = readFile('release-evidence/pipeline-commit.txt').trim()
                     }
                 }
             }
@@ -168,7 +166,7 @@ python3 "$RELEASE_TOOLS/verify_submission_artifacts.py" signed-input/release-evi
             steps {
                 script {
                     writeFile file: 'release-evidence/release-sequencing.txt', text:
-                            'Requested release target is Closed testing Alpha for the phone app, version 100006 to 100007.\n' +
+                            'Requested release target is Closed testing Alpha for the phone app, version 100007 to 100008.\n' +
                             'Open evidence includes intended review access, live AWS, physical devices, Play-installed pairing, and final listing and privacy declarations.\n'
                     writeFile file: 'release-evidence/closed-alpha-submit.json', text:
                             '{"result":"outcome-unavailable","reason":"verify-live-state-before-any-other-submission"}\n'

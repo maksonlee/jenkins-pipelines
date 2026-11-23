@@ -3,27 +3,27 @@ import io
 import json
 import unittest
 import urllib.error
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import play_publish as publish
 
 
-APP_URL = (
-    "https://androidpublisher.googleapis.com/androidpublisher/v3/"
-    "applications/com.maksonlee.cloudcost.aws"
-)
+PACKAGE = "com.maksonlee.cloudcost.aws"
+APP_URL = f"https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}"
 EDIT_ID = "PRIVATE_EDIT"
 EDIT_URL = f"{APP_URL}/edits/{EDIT_ID}"
 UPLOAD_URL = (
     "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/"
-    f"applications/com.maksonlee.cloudcost.aws/edits/{EDIT_ID}/bundles?uploadType=media"
+    f"applications/{PACKAGE}/edits/{EDIT_ID}/bundles?uploadType=media"
 )
 COMMIT_URL = f"{EDIT_URL}:commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW"
-PHONE = 100007
-PREDECESSOR = 100006
-PREDECESSOR_DIGEST = "1c9619931bf521d367e65cd43abeb82424ac38b35478b67a01c1efe8d14894ae"
-PHONE_BUNDLE = b"verified test phone bytes for 1.0.6"
+ALPHA_URL = f"{APP_URL}/tracks/alpha/releases"
+PHONE = 100008
+PREDECESSOR = 100007
+PREDECESSOR_DIGEST = "911bd0a5c5383ff3348b2b692a5a94ba9a41a57d9dfb4f4703f86f3100bcbae9"
+PHONE_BUNDLE = b"verified test phone bytes for 1.0.7"
 SIGNED_DIGEST = hashlib.sha256(PHONE_BUNDLE).hexdigest()
 RELEASE_INPUTS = {
     "PRODUCT_SHA": "a" * 40,
@@ -31,14 +31,23 @@ RELEASE_INPUTS = {
     "SIGNED_BUILD": "17",
     "SIGNED_SHA256": SIGNED_DIGEST,
 }
-QUOTA_RELEASE_INPUTS = {
-    **RELEASE_INPUTS,
-    "PIPELINE_SHA": "54a15793cca9cf2b3dd3fae3f5e2a080951e9565",
-    "SIGNED_BUILD": "8",
-}
+NOW = datetime(2026, 11, 23, 10, 0, tzinfo=timezone.utc)
 IN_REVIEW = "RELEASE_LIFECYCLE_STATE_IN_REVIEW"
 NOT_SENT = "RELEASE_LIFECYCLE_STATE_NOT_SENT_FOR_REVIEW"
 PUBLISHED = "RELEASE_LIFECYCLE_STATE_PUBLISHED"
+QUOTA_REASON = "listing_releases_quota_exceeded"
+NO_CONTENT = {"result": "no_content", "http_status": 204}
+TRACK_NAMES = ("alpha", "production", "wear:production", "internal", "wear:internal")
+EXPECTED_NOTES = [
+    {"language": "en-US", "text": (
+        "The phone widget picker now shows a demo preview. Tap a home-screen widget to open "
+        "its budget details. Connected budgets can be refreshed manually from their details."
+    )},
+    {"language": "zh-TW", "text": (
+        "手機的小工具選擇器現在會顯示示範預覽。點一下桌面小工具即可開啟預算詳細資料。"
+        "已連接的預算可在詳情頁手動重新整理。"
+    )},
+]
 
 
 def response(value=None, status=200):
@@ -64,87 +73,68 @@ def http_error(status, message="", reason=None):
 
 
 def bundle(code=PHONE):
-    return {"versionCode": code, "sha256": SIGNED_DIGEST if code == PHONE else "d" * 64}
+    return {"versionCode": code, "sha256": SIGNED_DIGEST if code == PHONE else PREDECESSOR_DIGEST}
 
 
-def track(track_name, code, **details):
-    return {"track": track_name, "releases": [{
+def track(name, code, **details):
+    return {"track": name, "releases": [{
         "status": "completed", "versionCodes": [str(code)], **details,
     }]}
 
 
-def live(track_name, code, state=IN_REVIEW):
-    return live_releases(track_name, [(code, state)])
+def observed(code, state=PUBLISHED):
+    return {"lifecycle_state": state, "version_codes": [code]}
 
 
-def live_releases(track_name, releases):
-    return response({"releases": [
-        {"track": track_name, "releaseLifecycleState": state, "activeArtifacts": [{"versionCode": code}]}
-        for code, state in releases
-    ]})
+def verified_track(code):
+    return {"result": "ok", "http_status": 200, "releases": [observed(code)]}
 
 
-def guard_responses(alpha=None, production=None, internal=None, wear_internal=None):
-    return [
-        alpha if alpha is not None else live("alpha", PREDECESSOR, PUBLISHED),
-        production if production is not None else response(status=204),
-        response(status=204),
-        internal if internal is not None else live("internal", 100005, PUBLISHED),
-        wear_internal if wear_internal is not None else live("wear:internal", 200005, PUBLISHED),
-    ]
+def live_alpha(code, state=IN_REVIEW):
+    return response({"releases": [{
+        "track": "alpha", "releaseLifecycleState": state, "activeArtifacts": [{"versionCode": code}],
+    }]})
 
 
-def edit_snapshot(catalog=None, tracks=None, live_checks=None):
-    if live_checks is None:
-        live_checks = guard_responses()
-    if tracks is None:
-        tracks = [track("alpha", PREDECESSOR), track("wear:qa", 200006)]
-    return [
-        *live_checks,
-        response({"id": EDIT_ID}),
-        response({"bundles": [] if catalog is None else catalog}),
-        response({"tracks": tracks}),
-    ]
-
-
-def completed_precommit():
-    return [*edit_snapshot(), response(bundle(PHONE)), response(track("alpha", PHONE))]
-
-
-def quota_error(status=403):
-    return http_error(status, "Listing releases quota exceeded. PRIVATE_TEXT")
-
-
-def trusted_quota_archive():
-    published_tracks = {"alpha": PREDECESSOR, "internal": 100005, "wear:internal": 200005}
+def preflight(override=None, quota_tracks=(), age_minutes=5):
     tracks = {
-        name: {"result": "ok", "http_status": 200, "releases": [{
-            "lifecycle_state": PUBLISHED, "version_codes": [code],
-        }]}
-        for name, code in published_tracks.items()
+        "alpha": verified_track(PREDECESSOR),
+        "production": NO_CONTENT,
+        "wear:production": NO_CONTENT,
+        "internal": verified_track(100005),
+        "wear:internal": verified_track(200005),
     }
-    tracks.update({
-        "production": {"result": "no_content", "http_status": 204},
-        "wear:production": {"result": "no_content", "http_status": 204},
-    })
+    for name in quota_tracks:
+        tracks[name] = {"result": "forbidden", "http_status": 403, "quota": QUOTA_REASON}
+    if override:
+        tracks.update(override)
     return {
-        "package_name": "com.maksonlee.cloudcost.aws",
-        "result": "checked",
+        "package_name": PACKAGE,
+        "result": "quota_limited" if quota_tracks else "checked",
+        "observed_at": (NOW - timedelta(minutes=age_minutes)).isoformat(),
         "oauth": {"result": "ok", "http_status": 200},
         "tracks": tracks,
     }
 
 
-def quota_inventory():
+def expected_inventory():
     return [track("alpha", PREDECESSOR), track("internal", 100005), track("wear:internal", 200005)]
 
 
-def quota_snapshot(*, catalog=None, tracks=None):
-    return edit_snapshot(
-        catalog=[{"versionCode": PREDECESSOR, "sha256": PREDECESSOR_DIGEST}] if catalog is None else catalog,
-        tracks=quota_inventory() if tracks is None else tracks,
-        live_checks=[quota_error() for _ in range(5)],
-    )
+def edit_snapshot(catalog=None, tracks=None):
+    return [
+        response({"id": EDIT_ID}),
+        response({"bundles": [bundle(PREDECESSOR)] if catalog is None else catalog}),
+        response({"tracks": expected_inventory() if tracks is None else tracks}),
+    ]
+
+
+def staged_candidate():
+    return response(track("alpha", PHONE, releaseNotes=list(reversed(EXPECTED_NOTES))))
+
+
+def completed_precommit():
+    return [*edit_snapshot(), response(bundle()), staged_candidate()]
 
 
 class PlayPublishTest(unittest.TestCase):
@@ -153,17 +143,19 @@ class PlayPublishTest(unittest.TestCase):
         opener_patch = patch.object(urllib.request, "build_opener", return_value=self.opener)
         loader_patch = patch.object(publish, "load_phone_bundle", return_value=PHONE_BUNDLE)
         oauth_patch = patch.object(publish, "get_access_token", return_value=("PRIVATE_TOKEN", 200))
-        archive_patch = patch.object(publish, "read_archive", return_value=json.dumps(trusted_quota_archive()).encode())
+        archive_patch = patch.object(publish, "read_archive", return_value=json.dumps(preflight()).encode())
+        clock_patch = patch.object(publish, "datetime", wraps=datetime)
         opener_patch.start()
         self.loader = loader_patch.start()
         self.oauth = oauth_patch.start()
         self.archive = archive_patch.start()
-        self.addCleanup(opener_patch.stop)
-        self.addCleanup(loader_patch.stop)
-        self.addCleanup(oauth_patch.stop)
-        self.addCleanup(archive_patch.stop)
+        clock_patch.start().now.return_value = NOW
+        for patcher in (opener_patch, loader_patch, oauth_patch, archive_patch, clock_patch):
+            self.addCleanup(patcher.stop)
 
-    def run_with(self, *responses, release_inputs=RELEASE_INPUTS):
+    def run_with(self, *responses, archive=None, release_inputs=RELEASE_INPUTS):
+        if archive is not None:
+            self.archive.return_value = json.dumps(archive).encode()
         self.opener.open.side_effect = responses
         report = publish.run_publish(Path("synthetic-archive"), "PRIVATE_VAULT_VALUE", release_inputs)
         self.assertNotIn("PRIVATE", json.dumps(report))
@@ -178,17 +170,13 @@ class PlayPublishTest(unittest.TestCase):
     def mutations(self):
         return [operation for operation in self.operations() if operation[0] != "GET"]
 
-    def test_exact_phone_alpha_advance_over_published_predecessor(self):
-        catalog = [{"versionCode": PREDECESSOR, "sha256": PREDECESSOR_DIGEST}]
+    def test_exact_phone_advance_uses_approved_bytes_and_reads_alpha_only_after_commit(self):
         report = self.run_with(
-            *edit_snapshot(catalog=catalog), response(bundle(PHONE)),
-            response(track("alpha", PHONE)), response({"id": EDIT_ID}), response(status=204),
+            *completed_precommit(), response({"id": EDIT_ID}), live_alpha(PHONE),
         )
 
         self.assertEqual(report["result"], "committed")
-        self.assertEqual(report["lifecycle_validation"], {"result": "fresh"})
-        self.archive.assert_not_called()
-        self.assertEqual(report["version_name"], "1.0.6")
+        self.assertEqual(report["version_name"], "1.0.7")
         self.assertEqual(report["build_number"], 17)
         self.assertEqual(report["source_sha"], RELEASE_INPUTS["PRODUCT_SHA"])
         self.assertEqual(report["source_pipeline_sha"], RELEASE_INPUTS["PIPELINE_SHA"])
@@ -196,134 +184,182 @@ class PlayPublishTest(unittest.TestCase):
             Path("synthetic-archive"), RELEASE_INPUTS["PRODUCT_SHA"], RELEASE_INPUTS["PIPELINE_SHA"],
             SIGNED_DIGEST,
         )
-        self.assertEqual(report["review_observation"]["result"], "unconfirmed")
-        self.assertEqual(report["live_tracks"]["alpha"], {
-            "result": "ok", "http_status": 200,
-            "releases": [{"lifecycle_state": PUBLISHED, "version_codes": [PREDECESSOR]}],
+        self.archive.assert_called_once_with(Path("synthetic-archive").resolve(), "alpha-status.json")
+        self.assertEqual(report["lifecycle_validation"], {
+            "result": "signed_preflight", "quota_tracks": [], "archive_build": 17,
+            "archive_sha256": hashlib.sha256(self.archive.return_value).hexdigest(),
+            "observed_at": preflight()["observed_at"], "fresh_inventory": "verified",
         })
+        self.assertEqual(report["preflight_tracks"]["alpha"], verified_track(PREDECESSOR))
         self.assertEqual(report["bundle_catalog"]["predecessor"]["result"], "hash_matches")
-        self.assertEqual(report["edit_tracks"]["alpha"]["releases"], [
-            {"status": "completed", "version_codes": [PREDECESSOR]},
-        ])
+        self.assertEqual(report["track_updates"]["alpha"]["matched_note_locales"], ["en-US", "zh-TW"])
+        self.assertEqual(report["review_observation"]["result"], "observed_submitted")
         self.assertEqual(report["cleanup"]["result"], "not_attempted")
         self.assertEqual(self.operations(), [
-            ("GET", f"{APP_URL}/tracks/alpha/releases"),
-            ("GET", f"{APP_URL}/tracks/production/releases"),
-            ("GET", f"{APP_URL}/tracks/wear:production/releases"),
-            ("GET", f"{APP_URL}/tracks/internal/releases"),
-            ("GET", f"{APP_URL}/tracks/wear:internal/releases"),
             ("POST", f"{APP_URL}/edits"),
             ("GET", f"{EDIT_URL}/bundles"),
             ("GET", f"{EDIT_URL}/tracks"),
             ("POST", UPLOAD_URL),
             ("PUT", f"{EDIT_URL}/tracks/alpha"),
             ("POST", COMMIT_URL),
-            ("GET", f"{APP_URL}/tracks/alpha/releases"),
+            ("GET", ALPHA_URL),
         ])
         requests = self.requests()
-        self.assertEqual(requests[8].data, PHONE_BUNDLE)
-        self.assertEqual(requests[8].get_header("Content-type"), "application/octet-stream")
-        self.assertEqual(json.loads(requests[9].data), {
+        self.assertEqual(requests[3].data, PHONE_BUNDLE)
+        self.assertEqual(requests[3].get_header("Content-type"), "application/octet-stream")
+        self.assertEqual(json.loads(requests[4].data), {
             "track": "alpha",
-            "releases": [{
-                "versionCodes": ["100007"], "status": "completed",
-                "releaseNotes": [
-                    {"language": "en-US", "text": (
-                        "Phone home-screen widgets show one budget, start at 2×1, "
-                        "and open budget details when tapped. "
-                        "The app icon has more room inside the launcher mask."
-                    )},
-                    {"language": "zh-TW", "text": (
-                        "手機桌面小工具每張顯示一筆預算，預設為 2×1。點一下即可開啟預算詳細資料。"
-                        "App 圖示的雲朵在遮罩內保留更多留白。"
-                    )},
-                ],
-            }],
+            "releases": [{"versionCodes": ["100008"], "status": "completed", "releaseNotes": EXPECTED_NOTES}],
         })
-        self.assertIsNone(requests[10].data)
+        self.assertIsNone(requests[5].data)
 
-    def test_exact_quota_fallback_uses_trusted_archive_and_fresh_inventory(self):
+    def test_quota_archive_requires_current_inventory_and_attests_audited_history(self):
         report = self.run_with(
-            *quota_snapshot(), response(bundle()), response(track(
-                "alpha", PHONE, releaseNotes=list(reversed(publish.RELEASE_NOTES)),
-            )),
-            response({"id": EDIT_ID}), quota_error(),
-            release_inputs=QUOTA_RELEASE_INPUTS,
+            *completed_precommit(), response({"id": EDIT_ID}),
+            http_error(403, "Listing releases quota exceeded. PRIVATE_TEXT"),
+            archive=preflight(quota_tracks=TRACK_NAMES),
         )
+
         self.assertEqual(report["result"], "committed")
         validation = report["lifecycle_validation"]
         self.assertEqual(validation["result"], "quota_fallback")
-        self.assertEqual(validation["archive_build"], 8)
+        self.assertEqual(validation["archive_build"], 17)
         self.assertEqual(validation["fresh_inventory"], "verified")
-        self.assertEqual(validation["quota_tracks"], [
-            "alpha", "production", "wear:production", "internal", "wear:internal",
-        ])
-        self.archive.assert_called_once_with(Path("synthetic-archive").resolve(), "alpha-status.json")
-        self.assertEqual(report["track_updates"]["alpha"]["matched_note_locales"], ["en-US", "zh-TW"])
-        self.assertEqual(report["review_observation"]["tracks"]["alpha"]["quota"], "listing_releases_quota_exceeded")
+        self.assertEqual(validation["quota_tracks"], list(TRACK_NAMES))
+        self.assertEqual(validation["historical_evidence_builds"], {
+            "alpha": 12, "production": 8, "wear:production": 8, "internal": 8, "wear:internal": 8,
+        })
+        self.assertEqual(report["review_observation"]["result"], "unconfirmed")
+        self.assertEqual(report["review_observation"]["tracks"]["alpha"]["quota"], QUOTA_REASON)
         self.assertEqual(self.mutations(), [
             ("POST", f"{APP_URL}/edits"), ("POST", UPLOAD_URL),
             ("PUT", f"{EDIT_URL}/tracks/alpha"), ("POST", COMMIT_URL),
         ])
 
-    def test_quota_fallback_rejects_untrusted_archive_and_nonquota_error(self):
-        self.archive.return_value = json.dumps({
-            **trusted_quota_archive(), "package_name": "PRIVATE_WRONG_PACKAGE",
-        }).encode()
-        report = self.run_with(*[quota_error() for _ in range(5)], release_inputs=QUOTA_RELEASE_INPUTS)
-        self.assertEqual(report["failure"], "quota_archive_unverified")
-        self.assertEqual(self.mutations(), [])
-
-        self.opener.open.reset_mock()
-        self.archive.reset_mock()
-        report = self.run_with(*[quota_error() for _ in range(5)])
-        self.assertEqual(report["failure"], "quota_archive_unverified")
-        self.archive.assert_not_called()
-        self.assertEqual(self.mutations(), [])
-
-        for other in (http_error(403, "Permission denied"), quota_error(429)):
-            with self.subTest(error=other):
-                self.opener.open.reset_mock()
-                self.run_with(other, *[quota_error() for _ in range(4)], release_inputs=QUOTA_RELEASE_INPUTS)
-                self.archive.assert_not_called()
-                self.assertEqual(self.mutations(), [])
-
-    def test_quota_fallback_requires_matching_fresh_available_reads(self):
-        for state, code, failure in (
-            (PUBLISHED, 200006, "quota_lifecycle_mismatch"),
-            (IN_REVIEW, 200005, "unrelated_pending_release"),
-        ):
-            with self.subTest(state=state):
+    def test_exact_same_track_not_sent_predecessor_is_allowed(self):
+        unsent = observed(PREDECESSOR, NOT_SENT)
+        previous = observed(PREDECESSOR - 1)
+        for releases in ([unsent], [unsent, previous], [previous, unsent]):
+            with self.subTest(releases=releases):
                 self.opener.open.reset_mock()
                 report = self.run_with(
-                    *[quota_error() for _ in range(4)], live("wear:internal", code, state),
-                    release_inputs=QUOTA_RELEASE_INPUTS,
+                    *completed_precommit(), response({"id": EDIT_ID}), live_alpha(PHONE, NOT_SENT),
+                    archive=preflight({
+                        "alpha": {"result": "pending_release", "http_status": 200, "releases": releases},
+                    }, quota_tracks=("wear:production",)),
+                )
+                self.assertEqual(report["result"], "committed")
+                self.assertEqual(report["review_observation"]["result"], "observed_not_sent_for_review")
+                self.assertEqual(report["lifecycle_validation"]["historical_evidence_builds"], {"wear:production": 8})
+                self.assertEqual(self.operations().count(("POST", COMMIT_URL)), 1)
+
+    def test_nonquota_errors_and_conflicting_observations_stop_before_oauth(self):
+        cases = [
+            ("alpha", {"result": "forbidden", "http_status": 403}),
+            ("alpha", {"result": "http_error", "http_status": 429, "quota": QUOTA_REASON}),
+            ("alpha", NO_CONTENT),
+            ("alpha", verified_track(PHONE)),
+            ("alpha", {"result": "pending_release", "http_status": 200, "releases": [observed(PREDECESSOR, IN_REVIEW)]}),
+            ("alpha", {"result": "pending_release", "http_status": 200, "releases": [observed(PHONE, NOT_SENT)]}),
+            ("wear:internal", {"result": "pending_release", "http_status": 200, "releases": [observed(200005, NOT_SENT)]}),
+            ("wear:internal", verified_track(200006)),
+            ("production", verified_track(100003)),
+        ]
+        for name, observation in cases:
+            with self.subTest(track=name, observation=observation):
+                report = self.run_with(archive=preflight({name: observation}, quota_tracks=("internal",)))
+                self.assertEqual(report["failure"], "preflight_track_unverified")
+                self.assertEqual(report["blocking_track"], name)
+        self.oauth.assert_not_called()
+        self.opener.open.assert_not_called()
+
+    def test_stale_future_inconsistent_or_wrong_scope_preflight_stops_before_oauth(self):
+        cases = [
+            (preflight(age_minutes=30.01), "preflight_outside_age_limit"),
+            (preflight(age_minutes=-1), "preflight_outside_age_limit"),
+            ({**preflight(), "observed_at": "2026-11-23T09:59:00"}, "preflight_timestamp_invalid"),
+            ({**preflight(), "package_name": "PRIVATE_PACKAGE"}, "preflight_archive_unverified"),
+            ({**preflight(quota_tracks=("alpha",)), "result": "checked"}, "preflight_archive_unverified"),
+        ]
+        for archive, failure in cases:
+            with self.subTest(failure=failure):
+                report = self.run_with(archive=archive)
+                self.assertEqual(report["failure"], failure)
+        self.oauth.assert_not_called()
+        self.opener.open.assert_not_called()
+
+    def test_no_write_without_exact_full_edit_inventory(self):
+        good = expected_inventory()
+        cases = [
+            (good[1:], "fresh_inventory_mismatch"),
+            ([track("alpha", PHONE), *good[1:]], "fresh_inventory_mismatch"),
+            ([track("alpha", PREDECESSOR, countryTargeting={"countries": ["US"]}), *good[1:]], "fresh_inventory_mismatch"),
+            ([*good, track("PRIVATE_UNRELATED", 100004)], "fresh_inventory_mismatch"),
+            ([*good, track("PRIVATE_UNRELATED", 100004, status="draft")], "unrelated_pending_release"),
+            ([*good[:-1], track("wear:internal", 200006)], "fresh_inventory_mismatch"),
+        ]
+        for tracks, failure in cases:
+            with self.subTest(failure=failure):
+                self.opener.open.reset_mock()
+                report = self.run_with(
+                    *edit_snapshot(tracks=tracks), response(status=204),
+                    archive=preflight(quota_tracks=("alpha",)),
                 )
                 self.assertEqual(report["failure"], failure)
-                self.assertEqual(self.mutations(), [])
-
-    def test_quota_fallback_rejects_missing_or_changed_inventory(self):
-        for tracks in (
-            quota_inventory()[1:],
-            [*quota_inventory(), track("PRIVATE_UNRELATED", 100004)],
-            [*quota_inventory()[:-1], track("wear:internal", 200006)],
-            [*quota_inventory(), track("PRIVATE_UNRELATED", 100004, status="draft")],
-        ):
-            with self.subTest(track_count=len(tracks)):
-                self.opener.open.reset_mock()
-                report = self.run_with(
-                    *quota_snapshot(tracks=tracks), response(status=204), release_inputs=QUOTA_RELEASE_INPUTS,
-                )
-                self.assertEqual(report["result"], "blocked")
-                self.assertIn(report["failure"], {"quota_inventory_mismatch", "unrelated_pending_release"})
                 self.assertEqual(self.mutations(), [("POST", f"{APP_URL}/edits"), ("DELETE", EDIT_URL)])
 
-    def test_quota_fallback_requires_exact_predecessor_signed_hash(self):
+    def test_missing_or_wrong_signed_predecessor_hash_never_uploads(self):
+        cases = [
+            ([], "predecessor_hash_unavailable"),
+            ([{"versionCode": PREDECESSOR, "sha256": "a" * 64}], "predecessor_hash_conflict"),
+            ([bundle(PREDECESSOR), {"versionCode": PHONE + 1, "sha256": "a" * 64}], "candidate_conflict"),
+        ]
+        for catalog, failure in cases:
+            with self.subTest(failure=failure):
+                self.opener.open.reset_mock()
+                report = self.run_with(*edit_snapshot(catalog=catalog), response(status=204))
+                self.assertEqual(report["failure"], failure)
+                self.assertEqual(self.mutations(), [("POST", f"{APP_URL}/edits"), ("DELETE", EDIT_URL)])
+
+    def test_archive_verification_happens_before_oauth(self):
+        report = self.run_with(release_inputs={**RELEASE_INPUTS, "SIGNED_SHA256": "PRIVATE_DIGEST"})
+        self.assertEqual(report["artifact_verification"]["result"], "invalid_release_parameters")
+        self.loader.assert_not_called()
+
+        self.loader.return_value = b"wrong signed bytes"
+        report = self.run_with()
+        self.assertEqual(report["artifact_verification"]["result"], "hash_mismatch")
+        self.archive.assert_not_called()
+
+        self.loader.side_effect = publish.ArtifactVerificationError("PRIVATE_PATH")
+        report = self.run_with()
+        self.assertEqual(report["artifact_verification"]["result"], "failed")
+        self.archive.assert_not_called()
+
+        self.loader.side_effect = None
+        self.loader.return_value = PHONE_BUNDLE
+        self.archive.side_effect = publish.ArtifactVerificationError("PRIVATE_PATH")
+        report = self.run_with()
+        self.assertEqual(report["failure"], "preflight_archive_unverified")
+        self.oauth.assert_not_called()
+        self.opener.open.assert_not_called()
+
+    def test_existing_matching_candidate_upload_is_reused(self):
         report = self.run_with(
-            *quota_snapshot(catalog=[]), response(status=204), release_inputs=QUOTA_RELEASE_INPUTS,
+            *edit_snapshot(catalog=[bundle(PHONE), bundle(PREDECESSOR)]),
+            staged_candidate(), response({"id": EDIT_ID}), response(status=204),
         )
-        self.assertEqual(report["failure"], "quota_predecessor_hash_unavailable")
-        self.assertEqual(self.mutations(), [("POST", f"{APP_URL}/edits"), ("DELETE", EDIT_URL)])
+        self.assertEqual(report["result"], "committed")
+        self.assertEqual(report["uploads"]["alpha"]["result"], "reused")
+        self.assertNotIn(("POST", UPLOAD_URL), self.operations())
+
+    def test_wrong_upload_digest_or_version_stops_before_track_update(self):
+        for receipt in ({"versionCode": PHONE, "sha256": "a" * 64}, bundle(PREDECESSOR)):
+            with self.subTest(receipt=receipt):
+                self.opener.open.reset_mock()
+                report = self.run_with(*edit_snapshot(), response(receipt), response(status=204))
+                self.assertEqual(report["uploads"]["alpha"]["result"], "bundle_receipt_mismatch")
+                self.assertEqual(self.mutations()[-2:], [("POST", UPLOAD_URL), ("DELETE", EDIT_URL)])
 
     def test_staged_wrong_notes_do_not_commit(self):
         report = self.run_with(
@@ -334,155 +370,6 @@ class PlayPublishTest(unittest.TestCase):
         self.assertEqual(report["track_updates"]["alpha"]["result"], "track_receipt_notes_mismatch")
         self.assertEqual(self.mutations()[-2:], [("PUT", f"{EDIT_URL}/tracks/alpha"), ("DELETE", EDIT_URL)])
 
-    def test_invalid_archive_never_reaches_oauth(self):
-        self.loader.side_effect = publish.ArtifactVerificationError("PRIVATE_PATH")
-        report = self.run_with()
-        self.assertEqual(report["artifact_verification"]["result"], "failed")
-        self.oauth.assert_not_called()
-        self.opener.open.assert_not_called()
-
-    def test_invalid_signing_inputs_or_bundle_bytes_never_reach_oauth(self):
-        report = self.run_with(release_inputs={**RELEASE_INPUTS, "SIGNED_SHA256": "PRIVATE_DIGEST"})
-        self.assertEqual(report["artifact_verification"]["result"], "invalid_release_parameters")
-        self.loader.assert_not_called()
-
-        self.loader.return_value = b"wrong archive bytes"
-        report = self.run_with()
-        self.assertEqual(report["artifact_verification"]["result"], "hash_mismatch")
-        self.oauth.assert_not_called()
-        self.opener.open.assert_not_called()
-
-    def test_read_forbidden_or_unrelated_review_never_opens_edit(self):
-        for alpha, production in (
-            (http_error(403), response(status=204)),
-            (live("alpha", PREDECESSOR, PUBLISHED), live("production", 100004)),
-        ):
-            with self.subTest(case=alpha):
-                self.opener.open.reset_mock()
-                report = self.run_with(*guard_responses(alpha=alpha, production=production))
-                self.assertEqual(report["edit_insert"]["result"], "not_attempted")
-                self.assertEqual(self.mutations(), [])
-
-    def test_pending_internal_release_blocks_before_opening_an_edit(self):
-        for track, kwargs in (
-            ("internal", {"internal": live("internal", 100005)}),
-            ("wear:internal", {"wear_internal": live("wear:internal", 200005, NOT_SENT)}),
-        ):
-            with self.subTest(track=track):
-                self.opener.open.reset_mock()
-                report = self.run_with(*guard_responses(**kwargs))
-                self.assertEqual(report["failure"], "unrelated_pending_release")
-                self.assertEqual(report["live_tracks"][track]["result"], "pending_release")
-                self.assertEqual(self.mutations(), [])
-
-    def test_pending_predecessor_does_not_open_an_edit(self):
-        for releases in (
-            [(PREDECESSOR, NOT_SENT)],
-            [(PREDECESSOR, IN_REVIEW)],
-            [(PREDECESSOR - 1, PUBLISHED), (PREDECESSOR, NOT_SENT)],
-        ):
-            with self.subTest(releases=releases):
-                self.opener.open.reset_mock()
-                report = self.run_with(*guard_responses(alpha=live_releases("alpha", releases)))
-                self.assertEqual(report["result"], "blocked")
-                self.assertEqual(report["failure"], "target_track_changed")
-                self.assertEqual(self.mutations(), [])
-
-    def test_unobserved_alpha_predecessor_never_opens_an_edit(self):
-        for result in (http_error(404), response(status=204)):
-            with self.subTest(result=result):
-                self.opener.open.reset_mock()
-                report = self.run_with(*guard_responses(alpha=result))
-                self.assertEqual(report["failure"], "target_lifecycle_unverified")
-                self.assertEqual(self.mutations(), [])
-
-    def test_published_predecessor_with_conflicting_digest_blocks_updates(self):
-        report = self.run_with(
-            *edit_snapshot(catalog=[bundle(PREDECESSOR)]), response(status=204),
-        )
-        self.assertEqual(report["failure"], "predecessor_hash_conflict")
-        self.assertEqual(self.mutations(), [("POST", f"{APP_URL}/edits"), ("DELETE", EDIT_URL)])
-
-    def test_missing_empty_or_conflicting_alpha_never_creates_or_updates_track(self):
-        for tracks in (
-            [],
-            [{"track": "alpha"}],
-            [track("alpha", PREDECESSOR - 1)],
-            [track("alpha", PHONE + 1)],
-            [track("alpha", 200006)],
-            [track("alpha", PREDECESSOR, status="inProgress")],
-            [track("alpha", PREDECESSOR, status="halted")],
-            [track("alpha", PREDECESSOR, countryTargeting={"countries": ["US"]})],
-        ):
-            with self.subTest(tracks=tracks):
-                self.opener.open.reset_mock()
-                report = self.run_with(*edit_snapshot(tracks=tracks), response(status=204))
-
-                self.assertEqual(report["failure"], "target_track_changed")
-                self.assertEqual(self.mutations(), [("POST", f"{APP_URL}/edits"), ("DELETE", EDIT_URL)])
-
-    def test_alpha_inventory_conflicting_with_live_version_blocks(self):
-        checks = guard_responses(alpha=live("alpha", PHONE, PUBLISHED))
-        report = self.run_with(*edit_snapshot(live_checks=checks), response(status=204))
-        self.assertEqual(report["failure"], "target_track_changed")
-        self.assertEqual(report["uploads"]["alpha"]["result"], "not_attempted")
-
-    def test_exact_current_candidate_is_not_reuploaded_or_committed(self):
-        checks = guard_responses(alpha=live("alpha", PHONE, PUBLISHED))
-        report = self.run_with(
-            *edit_snapshot(catalog=[bundle(PHONE)], tracks=[track("alpha", PHONE)], live_checks=checks),
-            response(status=204),
-        )
-        self.assertEqual(report["result"], "already_current")
-        self.assertEqual(self.mutations(), [("POST", f"{APP_URL}/edits"), ("DELETE", EDIT_URL)])
-
-    def test_existing_candidate_without_archived_hash_never_advances(self):
-        for catalog in (
-            [],
-            [{"versionCode": PHONE, "sha256": "a" * 64}],
-        ):
-            with self.subTest(catalog=catalog):
-                self.opener.open.reset_mock()
-                checks = guard_responses(alpha=live("alpha", PHONE, PUBLISHED))
-                report = self.run_with(
-                    *edit_snapshot(catalog=catalog, tracks=[track("alpha", PHONE)], live_checks=checks),
-                    response(status=204),
-                )
-                self.assertEqual(report["result"], "blocked")
-                self.assertNotIn(("POST", COMMIT_URL), self.operations())
-
-    def test_unrelated_draft_in_edit_inventory_blocks_alpha(self):
-        tracks = [track("alpha", PREDECESSOR), track("PRIVATE_UNRELATED", 200006, status="draft")]
-        report = self.run_with(*edit_snapshot(tracks=tracks), response(status=204))
-        self.assertEqual(report["failure"], "unrelated_pending_release")
-        self.assertEqual(self.mutations(), [("POST", f"{APP_URL}/edits"), ("DELETE", EDIT_URL)])
-
-    def test_existing_matching_phone_upload_is_reused(self):
-        report = self.run_with(
-            *edit_snapshot(catalog=[bundle(PHONE), bundle(200006)]),
-            response(track("alpha", PHONE)), response({"id": EDIT_ID}), live("alpha", PHONE),
-        )
-        self.assertEqual(report["result"], "committed")
-        self.assertEqual(report["uploads"]["alpha"]["result"], "reused")
-        self.assertEqual(report["review_observation"]["result"], "observed_submitted")
-        self.assertNotIn(("POST", UPLOAD_URL), self.operations())
-
-    def test_wrong_phone_upload_receipt_stops_before_track_update(self):
-        report = self.run_with(
-            *edit_snapshot(), response({"versionCode": PHONE, "sha256": "a" * 64}), response(status=204),
-        )
-        self.assertEqual(report["uploads"]["alpha"]["result"], "bundle_receipt_mismatch")
-        self.assertEqual(self.operations()[-2:], [("POST", UPLOAD_URL), ("DELETE", EDIT_URL)])
-        self.assertEqual(report["commit"]["result"], "not_attempted")
-
-    def test_newer_phone_bundle_blocks_candidate_without_release_mutations(self):
-        report = self.run_with(
-            *edit_snapshot([{"versionCode": PHONE + 1, "sha256": "a" * 64}]), response(status=204),
-        )
-        self.assertEqual(report["result"], "blocked")
-        self.assertEqual(report["bundle_catalog"]["newer_version_codes"]["alpha"], [PHONE + 1])
-        self.assertEqual(self.mutations(), [("POST", f"{APP_URL}/edits"), ("DELETE", EDIT_URL)])
-
     def test_hard_prerequisite_and_existing_review_have_one_cleanup(self):
         cases = [
             (400, "Only releases with status draft may be created on draft app. PRIVATE_TEXT", None),
@@ -492,9 +379,7 @@ class PlayPublishTest(unittest.TestCase):
         for status, message, reason in cases:
             with self.subTest(status=status, reason=reason):
                 self.opener.open.reset_mock()
-                report = self.run_with(
-                    *completed_precommit(), http_error(status, message, reason), response({}),
-                )
+                report = self.run_with(*completed_precommit(), http_error(status, message, reason), response({}))
                 self.assertEqual(report["result"], "rejected")
                 self.assertEqual(report["commit"]["http_status"], status)
                 if reason:
@@ -506,20 +391,18 @@ class PlayPublishTest(unittest.TestCase):
 
     def test_ambiguous_commit_only_reconciles_exact_phone_code(self):
         cases = [
-            (TimeoutError("PRIVATE_TIMEOUT"), PHONE, "submission_observed"),
-            (response({"id": "PRIVATE_WRONG_EDIT"}), PREDECESSOR, "commit_indeterminate"),
-            (http_error(429), PREDECESSOR, "commit_indeterminate"),
-            (http_error(503), PREDECESSOR, "commit_indeterminate"),
+            (TimeoutError("PRIVATE_TIMEOUT"), live_alpha(PHONE), "submission_observed"),
+            (response({"id": "PRIVATE_WRONG_EDIT"}), live_alpha(PHONE, NOT_SENT), "commit_indeterminate"),
+            (http_error(429), live_alpha(PREDECESSOR), "commit_indeterminate"),
+            (http_error(503), http_error(403, "Listing releases quota exceeded"), "commit_indeterminate"),
         ]
-        for problem, code, result in cases:
+        for problem, observation, result in cases:
             with self.subTest(result=result):
                 self.opener.open.reset_mock()
-                report = self.run_with(*completed_precommit(), problem, live("alpha", code))
+                report = self.run_with(*completed_precommit(), problem, observation)
                 self.assertEqual(report["result"], result)
                 self.assertEqual(report["cleanup"]["result"], "not_attempted")
-                self.assertEqual(self.operations()[-2:], [
-                    ("POST", COMMIT_URL), ("GET", f"{APP_URL}/tracks/alpha/releases"),
-                ])
+                self.assertEqual(self.operations()[-2:], [("POST", COMMIT_URL), ("GET", ALPHA_URL)])
                 self.assertEqual(self.operations().count(("POST", COMMIT_URL)), 1)
 
 
