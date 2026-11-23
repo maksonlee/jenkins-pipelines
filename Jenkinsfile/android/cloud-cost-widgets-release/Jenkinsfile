@@ -38,8 +38,8 @@ pipeline {
         stage('Fetch release pipeline') {
             steps {
                 script {
-                    if (!(params.MODE in ['bundle-preflight', 'submission-preflight', 'closed-alpha-submit'])) {
-                        error('Select bundle-preflight, submission-preflight, or closed-alpha-submit')
+                    if (!(params.MODE in ['alpha-status', 'bundle-preflight', 'submission-preflight', 'closed-alpha-submit'])) {
+                        error('Select alpha-status, bundle-preflight, submission-preflight, or closed-alpha-submit')
                     }
                 }
                 deleteDir()
@@ -49,6 +49,22 @@ set -euo pipefail
 mkdir release-evidence
 git rev-parse --verify 'HEAD^{commit}' > release-evidence/pipeline-commit.txt
 '''
+            }
+        }
+
+        stage('Read Google Play Alpha release status') {
+            when { expression { params.MODE == 'alpha-status' } }
+            steps {
+                script {
+                    writeFile file: 'release-evidence/alpha-status.json', text: '{"result":"outcome-unavailable"}\n'
+                    withPlayService {
+                        sh '''#!/bin/bash
+set +x
+set -euo pipefail
+python3 "$RELEASE_TOOLS/play_alpha_status.py" release-evidence/alpha-status.json
+'''
+                    }
+                }
             }
         }
 
