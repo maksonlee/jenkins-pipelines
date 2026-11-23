@@ -1,4 +1,4 @@
-"""Verify and archive the two Cloud Spend for AWS upload bundles."""
+"""Verify and archive the Cloud Spend for AWS phone upload bundle."""
 
 import hashlib
 import json
@@ -14,6 +14,10 @@ from pathlib import Path
 
 
 PACKAGE = 'com.maksonlee.cloudcost.aws'
+VERSION_NAME = '1.0.6'
+PHONE_VERSION_CODE = '100007'
+PHONE_BUNDLE_FILENAME = f'phone-{VERSION_NAME}-{PHONE_VERSION_CODE}.aab'
+UPLOAD_CERTIFICATE_SHA256 = 'e11bc3918c83d0082bf28b72f2f99bc6f2867c38559f701cf4fdce0f3702cec7'
 ANDROID = '{http://schemas.android.com/apk/res/android}'
 BUNDLETOOL = Path('/home/administrator/jenkins/android-cache/tools/bundletool-all-1.18.3.jar')
 BUNDLETOOL_SHA = 'a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29'
@@ -115,49 +119,44 @@ def verify_bundle(bundle, form_factor, version, code, expected_signer):
     }
 
 
-def archive_bundles(source, evidence):
+def archive_phone_bundle(source, evidence):
     if sha256(BUNDLETOOL) != BUNDLETOOL_SHA:
         raise VerificationError('Worker bundletool SHA-256 differs from the pinned tool')
-    expected_signer = (evidence / 'upload-certificate-sha256.txt').read_text(encoding='ascii').strip()
-    if re.fullmatch(r'[a-f0-9]{64}', expected_signer) is None:
-        raise VerificationError('The Vault-bound public upload certificate fingerprint is invalid')
+    certificate = (evidence / 'upload-certificate-sha256.txt').read_bytes().splitlines()
+    if certificate != [UPLOAD_CERTIFICATE_SHA256.encode('ascii')]:
+        raise VerificationError('The Vault-bound certificate differs from the pinned upload certificate')
     version = os.environ['VERSION_NAME']
-    bundles = []
-    for form_factor, code, module in (
-        ('phone', os.environ['PHONE_VERSION_CODE'], 'aws'),
-        ('wear', os.environ['WEAR_VERSION_CODE'], 'aws-wear'),
-    ):
-        bundle = source / f'apps/{module}/build/outputs/bundle/release/{module}-release.aab'
-        result = verify_bundle(bundle, form_factor, version, code, expected_signer)
-        result['file'] = f'{form_factor}-{version}-{code}.aab'
-        bundles.append((bundle, result))
+    code = os.environ['PHONE_VERSION_CODE']
+    if (version, code) != (VERSION_NAME, PHONE_VERSION_CODE):
+        raise VerificationError('The configured phone version differs from the pinned release')
+    source_commit = os.environ['PRODUCT_SHA']
+    bundle = source / 'apps/aws/build/outputs/bundle/release/aws-release.aab'
+    result = verify_bundle(bundle, 'phone', version, code, UPLOAD_CERTIFICATE_SHA256)
+    result['file'] = PHONE_BUNDLE_FILENAME
 
     with tempfile.TemporaryDirectory(prefix='verified-', dir=evidence) as staging:
         destination = Path(staging) / 'bundles'
         destination.mkdir()
-        checksums = []
-        for bundle, result in bundles:
-            copy = destination / result['file']
-            shutil.copyfile(bundle, copy)
-            if sha256(copy) != result['sha256']:
-                raise VerificationError('Archived AAB copy does not match verified bytes')
-            checksums.append(f"{result['sha256']}  {copy.name}\n")
-        (destination / 'SHA256SUMS').write_text(''.join(checksums), encoding='ascii')
+        copy = destination / PHONE_BUNDLE_FILENAME
+        shutil.copyfile(bundle, copy)
+        if sha256(copy) != result['sha256']:
+            raise VerificationError('Archived AAB copy does not match verified bytes')
+        (destination / 'SHA256SUMS').write_text(f"{result['sha256']}  {copy.name}\n", encoding='ascii')
         destination.rename(evidence / 'bundles')
 
     report = {
         'result': 'passed',
-        'source_commit': os.environ['PRODUCT_SHA'],
+        'source_commit': source_commit,
         'bundletool_sha256': BUNDLETOOL_SHA,
-        'bundles': [result for _, result in bundles],
+        'bundles': [result],
     }
     (evidence / 'signed-bundles.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
-    print(f'Verified and archived both signed AABs for {PACKAGE} {version} ({os.environ["PRODUCT_SHA"]})')
+    print(f'Verified and archived the signed phone AAB for {PACKAGE} {version} ({source_commit})')
 
 
 if __name__ == '__main__':
     try:
-        archive_bundles(Path(sys.argv[1]), Path(sys.argv[2]))
+        archive_phone_bundle(Path(sys.argv[1]), Path(sys.argv[2]))
     except VerificationError as error:
         raise SystemExit(str(error)) from None
     except (OSError, ET.ParseError, zipfile.BadZipFile, KeyError):

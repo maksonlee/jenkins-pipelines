@@ -1,14 +1,26 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
-  <description>Manual Cloud Spend for AWS 1.0.5 signing, preflight, and phone Closed testing Alpha submission.</description>
+  <description>Manual Cloud Spend for AWS 1.0.6 phone signing, preflight, and Closed testing Alpha submission.</description>
   <keepDependencies>false</keepDependencies>
   <properties>
     <hudson.model.ParametersDefinitionProperty>
       <parameterDefinitions>
         <hudson.model.StringParameterDefinition>
           <name>MODE</name>
-          <description>bundle-preflight, submission-preflight, or closed-alpha-submit for the approved 1.0.5 phone bundle</description>
-          <defaultValue>bundle-preflight</defaultValue>
+          <description>alpha-status, phone-alpha-preflight, or closed-alpha-submit for the approved 1.0.6 phone bundle</description>
+          <defaultValue>alpha-status</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>SIGNED_BUILD</name>
+          <description>Approved phone-alpha-preflight build number, required for closed-alpha-submit</description>
+          <defaultValue/>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>SIGNED_SHA256</name>
+          <description>Approved phone bundle archive SHA-256, required for closed-alpha-submit</description>
+          <defaultValue/>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
       </parameterDefinitions>

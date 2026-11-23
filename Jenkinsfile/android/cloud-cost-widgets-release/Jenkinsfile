@@ -22,15 +22,18 @@ pipeline {
     }
 
     parameters {
-        string(name: 'MODE', defaultValue: 'bundle-preflight', trim: true,
-                description: 'bundle-preflight, submission-preflight, or closed-alpha-submit for the approved 1.0.5 phone bundle')
+        string(name: 'MODE', defaultValue: 'alpha-status', trim: true,
+                description: 'alpha-status, phone-alpha-preflight, or closed-alpha-submit for the approved 1.0.6 phone bundle')
+        string(name: 'SIGNED_BUILD', defaultValue: '', trim: true,
+                description: 'Approved phone-alpha-preflight build number, required for closed-alpha-submit')
+        string(name: 'SIGNED_SHA256', defaultValue: '', trim: true,
+                description: 'Approved phone bundle archive SHA-256, required for closed-alpha-submit')
     }
 
     environment {
-        PRODUCT_SHA = 'f6cce0cc9e7aa060b3013a447c220d149b31f80b'
-        VERSION_NAME = '1.0.5'
-        PHONE_VERSION_CODE = '100006'
-        WEAR_VERSION_CODE = '200006'
+        PRODUCT_SHA = '68d15b24ff58e9b1415670d03d628bdb9fd212d0'
+        VERSION_NAME = '1.0.6'
+        PHONE_VERSION_CODE = '100007'
         RELEASE_TOOLS = 'Jenkinsfile/android/cloud-cost-widgets-release'
     }
 
@@ -38,8 +41,12 @@ pipeline {
         stage('Fetch release pipeline') {
             steps {
                 script {
-                    if (!(params.MODE in ['alpha-status', 'bundle-preflight', 'submission-preflight', 'closed-alpha-submit'])) {
-                        error('Select alpha-status, bundle-preflight, submission-preflight, or closed-alpha-submit')
+                    if (!(params.MODE in ['alpha-status', 'phone-alpha-preflight', 'closed-alpha-submit'])) {
+                        error('Select alpha-status, phone-alpha-preflight, or closed-alpha-submit')
+                    }
+                    if (params.MODE == 'closed-alpha-submit' &&
+                            (!(params.SIGNED_BUILD ==~ /[1-9][0-9]{0,7}/) || !(params.SIGNED_SHA256 ==~ /[a-f0-9]{64}/))) {
+                        error('Provide the approved signing build number and SHA-256')
                     }
                 }
                 deleteDir()
@@ -53,69 +60,25 @@ git rev-parse --verify 'HEAD^{commit}' > release-evidence/pipeline-commit.txt
         }
 
         stage('Read Google Play Alpha release status') {
-            when { expression { params.MODE == 'alpha-status' } }
+            when { expression { params.MODE in ['alpha-status', 'phone-alpha-preflight'] } }
             steps {
                 script {
                     writeFile file: 'release-evidence/alpha-status.json', text: '{"result":"outcome-unavailable"}\n'
-                    withPlayService {
-                        sh '''#!/bin/bash
-set +x
-set -euo pipefail
-python3 "$RELEASE_TOOLS/play_alpha_status.py" release-evidence/alpha-status.json
-'''
-                    }
-                }
-            }
-        }
-
-        stage('Read Google Play production tracks') {
-            when { expression { params.MODE == 'bundle-preflight' } }
-            steps {
-                script {
-                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) {
-                        withPlayService {
-                            int playStatus = sh returnStatus: true, script: '''#!/bin/bash
-set +x
-set -euo pipefail
-python3 "$RELEASE_TOOLS/play_preflight.py" release-evidence/play-preflight.json
-'''
-                            if (playStatus == 3) {
-                                unstable('Google Play track state indeterminate (HTTP 204 with no release data)')
-                            } else if (playStatus != 0) {
-                                error('Google Play read-only track preflight failed; see the archived report')
-                            }
-                        }
-                    }
-                    if (!fileExists('release-evidence/play-preflight.json')) {
-                        writeFile file: 'release-evidence/play-preflight.json', text: '{"result":"failed","reason":"binding-or-runtime-failed","tracks":{}}\n'
-                    }
-                }
-            }
-        }
-
-        stage('Check Google Play submission access') {
-            when { expression { params.MODE == 'submission-preflight' } }
-            steps {
-                script {
-                    writeFile file: 'release-evidence/expected-product-commit.txt', text: env.PRODUCT_SHA + '\n'
                     catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) {
                         withPlayService {
                             sh '''#!/bin/bash
 set +x
 set -euo pipefail
-python3 "$RELEASE_TOOLS/play_submission_preflight.py" release-evidence/submission-preflight.json
+python3 "$RELEASE_TOOLS/play_alpha_status.py" release-evidence/alpha-status.json
 '''
                         }
-                    }
-                    if (!fileExists('release-evidence/submission-preflight.json')) {
-                        writeFile file: 'release-evidence/submission-preflight.json', text: '{"result":"failed","reason":"binding-or-runtime-failed"}\n'
                     }
                 }
             }
         }
 
-        stage('Build and verify signed phone and Wear bundles') {
-            when { expression { params.MODE == 'bundle-preflight' } }
+        stage('Build and verify the signed phone bundle') {
+            when { expression { params.MODE == 'phone-alpha-preflight' } }
             steps {
                 script {
                     writeFile file: 'release-evidence/signed-bundles.json', text: '{"result":"failed","reason":"source-checkout-failed"}\n'
@@ -162,7 +125,7 @@ printf '%s\\n' '{"result":"failed","reason":"gradle-release-build-failed"}' > re
   export CLOUD_COST_RELEASE_KEY_ALIAS="${KEY_ALIAS:?}"
   export CLOUD_COST_RELEASE_KEY_PASSWORD="${KEY_PASSWORD:?}"
   cd source
-  ./gradlew :apps:aws:bundleRelease :apps:aws-wear:bundleRelease --continue --console=plain --no-daemon --max-workers=2
+  ./gradlew :apps:aws:bundleRelease --console=plain --no-daemon --max-workers=2
   test "$(git rev-parse --verify 'HEAD^{commit}')" = "$PRODUCT_SHA"
   test -z "$(git status --porcelain=v1)"
 )
@@ -178,17 +141,17 @@ python3 "$RELEASE_TOOLS/verify_bundles.py" source release-evidence
             }
         }
 
-        stage('Verify the approved signed bundles from build 2') {
+        stage('Verify the approved phone bundle archive') {
             when { expression { params.MODE == 'closed-alpha-submit' } }
             steps {
-                copyArtifacts(projectName: '/android/cloud-cost-widgets-release', selector: specific('2'),
+                copyArtifacts(projectName: '/android/cloud-cost-widgets-release', selector: specific(params.SIGNED_BUILD),
                         filter: 'release-evidence/source-commit.txt,release-evidence/pipeline-commit.txt,' +
                                 'release-evidence/upload-certificate-sha256.txt,release-evidence/signed-bundles.json,' +
-                                'release-evidence/bundles/SHA256SUMS,release-evidence/bundles/phone-1.0.5-100006.aab,' +
-                                'release-evidence/bundles/wear-1.0.5-200006.aab',
+                                'release-evidence/bundles/*',
                         target: 'signed-input', fingerprintArtifacts: true)
                 sh '''#!/bin/bash
 set -euo pipefail
+export PIPELINE_SHA="$(cat release-evidence/pipeline-commit.txt)"
 python3 "$RELEASE_TOOLS/verify_submission_artifacts.py" signed-input/release-evidence release-evidence/verified-input.json
 '''
             }
@@ -199,7 +162,7 @@ python3 "$RELEASE_TOOLS/verify_submission_artifacts.py" signed-input/release-evi
             steps {
                 script {
                     writeFile file: 'release-evidence/release-sequencing.txt', text:
-                            'Requested release target is Closed testing Alpha for the phone app, version 100005 to 100006.\n' +
+                            'Requested release target is Closed testing Alpha for the phone app, version 100006 to 100007.\n' +
                             'Open evidence includes intended review access, live AWS, physical devices, Play-installed pairing, and final listing and privacy declarations.\n'
                     writeFile file: 'release-evidence/closed-alpha-submit.json', text:
                             '{"result":"outcome-unavailable","reason":"verify-live-state-before-any-other-submission"}\n'
@@ -207,6 +170,7 @@ python3 "$RELEASE_TOOLS/verify_submission_artifacts.py" signed-input/release-evi
                         sh '''#!/bin/bash
 set +x
 set -euo pipefail
+export PIPELINE_SHA="$(cat release-evidence/pipeline-commit.txt)"
 python3 "$RELEASE_TOOLS/play_publish.py" signed-input/release-evidence release-evidence/closed-alpha-submit.json
 '''
                     }

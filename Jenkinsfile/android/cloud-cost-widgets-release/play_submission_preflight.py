@@ -135,7 +135,7 @@ def repeated_field(content, field, status, empty_response):
     return items
 
 
-def summarize_bundles(content, status, tracks=TRACKS):
+def summarize_bundles(content, status, tracks=TRACKS, expected_hashes=BUNDLE_SHA256):
     bundles = repeated_field(
         content, "bundles", status, {"kind": "androidpublisher#bundlesListResponse"},
     )
@@ -148,7 +148,7 @@ def summarize_bundles(content, status, tracks=TRACKS):
 
     candidates = {}
     for track, code in tracks.items():
-        expected = BUNDLE_SHA256[code]
+        expected = expected_hashes[code]
         digest = codes.get(code)
         if code not in codes:
             comparison = "not_seen"
