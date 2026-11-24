@@ -22,6 +22,13 @@ if [[ "$1" == -s ]]; then
   case "$*" in
     "shell getprop ro.product.model") grep "^$serial " "$state/models" | cut -d' ' -f2 ;;
     "shell getprop sys.boot_completed") grep -qx "$serial" "$state/emulators" 2>/dev/null && echo 1 ;;
+    "shell dumpsys power")
+      if grep -qx "$serial" "$state/asleep" 2>/dev/null; then echo '  mWakefulness=Dozing'; else echo '  mWakefulness=Awake'; fi ;;
+    "shell dumpsys window")
+      # Real dumpsys window output is long; print plenty before and after the keyguard line.
+      seq 1 20000 | sed 's/^/    mWindow=/'
+      if grep -qx "$serial" "$state/locked" 2>/dev/null; then echo '    isKeyguardShowing=true'; else echo '    isKeyguardShowing=false'; fi
+      seq 1 20000 | sed 's/^/    mToken=/' ;;
     "emu kill") echo "$serial" >> "$state/killed"; sed -i "/^$serial\$/d" "$state/emulators" ;;
   esac
   exit 0
@@ -135,6 +142,20 @@ class ConnectedDevicesTest(unittest.TestCase):
                 self.assertEqual(sorted(self.lines("killed")), sorted(emulators))
                 self.assertEqual(self.leftovers(), [])
                 self.assertTrue(self.lines("avd_home")[0].startswith(str(self.workspace / "connected-emulators.")))
+
+    def test_locked_or_sleeping_phones_are_skipped_and_replaced_by_emulators(self):
+        self.devices(["PHONE1", "PHONE2", "PHONE3"], [("PHONE1", "SM-G9910"), ("PHONE2", "SM-S9110"), ("PHONE3", "SM-A5")])
+        (self.state / "locked").write_text("PHONE2\n")
+        (self.state / "asleep").write_text("PHONE3\n")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        out = result.stdout.decode()
+        self.assertIn("Skipping Android device PHONE2 (SM-S9110): it shows its lock screen", out)
+        self.assertIn("Skipping Android device PHONE3 (SM-A5): its screen is Dozing", out)
+        emulators = self.lines("started")
+        self.assertEqual(len(emulators), 1)
+        self.assertEqual(self.lines("flutter_runs"), ["PHONE1"] + emulators)
+        self.assertEqual(self.lines("gradle_serial"), [",".join(["PHONE1"] + emulators)])
 
     def test_fails_clearly_when_no_emulator_can_make_up_the_difference(self):
         self.devices(["PHONE1"], [("PHONE1", "SM-G9910")])

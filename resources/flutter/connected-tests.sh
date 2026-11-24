@@ -2,7 +2,8 @@
 # Run every integration_test/*_test.dart and :app:connectedDebugAndroidTest on at least the number of Android
 # devices in connected-device-minimum.txt.
 # - Authorized physical devices are used first; connected-device-exclude.txt lists serials or ro.product.model
-#   values to skip.
+#   values to skip. A phone whose screen is not awake or that shows its lock screen cannot run the tests and is
+#   skipped as well; the job never wakes, unlocks or changes the settings of a phone.
 # - When fewer physical devices are usable (including none), this build starts disposable emulators to make up the
 #   difference and removes them afterwards.
 # - Emulators this build did not start, and excluded phones, are never used: ANDROID_SERIAL always names exactly
@@ -81,10 +82,7 @@ for serial in "${attached_serials[@]}"; do
     echo "Ignoring ${serial}: only emulators started by this build are used"
     continue
   fi
-  model=""
-  if [ "${#excluded_devices[@]}" -gt 0 ]; then
-    model=$("${adb_bin}" -s "${serial}" shell getprop ro.product.model 2>/dev/null | tr -d '[:space:]' || true)
-  fi
+  model=$("${adb_bin}" -s "${serial}" shell getprop ro.product.model 2>/dev/null | tr -d '[:space:]' || true)
   excluded=false
   for entry in "${excluded_devices[@]}"; do
     if [ "${entry}" = "${serial}" ] || [ "${entry}" = "${model}" ]; then
@@ -93,9 +91,21 @@ for serial in "${attached_serials[@]}"; do
   done
   if [ "${excluded}" = true ]; then
     echo "Skipping excluded Android device ${serial} (${model:-unknown model})"
-  else
-    device_serials+=("${serial}")
+    continue
   fi
+  # Read the full dumpsys output before matching: an early-exiting grep would break the pipe under pipefail.
+  power_state=$("${adb_bin}" -s "${serial}" shell dumpsys power 2>/dev/null | tr -d '\r' || true)
+  window_state=$("${adb_bin}" -s "${serial}" shell dumpsys window 2>/dev/null | tr -d '\r' || true)
+  wakefulness=$(sed -n 's/^[[:space:]]*mWakefulness=\([A-Za-z]*\).*/\1/p' <<< "${power_state}" | sed -n 1p)
+  if grep -Eq 'isKeyguardShowing=true|mDreamingLockscreen=true' <<< "${window_state}"; then
+    echo "Skipping Android device ${serial} (${model:-unknown model}): it shows its lock screen"
+    continue
+  fi
+  if [ -n "${wakefulness}" ] && [ "${wakefulness}" != Awake ]; then
+    echo "Skipping Android device ${serial} (${model:-unknown model}): its screen is ${wakefulness}"
+    continue
+  fi
+  device_serials+=("${serial}")
 done
 physical_count=${#device_serials[@]}
 missing=$((minimum - physical_count))

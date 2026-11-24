@@ -53,7 +53,9 @@ flutterRelease(
 - `connected-device-minimum.txt`: runs every `integration_test/*_test.dart` and `connectedDebugAndroidTest` on at
   least that many devices. It uses the host Flutter SDK and ADB, and runs from a clean `git archive` of the same
   commit.
-  - Authorized physical devices on the agent are used first.
+  - Authorized physical devices on the agent are used first. A phone that is asleep or shows its lock screen
+    cannot run the tests and is skipped; the job never wakes, unlocks or reconfigures a phone. To use a phone, keep
+    it unlocked with **Stay awake** on.
   - When fewer are usable, including when none is attached, the job starts disposable Android 34 Pixel 2 emulators
     for this build to make up the difference and removes them afterwards. This needs
     `system-images;android-34;default;x86_64`, the emulator, avdmanager and KVM on the agent; without them the job
