@@ -68,16 +68,19 @@ This jar contains entries whose signer certificate is self-signed.
             signer_fingerprint(report + '\nSigner #2:\n')
 
 
-class PhoneArchiveTest(unittest.TestCase):
+class ReleaseArchiveTest(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
         self.evidence = self.root / 'evidence'
         self.evidence.mkdir()
-        self.bundle = self.root / 'apps/aws/build/outputs/bundle/release/aws-release.aab'
-        self.bundle.parent.mkdir(parents=True)
-        self.bundle.write_bytes(b'phone fixture')
+        self.bundles = {}
+        for form_factor, output, *_ in verifier.RELEASE_BUNDLES:
+            bundle = self.root / output
+            bundle.parent.mkdir(parents=True)
+            bundle.write_bytes(f'{form_factor} fixture'.encode())
+            self.bundles[form_factor] = bundle
         self.certificate = self.evidence / 'upload-certificate-sha256.txt'
         self.certificate.write_text(verifier.UPLOAD_CERTIFICATE_SHA256 + '\n', encoding='ascii')
         self.source_commit = 'ab' * 20
@@ -85,29 +88,61 @@ class PhoneArchiveTest(unittest.TestCase):
         tool.write_bytes(b'bundletool fixture')
         self.enterContext(patch.multiple(verifier, BUNDLETOOL=tool, BUNDLETOOL_SHA=verifier.sha256(tool)))
         self.enterContext(patch.dict('os.environ', {
-            'PRODUCT_SHA': self.source_commit, 'VERSION_NAME': '1.0.8', 'PHONE_VERSION_CODE': '100009',
+            'PRODUCT_SHA': self.source_commit, 'VERSION_NAME': '1.0.10', 'PHONE_VERSION_CODE': '100011',
+            'WEAR_VERSION_NAME': '1.0.7', 'WEAR_VERSION_CODE': '200008',
         }))
 
-    def test_only_phone_bundle_is_verified_and_archived(self):
-        result = verify_manifest(manifest('100009', '26', '36'), '1.0.8', '100009', 'phone') | {
-            'sha256': verifier.sha256(self.bundle),
+    def verified(self, form_factor):
+        if form_factor == 'phone':
+            fields = verify_manifest(manifest('100011', '26', '36', version='1.0.10'), '1.0.10', '100011', 'phone')
+        else:
+            fields = verify_manifest(
+                manifest('200008', '30', '35', WATCH, STANDALONE, version='1.0.7'), '1.0.7', '200008', 'wear',
+            )
+        return fields | {
+            'sha256': verifier.sha256(self.bundles[form_factor]),
             'upload_certificate_sha256': verifier.UPLOAD_CERTIFICATE_SHA256,
         }
-        with patch.object(verifier, 'verify_bundle', return_value=result) as verify:
-            verifier.archive_phone_bundle(self.root, self.evidence)
-        verify.assert_called_once_with(self.bundle, 'phone', '1.0.8', '100009', verifier.UPLOAD_CERTIFICATE_SHA256)
+
+    def test_phone_and_wear_bundles_are_verified_and_archived_together(self):
+        results = {form_factor: self.verified(form_factor) for form_factor in ('phone', 'wear')}
+        with patch.object(verifier, 'verify_bundle', side_effect=lambda bundle, form_factor, *_: results[form_factor]) as verify:
+            verifier.archive_release_bundles(self.root, self.evidence)
+        self.assertEqual([call.args for call in verify.call_args_list], [
+            (self.bundles['phone'], 'phone', '1.0.10', '100011', verifier.UPLOAD_CERTIFICATE_SHA256),
+            (self.bundles['wear'], 'wear', '1.0.7', '200008', verifier.UPLOAD_CERTIFICATE_SHA256),
+        ])
         archive = self.evidence / 'bundles'
-        self.assertEqual({path.name for path in archive.iterdir()}, {'phone-1.0.8-100009.aab', 'SHA256SUMS'})
-        self.assertEqual((archive / 'phone-1.0.8-100009.aab').read_bytes(), self.bundle.read_bytes())
+        names = {'phone': 'phone-1.0.10-100011.aab', 'wear': 'wear-1.0.7-200008.aab'}
+        self.assertEqual({path.name for path in archive.iterdir()}, {*names.values(), 'SHA256SUMS'})
+        for form_factor, name in names.items():
+            self.assertEqual((archive / name).read_bytes(), self.bundles[form_factor].read_bytes())
         self.assertEqual((archive / 'SHA256SUMS').read_text(encoding='ascii').splitlines(), [
-            f"{result['sha256']}  phone-1.0.8-100009.aab",
+            f"{results['phone']['sha256']}  {names['phone']}",
+            f"{results['wear']['sha256']}  {names['wear']}",
         ])
         report = json.loads((self.evidence / 'signed-bundles.json').read_text(encoding='utf-8'))
         self.assertEqual(report['source_commit'], self.source_commit)
-        self.assertEqual(report['bundles'], [result | {'file': 'phone-1.0.8-100009.aab'}])
+        self.assertEqual(report['bundles'], [results[form_factor] | {'file': names[form_factor]} for form_factor in names])
+
+    def test_rejects_a_configured_version_that_differs_from_the_pinned_release(self):
+        with patch.dict('os.environ', {'WEAR_VERSION_CODE': '200007'}), patch.object(verifier, 'verify_bundle') as verify:
+            with self.assertRaisesRegex(VerificationError, 'pinned release'):
+                verifier.archive_release_bundles(self.root, self.evidence)
+        verify.assert_not_called()
 
     def test_rejects_untrusted_signing_certificate_before_checking_bundle(self):
         self.certificate.write_text('0' * 64 + '\n', encoding='ascii')
         with patch.object(verifier, 'verify_bundle') as verify, self.assertRaisesRegex(VerificationError, 'pinned upload certificate'):
-            verifier.archive_phone_bundle(self.root, self.evidence)
+            verifier.archive_release_bundles(self.root, self.evidence)
         verify.assert_not_called()
+
+    def test_nothing_is_archived_when_the_wear_bundle_fails(self):
+        def verify(bundle, form_factor, *_):
+            if form_factor == 'wear':
+                raise VerificationError('Wear AAB must require watch hardware')
+            return self.verified('phone')
+        with patch.object(verifier, 'verify_bundle', side_effect=verify), self.assertRaises(VerificationError):
+            verifier.archive_release_bundles(self.root, self.evidence)
+        self.assertFalse((self.evidence / 'bundles').exists())
+        self.assertFalse((self.evidence / 'signed-bundles.json').exists())

@@ -1,25 +1,31 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
-  <description>Manual Cloud Spend for AWS 1.0.6 phone signing, preflight, and Closed testing Alpha submission.</description>
+  <description>Manual Cloud Spend for AWS phone 1.0.10 and Wear OS 1.0.7 signing, preflight, and Internal testing submission.</description>
   <keepDependencies>false</keepDependencies>
   <properties>
     <hudson.model.ParametersDefinitionProperty>
       <parameterDefinitions>
         <hudson.model.StringParameterDefinition>
           <name>MODE</name>
-          <description>alpha-status, phone-alpha-preflight, closed-alpha-submit, or alpha-receipt-audit</description>
+          <description>alpha-status, internal-preflight, or internal-submit</description>
           <defaultValue>alpha-status</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
           <name>SIGNED_BUILD</name>
-          <description>Approved phone-alpha-preflight build number for submission or receipt audit</description>
+          <description>Approved internal-preflight build number for submission</description>
           <defaultValue/>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.StringParameterDefinition>
           <name>SIGNED_SHA256</name>
-          <description>Approved phone bundle archive SHA-256 for submission or receipt audit</description>
+          <description>Approved phone bundle archive SHA-256 for submission</description>
+          <defaultValue/>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>SIGNED_WEAR_SHA256</name>
+          <description>Approved Wear OS bundle archive SHA-256 for submission</description>
           <defaultValue/>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
