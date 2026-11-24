@@ -1,5 +1,5 @@
 # Flutter build image: android-build-env plus Dart and FVM. Flutter SDK versions are installed by FVM at run
-# time into the FVM cache that Jenkins mounts (see Jenkinsfile/flutter/flutter-android-build), so this image
+# time into the FVM cache that Jenkins mounts (see docs/flutter.md), so this image
 # does not need rebuilding for a new Flutter release.
 FROM harbor.maksonlee.com/library/android-build-env@sha256:b88ae3849ada50e9943fb7cab8b1073063e1be23189c132395f9a853bb6154d7
 

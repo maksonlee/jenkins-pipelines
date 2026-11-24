@@ -117,5 +117,6 @@ A graphics directory replaces that image type with its PNG/JPEG files.
 | `flutter/classic-calculator/{ci,release}` | 100% line and branch coverage, two connected devices, one excluded model |
 | `flutter/kids-calculator/{ci,release}` | none |
 
-These jobs replace `flutter/flutter-android-build`, which served all four apps through one Generic Webhook job. It
-had a `PROJECT` parameter and `BUILD_TARGET`, and required approval only for production.
+These jobs replaced `flutter/flutter-android-build`, which served all four apps through one Generic Webhook job. It
+had a `PROJECT` parameter and `BUILD_TARGET`, and required approval only for production. It was deleted on
+2026-11-24.

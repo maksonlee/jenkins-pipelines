@@ -94,8 +94,7 @@ this order:
    - strict `jarsigner -verify` must pass with no unsigned entries;
    - the signer certificate SHA-256 is recorded as `signerSha256` and shown in the approval input. With
      `verifyUploadCertificate: true` it must also equal Vault `certificate_sha256`. Without it, Google Play checks
-     the upload key when the AAB is uploaded, as with the old jobs. Fingerprints are never written to this public
-     repository;
+     the upload key when the AAB is uploaded. Fingerprints are never written to this public repository;
    - no entry may match `forbiddenAabEntry`.
 
    The AAB, its `.sha256`, the signature report, the manifest summary and the bundletool output are archived and

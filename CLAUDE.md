@@ -31,9 +31,10 @@ contracts. Update them in the same change as the behavior they describe.
     drops the Jenkinsfile-applied parameters and triggers, and deletes folder-scoped credentials if a top-level
     folder such as `android` or `web` is regenerated.
   - Never declare a top-level folder in the DSL.
-- **Migration** runs new jobs next to the old ones. The old jobs (`*-main-ci`, `*-android-build-in-docker`,
-  `native-android-ci`, `flutter/flutter-android-build`) are disabled once their replacement works, and deleted only
-  with the owner's approval.
+- **Migration** runs new jobs next to the old ones. An old job is disabled once its replacement works, and deleted
+  only with the owner's approval. The 12 Android and Flutter jobs replaced in 2026-11 (such as
+  `android/beepbeep-master-ci`, `android/taiwandrive-android-build-in-docker`, `android/native-android-ci` and
+  `flutter/flutter-android-build`) were deleted on 2026-11-24; their Jenkinsfiles remain in git history.
 - **Exceptions on purpose:**
   - `unity/math-runner-*`: job names are part of its evidence and seal.
   - `web/piano-practice-*`: the origin helper `release_ops.py` accepts only `ciJob == web/piano-practice-main-ci`.

@@ -11,7 +11,7 @@ Never point a job at a mutable tag.
 
 | `buildImages` | Image | Source | Base | Used by |
 | --- | --- | --- | --- | --- |
-| `android()` | `android-build-env:jdk25-20261029` | `android-build-env/` | `ubuntu:24.04` by digest; Temurin 25 and 21, cmdline-tools by checksum | `androidCi`, `androidRelease` (through `gradleRelease`), old Android jobs |
+| `android()` | `android-build-env:jdk25-20261029` | `android-build-env/` | `ubuntu:24.04` by digest; Temurin 25 and 21, cmdline-tools by checksum | `androidCi`, `androidRelease` (through `gradleRelease`) |
 | `flutter()` | `flutter-android-build-env:jdk25-20261029` | `flutter-android-build-env/` | `android()` digest + Dart, FVM | `flutterCi`, `flutterRelease` |
 | `gstStreamWall()` | `gst-stream-wall-android-build-env:1.98.0-2` | `gst-stream-wall-android-build-env/` | **legacy** `cdlee/android-build-env@sha256:aa44…` (2025-07, SDKMAN JDKs; see `android-build-env/legacy-2025-07-21/`) | `android/gst-stream-wall/release` |
 | `unityAndroid()` | `unity-android-build-env:6000.6.7f1-android-1` | `unity-android-build-env/` | GameCI editor by digest | `unity/math-runner-*` (the digest is also bound into the Unity worker seal) |

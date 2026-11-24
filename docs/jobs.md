@@ -78,4 +78,5 @@ Run the new jobs next to the old ones:
 2. Disable the old jobs as soon as the new `ci` has succeeded, so that one push does not build twice. Point
    webhooks that used the Generic Webhook Trigger at `/github-webhook/`.
 3. Disabled jobs keep their history and URLs. Re-enable one to roll back. Delete them only after an agreed
-   observation period.
+   observation period and with the owner's approval. The jobs replaced in 2026-11 were deleted on 2026-11-24, and
+   their Jenkinsfiles were removed from `Jenkinsfile/`; they remain in git history.
