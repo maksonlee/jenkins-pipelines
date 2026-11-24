@@ -6,7 +6,8 @@
 // Android image (no release signing material), and archives JUnit XML, debug lint reports, debug and
 // instrumentation APKs with SHA256SUMS under evidence/. See docs/android.md for the project contract.
 // With trace: true (learn-chess) it also keeps the plain Gradle log, run.json and summary.md, and with
-// deviceRunner it runs the project's device suite on a disposable emulator.
+// deviceRunner it runs the project's device suite on a disposable emulator. With honorSkipCi, a GitHub push whose
+// head commit message contains [skip ci] or [ci skip] is recorded as NOT_BUILT, as GitHub Actions would skip it.
 
 def call(Map cfg) {
     def config = androidCiConfig(cfg)
@@ -53,13 +54,22 @@ def call(Map cfg) {
                                 returnStdout: true,
                                 script: libraryResource('android/ci/checkout-verify.sh')
                             ).trim()
+                            // Like GitHub Actions, a push whose head commit says [skip ci] or [ci skip] is not built.
+                            if (config.honorSkipCi && !currentBuild.getBuildCauses('com.cloudbees.jenkins.GitHubPushCause').isEmpty()) {
+                                def message = sh(returnStdout: true, script: 'git log -1 --format=%B HEAD')
+                                if (message.contains('[skip ci]') || message.contains('[ci skip]')) {
+                                    env.NATIVE_ANDROID_SKIPPED = 'true'
+                                }
+                            }
                         }
-                        currentBuild.description = "${config.repo} ${config.branch} ${env.NATIVE_ANDROID_SOURCE_COMMIT.take(12)}"
+                        currentBuild.description = "${config.repo} ${config.branch} ${env.NATIVE_ANDROID_SOURCE_COMMIT.take(12)}" +
+                            (env.NATIVE_ANDROID_SKIPPED == 'true' ? ' skipped by [skip ci]' : '')
                     }
                 }
             }
 
             stage('Build and check debug') {
+                when { expression { env.NATIVE_ANDROID_SKIPPED != 'true' } }
                 steps {
                     script {
                         if (config.trace) {
@@ -79,7 +89,7 @@ def call(Map cfg) {
             }
 
             stage('Collect build evidence') {
-                when { expression { config.trace } }
+                when { expression { config.trace && env.NATIVE_ANDROID_SKIPPED != 'true' } }
                 steps {
                     script {
                         env.NATIVE_ANDROID_OUTPUTS_COLLECTED = 'false'
@@ -135,7 +145,9 @@ def call(Map cfg) {
         post {
             always {
                 script {
-                    if (config.trace) {
+                    if (env.NATIVE_ANDROID_SKIPPED == 'true') {
+                        currentBuild.result = 'NOT_BUILT'
+                    } else if (config.trace) {
                         androidCiFinishTraced(config)
                     } else if (env.NATIVE_ANDROID_SOURCE_COMMIT) {
                         dir('evidence') {
@@ -171,6 +183,7 @@ def androidCiConfig(Map cfg) {
         unitTestTasks       : (cfg.unitTestTasks ?: [:]) as Map,
         flatAppEvidence     : cfg.flatAppEvidence == true,
         trace               : cfg.trace == true,
+        honorSkipCi         : cfg.honorSkipCi == true,
         summaryScript       : cfg.summaryScript as String,
         deviceRunner        : cfg.deviceRunner as String,
         timeoutMinutes      : (cfg.timeoutMinutes ?: 60) as int,

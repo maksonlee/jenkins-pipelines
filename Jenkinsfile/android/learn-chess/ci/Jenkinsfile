@@ -17,5 +17,7 @@ androidCi(
     trace: true,
     summaryScript: 'tools/native-android-ci/summarize_build.py',
     deviceRunner: 'tools/native-android-ci/run_device.py',
-    timeoutMinutes: 120
+    timeoutMinutes: 120,
+    // Documentation-only commits use [skip ci], which the previous GitHub Actions trigger honored.
+    honorSkipCi: true
 )

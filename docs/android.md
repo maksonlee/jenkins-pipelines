@@ -40,6 +40,9 @@ only that task, for example `nativeAndroidCi`; learn-chess and cloud-cost-widget
 inside the downloaded evidence. `source-commit.txt` and `build.txt` record the commit, image and Gradle exit. A
 build fails when Gradle succeeds without every configured output. A failed build still archives what it produced.
 
+**`[skip ci]`.** With `honorSkipCi: true`, a GitHub push whose head commit message contains `[skip ci]` or
+`[ci skip]` ends as `NOT_BUILT`, as the GitHub Actions trigger used to skip it. Manual builds always run.
+
 **Tracing and device tests (learn-chess).** With `trace: true`, the job also keeps the plain Gradle log, the Gradle
 version, the SDK platform list and before/after checkout state. It runs `summaryScript` from the repository, then
 writes `run.json` and `summary.md` and archives everything as `ci-evidence.tar.gz`.
@@ -117,6 +120,6 @@ its own (`publishPlayListings: false`).
 | `android/float-level/{ci,release}` | package `com.maksonlee.floatinglevel`; same as beepbeep |
 | `android/headshot-maker-android/{ci,release}` | package `com.maksonlee.headshotmaker`; same as beepbeep |
 | `android/taiwandrive/{ci,release}` | engine and pack JVM tests; alpha/internal; no bundled offline pack; signer checked against Vault |
-| `android/learn-chess/ci` | `nativeAndroidCi`, traced evidence, emulator device suite |
-| `android/cloud-cost-widgets/ci` | `nativeAndroidCi` for the phone and Wear OS apps |
+| `android/learn-chess/ci` | `nativeAndroidCi`, traced evidence, emulator device suite, honors `[skip ci]` |
+| `android/cloud-cost-widgets/ci` | `nativeAndroidCi` for the phone and Wear OS apps; no repository webhook, so it runs when started by hand |
 | `android/gst-stream-wall/release` | own Jenkinsfile (Rust/GStreamer image, upload, promotion and listing modes) |

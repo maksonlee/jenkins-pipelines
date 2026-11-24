@@ -96,6 +96,14 @@ class AndroidCiContractTest(unittest.TestCase):
         for step in junit_steps:
             self.assertIn("skipPublishingChecks: true", step)
 
+    def test_skip_ci_applies_only_to_opted_in_push_builds(self):
+        self.assertIn("honorSkipCi         : cfg.honorSkipCi == true", STEP)
+        self.assertIn("config.honorSkipCi && !currentBuild.getBuildCauses('com.cloudbees.jenkins.GitHubPushCause').isEmpty()", STEP)
+        for stage in ("stage('Build and check debug')", "stage('Collect build evidence')"):
+            when = STEP[STEP.index(stage):].split("steps {", 1)[0]
+            self.assertIn("env.NATIVE_ANDROID_SKIPPED != 'true'", when)
+        self.assertIn("currentBuild.result = 'NOT_BUILT'", STEP)
+
     def test_learn_chess_keeps_existing_archive_paths(self):
         expected = [
             self.add("app/build/test-results/testDebugUnitTest/TEST-app.xml", "junit/app/TEST-app.xml", "app tests"),
