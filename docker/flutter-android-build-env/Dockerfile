@@ -3,6 +3,10 @@
 # does not need rebuilding for a new Flutter release.
 FROM harbor.maksonlee.com/library/android-build-env@sha256:b88ae3849ada50e9943fb7cab8b1073063e1be23189c132395f9a853bb6154d7
 
+LABEL org.opencontainers.image.title="Flutter Android build environment" \
+      org.opencontainers.image.description="android-build-env with Dart and FVM for Jenkins Flutter builds" \
+      org.opencontainers.image.source="https://github.com/maksonlee/jenkins-pipelines"
+
 ARG DART_VERSION=3.13.7-1
 ARG FVM_VERSION=4.1.0
 

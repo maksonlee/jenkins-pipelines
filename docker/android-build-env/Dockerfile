@@ -6,6 +6,10 @@
 # base of gst-stream-wall-android-build-env) is described in legacy-2025-07-21/.
 FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 
+LABEL org.opencontainers.image.title="Android build environment" \
+      org.opencontainers.image.description="Temurin JDK 25 and 21 with Android command-line tools for Jenkins Android builds" \
+      org.opencontainers.image.source="https://github.com/maksonlee/jenkins-pipelines"
+
 ARG JDK25_URL=https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jdk_x64_linux_hotspot_25.0.5_8.tar.gz
 ARG JDK25_SHA256=68982529869257d0ee6b824ec5aa270ff8b118bb438670da0b97ebdab178d7fb
 ARG JDK21_URL=https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_x64_linux_hotspot_21.0.13_9.tar.gz
