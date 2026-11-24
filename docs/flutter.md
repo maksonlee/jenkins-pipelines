@@ -50,9 +50,15 @@ flutterRelease(
 
 - `coverage-minimum.txt` and `branch-coverage-minimum.txt`: numeric percentage floors. The branch floor fails when
   the LCOV report has no branch records.
-- `connected-device-minimum.txt`: runs every `integration_test/*_test.dart` and `connectedDebugAndroidTest` on each
-  authorized device of the agent. It uses the host Flutter SDK and ADB, and runs from a clean `git archive` of the
-  same commit.
+- `connected-device-minimum.txt`: runs every `integration_test/*_test.dart` and `connectedDebugAndroidTest` on at
+  least that many devices. It uses the host Flutter SDK and ADB, and runs from a clean `git archive` of the same
+  commit.
+  - Authorized physical devices on the agent are used first.
+  - When fewer are usable, including when none is attached, the job starts disposable Android 34 Pixel 2 emulators
+    for this build to make up the difference and removes them afterwards. This needs
+    `system-images;android-34;default;x86_64`, the emulator, avdmanager and KVM on the agent; without them the job
+    fails before the tests.
+  - Emulators the job did not start are never used.
 - `connected-device-exclude.txt`: one serial or `ro.product.model` per line (`#` starts a comment). Listed devices
   are skipped and do not count toward the minimum.
 
