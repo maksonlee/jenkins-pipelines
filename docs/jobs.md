@@ -50,8 +50,14 @@ Jobs that do not follow the layout yet:
   would delete folder-scoped credentials if a top-level folder were regenerated.
 - Declarative parameters and triggers appear after a job's first build. Start each new job once by hand. A release
   job's first build uses `PUBLISH_TO_PLAY=false`, so it only verifies.
-- After changing `jobs/jenkins_jobs.groovy`, approve the script under **Manage Jenkins → In-process Script
-  Approval** and run the seed.
+- After changing `jobs/jenkins_jobs.groovy`, run the seed once: it stops with "script not yet approved".
+  Compare the pending script with the reviewed file, approve exactly that hash under **Manage Jenkins →
+  In-process Script Approval**, and run the seed again.
+  - The page's Approve button uses a session-bound Stapler proxy, which rejects API-token requests. From the API,
+    approve through the script console:
+    `ScriptApproval.get().approveScript('<SHA512:...>')`.
+- `Jenkinsfile/admin/seed-jobs/job-config.xml` is the configuration the seed job was created with. To recreate
+  it: create the `admin` folder, then post this file to `/job/admin/createItem?name=seed-jobs`.
 - To change an existing job's definition, edit it in Jenkins and keep `jobs/jenkins_jobs.groovy` in step.
   `python3 tools/jenkins_inventory.py --check` reports any job whose SCM, branch, script path or lightweight flag
   differs from the file, and any job that is missing.
