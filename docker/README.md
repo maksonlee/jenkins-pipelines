@@ -22,7 +22,7 @@ Never point a job at a mutable tag.
 
 - `Jenkinsfile/web/piano-practice-main-ci/Dockerfile` (Node 24 + Playwright, both bases by digest) is built on every
   run by the piano CI and deploy jobs.
-- `aosp-builder` (no Dockerfile here) is used only by the unchanged AOSP jobs.
+- The `aosp-builder` images were removed from the agent with the AOSP jobs on 2026-11-25.
 
 **Open item:** `gst-stream-wall-android-build-env` should be rebuilt on `android()` so that every Android image
 shares one reproducible base. That changes its JDK and toolchain paths, so the gst-stream-wall release must be

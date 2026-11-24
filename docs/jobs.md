@@ -28,7 +28,10 @@ Jobs that do not follow the layout yet:
   must be signed by the Vault upload key used for the build; no fingerprint is kept in this repository. The old
   `android/cloud-cost-widgets-release`, which loaded a pinned commit of an unmerged branch, was deleted on
   2026-11-25.
-- `backstage`, `aosp`, `build-prj-0001`, `k8s-dynamic-agent-test`, `monitoring`, `artifactory`: unchanged.
+- `backstage`, `artifactory`: unchanged.
+- `aosp/aosp-build-in-docker`, `build-prj-0001`, `k8s-dynamic-agent-test` and
+  `monitoring/taiwan-bus-production-health` were deleted on 2026-11-25, together with the Gerrit and Kubernetes
+  credentials, cloud and plugins they alone used.
 
 ## Standards
 
