@@ -87,8 +87,8 @@ this order:
    `default.txt`.
 3. **Build.** `gradleRelease(':<module>:bundleRelease', extraArgs: verifyTasks)`. Signing comes from Vault
    `secret/jenkins/mobile/app/<packageName>` (`upload_jks_b64`, `store_password`, `key_password`, `key_alias`)
-   through the `SIGNING_*` environment variables. A project that reads only `-Psigning.*` properties sets
-   `passSigningProperties: true` until its build reads `SIGNING_*`.
+   through the `SIGNING_*` environment variables. `passSigningProperties: true` would also pass them as
+   `-Psigning.*` Gradle properties, which put the passwords on the Gradle command line; no project uses it.
 4. **Verify.** On the agent:
    - the AAB must be the only bundle in its directory, and bundletool 1.18.3 (checked against its pinned SHA-256)
      validates it;
@@ -117,7 +117,7 @@ its own (`publishPlayListings: false`).
 
 | Job | Settings |
 | --- | --- |
-| `android/beepbeep/{ci,release}` | branch `master`; `-Psigning.*` until the build reads `SIGNING_*`; listing with release |
+| `android/beepbeep/{ci,release}` | branch `master`; listing with release |
 | `android/bluetoothfinder/{ci,release}` | branch `2.x`; same as beepbeep |
 | `android/float-level/{ci,release}` | package `com.maksonlee.floatinglevel`; same as beepbeep |
 | `android/headshot-maker-android/{ci,release}` | package `com.maksonlee.headshotmaker`; same as beepbeep |

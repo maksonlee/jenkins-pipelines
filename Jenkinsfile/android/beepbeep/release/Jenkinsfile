@@ -5,8 +5,6 @@ androidRelease(
     repo: 'beepbeep',
     branch: 'master',
     packageName: 'com.maksonlee.beepbeep',
-    // The Gradle build reads release signing only from -Psigning.* properties until it reads SIGNING_*.
-    passSigningProperties: true,
     // Each release has also uploaded the store listing from the same commit; keep that behavior explicit.
     publishListingsWithRelease: true
 )

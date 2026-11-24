@@ -52,6 +52,13 @@ class AndroidReleaseContractTest(unittest.TestCase):
         loaded = set(re.findall(r"libraryResource\('android/release/([^']+)'\)", STEP))
         self.assertEqual(loaded, {p.name for p in SCRIPTS.glob("*.sh")})
 
+    def test_no_release_job_puts_signing_passwords_on_the_gradle_command_line(self):
+        self.assertIn("passSigningProperties    : cfg.get('passSigningProperties', false) as boolean", STEP)
+        jobs = sorted(ROOT.glob("Jenkinsfile/android/*/release/Jenkinsfile"))
+        self.assertGreaterEqual(len(jobs), 5)
+        for job in jobs:
+            self.assertNotIn("passSigningProperties: true", job.read_text(encoding="utf-8"), job)
+
     def test_parameters_reach_scripts_explicitly(self):
         # A job's first build exports no parameter environment variables, so scripts get them through withEnv.
         self.assertIn('"PLAY_TRACK=${params.PLAY_TRACK}"', STEP)
