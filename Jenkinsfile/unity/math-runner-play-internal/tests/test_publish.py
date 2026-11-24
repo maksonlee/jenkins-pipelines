@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import pathlib
 import subprocess
 import unittest
@@ -11,6 +12,8 @@ from unittest import mock
 import zipfile
 
 
+# The publisher reads the approved signer from the environment at import; tests use a synthetic one.
+os.environ["EXPECTED_SIGNER_SHA256"] = ":".join(["AB"] * 32)
 SOURCE = pathlib.Path(__file__).resolve().parents[1] / "publish.py"
 SPEC = importlib.util.spec_from_file_location("mathrunner_publisher", SOURCE)
 publisher = importlib.util.module_from_spec(SPEC)
@@ -331,6 +334,18 @@ class PublisherContractTests(unittest.TestCase):
         self.assertEqual(client.operations().count("bundle_upload"), 1)
         self.assertEqual(client.operations().count("edit_delete"), 1)
         self.assertFalse(state["upload_response_confirmed"])
+
+
+class SignerConfigurationTest(unittest.TestCase):
+    def test_no_fingerprint_is_kept_in_the_publisher_source(self):
+        self.assertIsNone(__import__("re").search(r"[0-9A-Fa-f]{64}", SOURCE.read_text(encoding="utf-8")))
+        self.assertEqual(publisher.SIGNER_SHA256, "AB" * 32)
+
+    def test_main_refuses_to_run_without_a_well_formed_signer(self):
+        for value in ("", "AB" * 31, "ZZ" * 32, "ab" * 32):
+            with self.subTest(value=value), mock.patch.object(publisher, "SIGNER_SHA256", value), \
+                    self.assertRaisesRegex(publisher.PublishError, "EXPECTED_SIGNER_SHA256"):
+                publisher.main(["verify", "1", "0" * 64, "artifact"])
 
 
 if __name__ == "__main__":

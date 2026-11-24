@@ -29,7 +29,9 @@ PACKAGE = "com.maksonlee.mathrunner"
 SOURCE_JOB = "/job/unity/job/math-runner-android-build-in-docker"
 PLAY_ORIGIN = "https://androidpublisher.googleapis.com"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
-SIGNER_SHA256 = "E11BC3918C83D0082BF28B72F2F99BC6F2867C38559F701CF4FDCE0F3702CEC7"
+# The approved upload certificate SHA-256 comes from Vault through the Jenkinsfile; this public repository holds no
+# fingerprint. main() refuses to run without a well-formed value.
+SIGNER_SHA256 = os.environ.get("EXPECTED_SIGNER_SHA256", "").replace(":", "").upper()
 ARTIFACT_PATHS = (
     "Builds/Release/Android/SportsDayMath.aab",
     "Builds/Release/Android/SportsDayMath.aab.sha256",
@@ -465,6 +467,8 @@ def publish(report_path, expected_sha, release_status, replace_code, replace_sha
 
 def main(argv):
     os.umask(0o077)
+    require(re.fullmatch(r"[0-9A-F]{64}", SIGNER_SHA256) is not None,
+            "EXPECTED_SIGNER_SHA256 must be the approved upload certificate SHA-256")
     require(argv, "Usage: publish.py verify|describe|publish ...")
     if argv[0] == "verify" and len(argv) == 4:
         verify(argv[1], argv[2], argv[3])

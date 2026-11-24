@@ -7,6 +7,7 @@ pipeline {
         disableConcurrentBuilds()
         skipDefaultCheckout(true)
         timeout(time: 60, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '50'))
     }
 
     parameters {
@@ -20,7 +21,7 @@ pipeline {
 
     environment {
         PUBLISHER_SCRIPT = 'pipeline-source/Jenkinsfile/unity/math-runner-play-internal/publish.py'
-        PUBLISHER_SHA256 = 'c78e655c4378f5888032c832d19c5d28cb2f2d71810fceac6896e8737590de36'
+        PUBLISHER_SHA256 = '636713b368cb46d3ff53507904014f51d7353920eac80e513162dfd63a6f0bcf'
     }
 
     stages {
@@ -66,6 +67,24 @@ printf '%s  %s\n' "$PUBLISHER_SHA256" "$PUBLISHER_SCRIPT" | sha256sum --check --
 python3 -c 'import cryptography'
 git -C pipeline-source rev-parse HEAD
 '''
+                // The approved upload certificate is kept in Vault, never in this public repository. The publisher
+                // compares the archived signer, the release report and the AAB itself with it.
+                withVault([vaultSecrets: [[
+                    path: 'secret/jenkins/mobile/shared/upload-key',
+                    engineVersion: 2,
+                    secretValues: [[envVar: 'UPLOAD_CERTIFICATE_SHA256', vaultKey: 'certificate_sha256']]
+                ]]]) {
+                    script {
+                        env.EXPECTED_SIGNER_SHA256 = sh(
+                            script: '''#!/bin/bash
+set +x
+set -euo pipefail
+printf '%s' "$UPLOAD_CERTIFICATE_SHA256"
+''',
+                            returnStdout: true
+                        ).trim()
+                    }
+                }
             }
         }
 
