@@ -1,0 +1,41 @@
+// Create the per-project folders and jobs listed in jobs/jenkins_jobs.groovy. Run manually after a reviewed
+// change to that file; Job DSL script changes need an In-process Script Approval first.
+//
+// ignoreExisting: existing folders and jobs are never updated, so Jenkinsfile-applied parameters and triggers and
+// folder-scoped credentials stay intact. Removed entries are ignored, never deleted.
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout()
+        timeout(time: 10, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+    }
+
+    stages {
+        stage('Create missing jobs') {
+            steps {
+                deleteDir()
+                checkout scm
+                jobDsl(
+                    targets: 'jobs/jenkins_jobs.groovy',
+                    ignoreExisting: true,
+                    removedJobAction: 'IGNORE',
+                    removedViewAction: 'IGNORE',
+                    removedConfigFilesAction: 'IGNORE',
+                    lookupStrategy: 'JENKINS_ROOT',
+                    failOnMissingPlugin: true,
+                    unstableOnDeprecation: true
+                )
+            }
+        }
+    }
+
+    post {
+        cleanup {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}
