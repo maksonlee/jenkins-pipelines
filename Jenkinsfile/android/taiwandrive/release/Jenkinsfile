@@ -1,0 +1,15 @@
+@Library('jenkins-shared-lib') _
+
+// Google Play test-track release for maksonlee/taiwandrive (com.maksonlee.taiwandrive).
+androidRelease(
+    repo: 'taiwandrive',
+    packageName: 'com.maksonlee.taiwandrive',
+    verifyTasks: [':engine:test', ':pack:test', ':app:testDebugUnitTest', ':app:lintDebug'],
+    // alpha is Closed testing - Alpha. A draft app requires draft; use completed after Google has published
+    // the first test release.
+    tracks: ['alpha', 'internal'],
+    releaseStatuses: ['draft', 'completed'],
+    // Release builds download their first signed offline pack; none may be bundled.
+    forbiddenPaths: ['app/src/main/assets/offline_pack.zip'],
+    forbiddenAabEntry: 'offline_pack\\.zip$'
+)

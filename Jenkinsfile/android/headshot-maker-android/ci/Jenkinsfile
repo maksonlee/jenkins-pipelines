@@ -1,0 +1,12 @@
+@Library('jenkins-shared-lib') _
+
+// Debug CI for maksonlee/headshot-maker-android main: unit tests, debug lint and debug and instrumentation APKs.
+androidCi(
+    repo: 'headshot-maker-android',
+    branch: 'main',
+    gradleTasks: [':app:testDebugUnitTest', ':app:lintDebug', ':app:assembleDebug', ':app:assembleDebugAndroidTest'],
+    debugApkModules: ['app'],
+    androidTestModules: ['app'],
+    lintModules: ['app'],
+    unitTestTasks: ['app': 'testDebugUnitTest']
+)

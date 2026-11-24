@@ -1,0 +1,8 @@
+@Library('jenkins-shared-lib') _
+
+// Push-triggered CI for maksonlee/taiwan-bus-app.
+flutterCi(
+    repo: 'taiwan-bus-app',
+    // Repository-root FastAPI tests, with a disposable PostGIS database and the backend coverage floor.
+    backendTests: [coverageFloor: 35, postgresDatabase: 'taiwan_bus_test']
+)

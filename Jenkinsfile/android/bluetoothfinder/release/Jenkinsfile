@@ -1,0 +1,12 @@
+@Library('jenkins-shared-lib') _
+
+// Google Play release for maksonlee/bluetoothfinder (com.maksonlee.bluetoothfinder).
+androidRelease(
+    repo: 'bluetoothfinder',
+    branch: '2.x',
+    packageName: 'com.maksonlee.bluetoothfinder',
+    // The Gradle build reads release signing only from -Psigning.* properties until it reads SIGNING_*.
+    passSigningProperties: true,
+    // Each release has also uploaded the store listing from the same commit; keep that behavior explicit.
+    publishListingsWithRelease: true
+)

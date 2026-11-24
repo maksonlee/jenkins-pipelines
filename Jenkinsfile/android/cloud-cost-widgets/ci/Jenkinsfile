@@ -1,0 +1,15 @@
+@Library('jenkins-shared-lib') _
+
+// Debug CI for maksonlee/cloud-cost-widgets main (phone and Wear OS apps).
+androidCi(
+    repo: 'cloud-cost-widgets',
+    gradleTasks: ['nativeAndroidCi'],
+    maxWorkers: 2,
+    debugApkModules: ['apps/aws', 'apps/aws-wear'],
+    androidTestModules: ['providers/aws', 'apps/aws-wear'],
+    lintModules: ['apps/aws', 'apps/aws-wear', 'shared/core', 'providers/aws'],
+    unitTestTasks: [
+        'shared/core': 'testDebugUnitTest',
+        'providers/aws': 'testDebugUnitTest'
+    ]
+)

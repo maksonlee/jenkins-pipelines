@@ -1,0 +1,6 @@
+@Library('jenkins-shared-lib') _
+
+// Google Play release for maksonlee/kids-calculator.
+flutterRelease(
+    repo: 'kids-calculator'
+)

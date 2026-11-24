@@ -1,0 +1,18 @@
+@Library('jenkins-shared-lib') _
+
+// Debug CI for maksonlee/taiwandrive main: engine and pack JVM tests, app unit tests, debug lint and APKs.
+androidCi(
+    repo: 'taiwandrive',
+    gradleTasks: [
+        ':engine:test', ':pack:test', ':app:testDebugUnitTest', ':app:lintDebug',
+        ':app:assembleDebug', ':app:assembleDebugAndroidTest'
+    ],
+    debugApkModules: ['app'],
+    androidTestModules: ['app'],
+    lintModules: ['app'],
+    unitTestTasks: [
+        'engine': 'test',
+        'pack': 'test',
+        'app': 'testDebugUnitTest'
+    ]
+)

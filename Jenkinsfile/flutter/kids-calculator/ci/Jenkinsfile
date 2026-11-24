@@ -1,0 +1,6 @@
+@Library('jenkins-shared-lib') _
+
+// Push-triggered CI for maksonlee/kids-calculator.
+flutterCi(
+    repo: 'kids-calculator'
+)

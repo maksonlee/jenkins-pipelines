@@ -1,0 +1,6 @@
+@Library('jenkins-shared-lib') _
+
+// Push-triggered CI for maksonlee/classic-calculator.
+flutterCi(
+    repo: 'classic-calculator'
+)

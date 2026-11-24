@@ -1,0 +1,12 @@
+@Library('jenkins-shared-lib') _
+
+// Debug CI for maksonlee/bluetoothfinder 2.x: unit tests, debug lint and debug and instrumentation APKs.
+androidCi(
+    repo: 'bluetoothfinder',
+    branch: '2.x',
+    gradleTasks: [':app:testDebugUnitTest', ':app:lintDebug', ':app:assembleDebug', ':app:assembleDebugAndroidTest'],
+    debugApkModules: ['app'],
+    androidTestModules: ['app'],
+    lintModules: ['app'],
+    unitTestTasks: ['app': 'testDebugUnitTest']
+)

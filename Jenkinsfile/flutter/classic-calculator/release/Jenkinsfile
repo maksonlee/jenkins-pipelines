@@ -1,0 +1,6 @@
+@Library('jenkins-shared-lib') _
+
+// Google Play release for maksonlee/classic-calculator.
+flutterRelease(
+    repo: 'classic-calculator'
+)

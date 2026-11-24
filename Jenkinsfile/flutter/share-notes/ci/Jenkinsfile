@@ -1,0 +1,7 @@
+@Library('jenkins-shared-lib') _
+
+// Push-triggered CI for maksonlee/share-notes.
+flutterCi(
+    repo: 'share-notes',
+    branch: 'master'
+)

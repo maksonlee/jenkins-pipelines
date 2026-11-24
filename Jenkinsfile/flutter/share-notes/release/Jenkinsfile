@@ -1,0 +1,7 @@
+@Library('jenkins-shared-lib') _
+
+// Google Play release for maksonlee/share-notes.
+flutterRelease(
+    repo: 'share-notes',
+    branch: 'master'
+)

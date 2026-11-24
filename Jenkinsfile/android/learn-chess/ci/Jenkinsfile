@@ -1,0 +1,21 @@
+@Library('jenkins-shared-lib') _
+
+// Debug CI for maksonlee/learn-chess main: nativeAndroidCi, traced evidence and the emulator device suite.
+androidCi(
+    repo: 'learn-chess',
+    gradleTasks: ['nativeAndroidCi'],
+    maxWorkers: 2,
+    debugApkModules: ['app'],
+    androidTestModules: ['app'],
+    lintModules: ['app'],
+    unitTestTasks: [
+        'app': 'testDebugUnitTest',
+        'core/chess': 'test',
+        'core/lesson': 'test'
+    ],
+    flatAppEvidence: true,
+    trace: true,
+    summaryScript: 'tools/native-android-ci/summarize_build.py',
+    deviceRunner: 'tools/native-android-ci/run_device.py',
+    timeoutMinutes: 120
+)
