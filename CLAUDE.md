@@ -43,8 +43,8 @@ contracts. Update them in the same change as the behavior they describe.
     internal-submit modes and its own Play tools. Merged from `codex/cloud-cost-widgets-release` on 2026-11-24;
     the old `android/cloud-cost-widgets-release` job and that branch were deleted on 2026-11-25.
   - `artifactory/artifactory-cleanup`: weekly; every app in `android-snapshots` keeps its newest `KEEP_VERSIONS`
-    version folders, and `math-runner` (Unity evidence) is never touched. `DELETE` defaults to false, so a run only
-    reports until the owner approves deletion. Tests: `tests/artifactory/`.
+    version folders (5, approved by the owner on 2026-11-25), and `math-runner` (Unity evidence) is never touched.
+    Scheduled runs delete; uncheck `DELETE` to only report. Tests: `tests/artifactory/`.
   - `backstage`: unchanged.
   - `aosp/aosp-build-in-docker`, `build-prj-0001`, `k8s-dynamic-agent-test` and
     `monitoring/taiwan-bus-production-health` were deleted on 2026-11-25: their Gerrit and Kubernetes hosts were

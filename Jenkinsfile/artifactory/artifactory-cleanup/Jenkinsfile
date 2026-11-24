@@ -1,5 +1,5 @@
 // Weekly cleanup of the Artifactory android-snapshots repository: every app keeps its newest KEEP_VERSIONS version
-// folders, and math-runner (Unity release evidence) is never touched. With DELETE unchecked it only reports.
+// folders, and math-runner (Unity release evidence) is never touched. Uncheck DELETE to only report.
 pipeline {
     agent { label 'ssh-agent-with-docker' }
 
@@ -15,7 +15,7 @@ pipeline {
     }
 
     parameters {
-        booleanParam(name: 'DELETE', defaultValue: false,
+        booleanParam(name: 'DELETE', defaultValue: true,
                 description: 'Delete the planned version folders; unchecked only lists them')
         string(name: 'KEEP_VERSIONS', defaultValue: '5', trim: true,
                 description: 'Version folders to keep per app, 1 to 99')
