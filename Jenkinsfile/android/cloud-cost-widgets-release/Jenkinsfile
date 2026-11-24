@@ -1,0 +1,201 @@
+@Library('jenkins-shared-lib') _
+
+def withPlayService(Closure body) {
+    withVault([vaultSecrets: [[
+            path: 'secret/jenkins/mobile/shared/play-service',
+            engineVersion: 2,
+            secretValues: [[envVar: 'PLAY_SERVICE_JSON_B64', vaultKey: 'json_b64']]
+    ]]]) {
+        body()
+    }
+}
+
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout()
+        buildDiscarder(logRotator(numToKeepStr: '5'))
+        copyArtifactPermission('/android/cloud-cost-widgets-release')
+    }
+
+    parameters {
+        string(name: 'MODE', defaultValue: 'alpha-status', trim: true,
+                description: 'alpha-status, internal-preflight, or internal-submit')
+        string(name: 'SIGNED_BUILD', defaultValue: '', trim: true,
+                description: 'Approved internal-preflight build number for submission')
+        string(name: 'SIGNED_SHA256', defaultValue: '', trim: true,
+                description: 'Approved phone bundle archive SHA-256 for submission')
+        string(name: 'SIGNED_WEAR_SHA256', defaultValue: '', trim: true,
+                description: 'Approved Wear OS bundle archive SHA-256 for submission')
+    }
+
+    environment {
+        PRODUCT_SHA = '0e21106babd974b10133488e56407cced670d63a'
+        VERSION_NAME = '1.0.10'
+        PHONE_VERSION_CODE = '100011'
+        WEAR_VERSION_NAME = '1.0.7'
+        WEAR_VERSION_CODE = '200008'
+        RELEASE_TOOLS = 'Jenkinsfile/android/cloud-cost-widgets-release'
+    }
+
+    stages {
+        stage('Fetch release pipeline') {
+            steps {
+                script {
+                    if (!(params.MODE in ['alpha-status', 'internal-preflight', 'internal-submit'])) {
+                        error('Select alpha-status, internal-preflight, or internal-submit')
+                    }
+                    if (params.MODE == 'internal-submit' &&
+                            (!(params.SIGNED_BUILD ==~ /[1-9][0-9]{0,7}/) || !(params.SIGNED_SHA256 ==~ /[a-f0-9]{64}/) ||
+                             !(params.SIGNED_WEAR_SHA256 ==~ /[a-f0-9]{64}/))) {
+                        error('Provide the approved signing build number and both bundle SHA-256 values')
+                    }
+                }
+                deleteDir()
+                checkout scm
+                sh '''#!/bin/bash
+set -euo pipefail
+mkdir release-evidence
+git rev-parse --verify 'HEAD^{commit}' > release-evidence/pipeline-commit.txt
+'''
+                script {
+                    if (params.MODE == 'internal-submit') {
+                        env.PIPELINE_SHA = readFile('release-evidence/pipeline-commit.txt').trim()
+                    }
+                }
+            }
+        }
+
+        stage('Read Google Play release status') {
+            when { expression { params.MODE in ['alpha-status', 'internal-preflight'] } }
+            steps {
+                script {
+                    writeFile file: 'release-evidence/alpha-status.json', text: '{"result":"outcome-unavailable"}\n'
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) {
+                        withPlayService {
+                            sh '''#!/bin/bash
+set +x
+set -euo pipefail
+python3 "$RELEASE_TOOLS/play_alpha_status.py" release-evidence/alpha-status.json
+'''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Build and verify the signed phone and Wear OS bundles') {
+            when { expression { params.MODE == 'internal-preflight' } }
+            steps {
+                script {
+                    writeFile file: 'release-evidence/signed-bundles.json', text: '{"result":"failed","reason":"source-checkout-failed"}\n'
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) {
+                        dir('source') {
+                            git branch: 'main', credentialsId: 'vault-github-ssh',
+                                    url: 'git@github.com:maksonlee/cloud-cost-widgets.git'
+                            sh '''#!/bin/bash
+set -euo pipefail
+git merge-base --is-ancestor "$PRODUCT_SHA" HEAD
+git checkout --detach "$PRODUCT_SHA"
+test "$(git rev-parse --verify 'HEAD^{commit}')" = "$PRODUCT_SHA"
+test -z "$(git status --porcelain=v1)"
+printf '%s\\n' "$PRODUCT_SHA" > ../release-evidence/source-commit.txt
+'''
+                        }
+                        def cache = '/home/administrator/jenkins/android-cache'
+                        def image = buildImages.android()
+                        writeFile file: 'release-evidence/build-image.txt', text: image + '\n'
+                        writeFile file: 'release-evidence/signed-bundles.json', text: '{"result":"failed","reason":"signing-environment-failed"}\n'
+                        withAndroidReleaseEnv(
+                                image: image,
+                                cacheRoot: cache,
+                                mountAndroidCache: false,
+                                insideArgs: "--mount type=bind,src=${cache}/flutter-android-sdk,dst=/home/ubuntu/Android,readonly",
+                                keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.cloudcost.aws'
+                        ) {
+                            sh '''#!/bin/bash
+set +x
+set -euo pipefail
+export GRADLE_USER_HOME=/home/ubuntu/.gradle
+export ANDROID_USER_HOME="$PWD/android-user-home"
+mkdir -p "$ANDROID_USER_HOME"
+if ! fingerprint=$(keytool -exportcert -keystore "$JKS_PATH" -storepass:env STORE_PASSWORD -alias "$KEY_ALIAS" 2>/dev/null \\
+  | sha256sum | cut -d ' ' -f 1); then
+  echo 'Could not read the public certificate of the Vault-bound upload key' >&2
+  exit 1
+fi
+printf '%s\\n' "$fingerprint" > release-evidence/upload-certificate-sha256.txt
+printf '%s\\n' '{"result":"failed","reason":"gradle-release-build-failed"}' > release-evidence/signed-bundles.json
+(
+  export CLOUD_COST_RELEASE_STORE_FILE="${JKS_PATH:?}"
+  export CLOUD_COST_RELEASE_STORE_PASSWORD="${STORE_PASSWORD:?}"
+  export CLOUD_COST_RELEASE_KEY_ALIAS="${KEY_ALIAS:?}"
+  export CLOUD_COST_RELEASE_KEY_PASSWORD="${KEY_PASSWORD:?}"
+  cd source
+  ./gradlew :apps:aws:bundleRelease :apps:aws-wear:bundleRelease --console=plain --no-daemon --max-workers=2
+  test "$(git rev-parse --verify 'HEAD^{commit}')" = "$PRODUCT_SHA"
+  test -z "$(git status --porcelain=v1)"
+)
+'''
+                        }
+                        sh '''#!/bin/bash
+set -euo pipefail
+printf '%s\\n' '{"result":"failed","reason":"bundle-verification-failed"}' > release-evidence/signed-bundles.json
+python3 "$RELEASE_TOOLS/verify_bundles.py" source release-evidence
+'''
+                    }
+                }
+            }
+        }
+
+        stage('Verify the approved bundle archive') {
+            when { expression { params.MODE == 'internal-submit' } }
+            steps {
+                copyArtifacts(projectName: '/android/cloud-cost-widgets-release', selector: specific(params.SIGNED_BUILD),
+                        filter: 'release-evidence/source-commit.txt,release-evidence/pipeline-commit.txt,' +
+                                'release-evidence/upload-certificate-sha256.txt,release-evidence/signed-bundles.json,' +
+                                'release-evidence/alpha-status.json,release-evidence/bundles/*',
+                        target: 'signed-input', fingerprintArtifacts: true)
+                sh '''#!/bin/bash
+set -euo pipefail
+python3 "$RELEASE_TOOLS/verify_submission_artifacts.py" signed-input/release-evidence release-evidence/verified-input.json
+'''
+            }
+        }
+
+        stage('Submit both releases to Internal testing') {
+            when { expression { params.MODE == 'internal-submit' } }
+            steps {
+                script {
+                    writeFile file: 'release-evidence/release-sequencing.txt', text:
+                            'Requested release targets are Internal testing for the phone app, version 100005 to 100011, ' +
+                            'and Internal testing (Wear OS) for the watch app, version 200005 to 200008, in one edit.\n' +
+                            'Phone Closed testing Alpha 100009 and both production tracks stay unchanged.\n' +
+                            'Open evidence includes intended review access, live AWS, physical devices, Play-installed pairing, and final listing and privacy declarations.\n'
+                    writeFile file: 'release-evidence/internal-submit.json', text:
+                            '{"result":"outcome-unavailable","reason":"verify-live-state-before-any-other-submission"}\n'
+                    withPlayService {
+                        sh '''#!/bin/bash
+set +x
+set -euo pipefail
+python3 "$RELEASE_TOOLS/play_publish.py" signed-input/release-evidence release-evidence/internal-submit.json
+'''
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'release-evidence/*.json,release-evidence/*.txt,release-evidence/bundles/*',
+                    allowEmptyArchive: true, followSymlinks: false, fingerprint: true
+        }
+        cleanup {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}

@@ -1,0 +1,148 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import verify_bundles as verifier
+from verify_bundles import VerificationError, require_signature, signer_fingerprint, verify_manifest
+
+
+def manifest(version_code, minimum, target, feature='', metadata='', version='1.0.8'):
+    return f'''<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+        package="com.maksonlee.cloudcost.aws" android:versionName="{version}" android:versionCode="{version_code}">
+        <uses-sdk android:minSdkVersion="{minimum}" android:targetSdkVersion="{target}"/>
+        {feature}<application>{metadata}</application>
+    </manifest>'''
+
+
+WATCH = '<uses-feature android:name="android.hardware.type.watch" android:required="true"/>'
+STANDALONE = '<meta-data android:name="com.google.android.wearable.standalone" android:value="true"/>'
+
+
+class ManifestTest(unittest.TestCase):
+    def test_phone_and_standalone_watch(self):
+        phone = verify_manifest(manifest('100009', '26', '36'), '1.0.8', '100009', 'phone')
+        wear = verify_manifest(manifest('200006', '30', '35', WATCH, STANDALONE, version='1.0.5'), '1.0.5', '200006', 'wear')
+        self.assertEqual((phone['form_factor'], wear['form_factor']), ('phone', 'wear'))
+
+    def test_rejects_wrong_version_wrong_target_or_swapped_form_factor(self):
+        for xml in (
+            manifest('100009', '26', '36', version='1.0.7'),
+            manifest('100008', '26', '36'),
+            manifest('200006', '26', '36'),
+            manifest('100009', '26', '35'),
+            manifest('100009', '26', '36', WATCH),
+        ):
+            with self.subTest(manifest=xml), self.assertRaises(VerificationError):
+                verify_manifest(xml, '1.0.8', '100009', 'phone')
+
+    def test_rejects_optional_watch_hardware_or_missing_standalone_declaration(self):
+        for xml in (
+            manifest('200006', '30', '35', WATCH.replace('true', 'false'), STANDALONE, version='1.0.5'),
+            manifest('200006', '30', '35', WATCH, version='1.0.5'),
+        ):
+            with self.subTest(manifest=xml), self.assertRaises(VerificationError):
+                verify_manifest(xml, '1.0.5', '200006', 'wear')
+
+
+class SignatureTest(unittest.TestCase):
+    def test_allows_only_expected_self_signed_errors(self):
+        self_signed = '''jar verified, with signer errors.
+Error:
+This jar contains entries whose certificate chain is invalid. Reason: PKIX path building failed: missing trust root
+This jar contains entries whose signer certificate is self-signed.
+'''
+        require_signature(self_signed, 4)
+        with self.assertRaises(VerificationError):
+            require_signature(self_signed + 'This jar contains entries whose signer certificate expired.\n', 4)
+
+    def test_rejects_unsigned_entries_even_after_jar_verified(self):
+        with self.assertRaises(VerificationError):
+            require_signature('jar verified.\nThis jar contains unsigned entries.', 0)
+
+    def test_requires_exactly_one_signer(self):
+        report = 'Signer #1:\nCertificate #1:\nSHA256: ' + ':'.join(['AE'] * 32)
+        self.assertEqual(signer_fingerprint(report), 'ae' * 32)
+        with self.assertRaises(VerificationError):
+            signer_fingerprint(report + '\nSigner #2:\n')
+
+
+class ReleaseArchiveTest(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.evidence = self.root / 'evidence'
+        self.evidence.mkdir()
+        self.bundles = {}
+        for form_factor, output, *_ in verifier.RELEASE_BUNDLES:
+            bundle = self.root / output
+            bundle.parent.mkdir(parents=True)
+            bundle.write_bytes(f'{form_factor} fixture'.encode())
+            self.bundles[form_factor] = bundle
+        self.certificate = self.evidence / 'upload-certificate-sha256.txt'
+        self.certificate.write_text(verifier.UPLOAD_CERTIFICATE_SHA256 + '\n', encoding='ascii')
+        self.source_commit = 'ab' * 20
+        tool = self.root / 'bundletool.jar'
+        tool.write_bytes(b'bundletool fixture')
+        self.enterContext(patch.multiple(verifier, BUNDLETOOL=tool, BUNDLETOOL_SHA=verifier.sha256(tool)))
+        self.enterContext(patch.dict('os.environ', {
+            'PRODUCT_SHA': self.source_commit, 'VERSION_NAME': '1.0.10', 'PHONE_VERSION_CODE': '100011',
+            'WEAR_VERSION_NAME': '1.0.7', 'WEAR_VERSION_CODE': '200008',
+        }))
+
+    def verified(self, form_factor):
+        if form_factor == 'phone':
+            fields = verify_manifest(manifest('100011', '26', '36', version='1.0.10'), '1.0.10', '100011', 'phone')
+        else:
+            fields = verify_manifest(
+                manifest('200008', '30', '35', WATCH, STANDALONE, version='1.0.7'), '1.0.7', '200008', 'wear',
+            )
+        return fields | {
+            'sha256': verifier.sha256(self.bundles[form_factor]),
+            'upload_certificate_sha256': verifier.UPLOAD_CERTIFICATE_SHA256,
+        }
+
+    def test_phone_and_wear_bundles_are_verified_and_archived_together(self):
+        results = {form_factor: self.verified(form_factor) for form_factor in ('phone', 'wear')}
+        with patch.object(verifier, 'verify_bundle', side_effect=lambda bundle, form_factor, *_: results[form_factor]) as verify:
+            verifier.archive_release_bundles(self.root, self.evidence)
+        self.assertEqual([call.args for call in verify.call_args_list], [
+            (self.bundles['phone'], 'phone', '1.0.10', '100011', verifier.UPLOAD_CERTIFICATE_SHA256),
+            (self.bundles['wear'], 'wear', '1.0.7', '200008', verifier.UPLOAD_CERTIFICATE_SHA256),
+        ])
+        archive = self.evidence / 'bundles'
+        names = {'phone': 'phone-1.0.10-100011.aab', 'wear': 'wear-1.0.7-200008.aab'}
+        self.assertEqual({path.name for path in archive.iterdir()}, {*names.values(), 'SHA256SUMS'})
+        for form_factor, name in names.items():
+            self.assertEqual((archive / name).read_bytes(), self.bundles[form_factor].read_bytes())
+        self.assertEqual((archive / 'SHA256SUMS').read_text(encoding='ascii').splitlines(), [
+            f"{results['phone']['sha256']}  {names['phone']}",
+            f"{results['wear']['sha256']}  {names['wear']}",
+        ])
+        report = json.loads((self.evidence / 'signed-bundles.json').read_text(encoding='utf-8'))
+        self.assertEqual(report['source_commit'], self.source_commit)
+        self.assertEqual(report['bundles'], [results[form_factor] | {'file': names[form_factor]} for form_factor in names])
+
+    def test_rejects_a_configured_version_that_differs_from_the_pinned_release(self):
+        with patch.dict('os.environ', {'WEAR_VERSION_CODE': '200007'}), patch.object(verifier, 'verify_bundle') as verify:
+            with self.assertRaisesRegex(VerificationError, 'pinned release'):
+                verifier.archive_release_bundles(self.root, self.evidence)
+        verify.assert_not_called()
+
+    def test_rejects_untrusted_signing_certificate_before_checking_bundle(self):
+        self.certificate.write_text('0' * 64 + '\n', encoding='ascii')
+        with patch.object(verifier, 'verify_bundle') as verify, self.assertRaisesRegex(VerificationError, 'pinned upload certificate'):
+            verifier.archive_release_bundles(self.root, self.evidence)
+        verify.assert_not_called()
+
+    def test_nothing_is_archived_when_the_wear_bundle_fails(self):
+        def verify(bundle, form_factor, *_):
+            if form_factor == 'wear':
+                raise VerificationError('Wear AAB must require watch hardware')
+            return self.verified('phone')
+        with patch.object(verifier, 'verify_bundle', side_effect=verify), self.assertRaises(VerificationError):
+            verifier.archive_release_bundles(self.root, self.evidence)
+        self.assertFalse((self.evidence / 'bundles').exists())
+        self.assertFalse((self.evidence / 'signed-bundles.json').exists())
