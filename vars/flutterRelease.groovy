@@ -168,7 +168,13 @@ def call(Map cfg) {
                 options { timeout(time: 30, unit: 'MINUTES') }
                 steps {
                     script {
-                        withEnv(["EXPECTED_AAB_SHA256=${env.RELEASE_AAB_SHA256}"]) {
+                        // Pass parameters explicitly: a job's first build has no parameter environment variables.
+                        withEnv([
+                            "EXPECTED_AAB_SHA256=${env.RELEASE_AAB_SHA256}",
+                            "PLAY_TRACK=${params.PLAY_TRACK}",
+                            "PLAY_RELEASE_STATUS=${params.PLAY_RELEASE_STATUS}",
+                            "PLAY_ROLLOUT_FRACTION=${params.PLAY_ROLLOUT_FRACTION?.trim() ?: ''}"
+                        ]) {
                             flutterAndroid.playPublish()
                         }
                     }

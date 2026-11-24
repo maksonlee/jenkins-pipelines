@@ -197,6 +197,9 @@ class FlutterStepContractTest(unittest.TestCase):
         self.assertEqual(helper.count("PLAY_SERVICE_VAULT_PATH,"), 1)
         self.assertIn("def playPublish()", helper[helper.index("def withPlayService"):])
         self.assertNotIn("PLAY_REQUIRE_PRODUCTION_APPROVAL", release)
+        # A job's first build exports no parameter environment variables, so the upload gets them through withEnv.
+        for name in ("PLAY_TRACK", "PLAY_RELEASE_STATUS", "PLAY_ROLLOUT_FRACTION"):
+            self.assertIn(f'"{name}=${{params.{name}', release)
         self.assertNotIn("githubPush", release)
 
 

@@ -52,6 +52,12 @@ class AndroidReleaseContractTest(unittest.TestCase):
         loaded = set(re.findall(r"libraryResource\('android/release/([^']+)'\)", STEP))
         self.assertEqual(loaded, {p.name for p in SCRIPTS.glob("*.sh")})
 
+    def test_parameters_reach_scripts_explicitly(self):
+        # A job's first build exports no parameter environment variables, so scripts get them through withEnv.
+        self.assertIn('"PLAY_TRACK=${params.PLAY_TRACK}"', STEP)
+        self.assertIn("--track=${params.PLAY_TRACK}", STEP)
+        self.assertIn("--release-status=${params.PLAY_RELEASE_STATUS}", STEP)
+
     def test_vault_certificate_is_read_only_when_the_project_enables_it(self):
         lookup = STEP.index("vaultKey: 'certificate_sha256'")
         self.assertLess(STEP.index("if (config.verifyUploadCertificate) {"), lookup)

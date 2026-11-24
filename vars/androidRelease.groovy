@@ -70,7 +70,8 @@ def call(Map cfg) {
                             env.RELEASE_COMMIT = sh(returnStdout: true,
                                 script: libraryResource('android/release/resolve-commit.sh')).trim()
                         }
-                        withEnv(["RELEASE_NOTES_DIR=${config.module}/src/main/play/release-notes"]) {
+                        // Pass parameters explicitly: a job's first build has no parameter environment variables.
+                        withEnv(["RELEASE_NOTES_DIR=${config.module}/src/main/play/release-notes", "PLAY_TRACK=${params.PLAY_TRACK}"]) {
                             sh libraryResource('android/release/check-release-notes.sh')
                         }
                         currentBuild.description = "${config.repo} ${env.RELEASE_COMMIT.take(12)}"
