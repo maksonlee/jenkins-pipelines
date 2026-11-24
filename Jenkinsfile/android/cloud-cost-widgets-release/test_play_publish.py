@@ -105,7 +105,7 @@ def preflight(override=None, quota_tracks=(), age_minutes=5):
         "wear:production": NO_CONTENT,
     }
     for name in quota_tracks:
-        tracks[name] = {"result": "forbidden", "http_status": 403, "quota": QUOTA_REASON}
+        tracks[name] = {"result": "forbidden", "http_status": 403, "google_status": "PERMISSION_DENIED", "quota": QUOTA_REASON}
     if override:
         tracks.update(override)
     return {
@@ -197,7 +197,7 @@ class PlayPublishTest(unittest.TestCase):
         )
         self.archive.assert_called_once_with(Path("synthetic-archive").resolve(), "alpha-status.json")
         self.assertEqual(report["lifecycle_validation"], {
-            "result": "signed_preflight", "archive_build": 19,
+            "result": "signed_preflight", "quota_tracks": [], "archive_build": 19,
             "archive_sha256": hashlib.sha256(self.archive.return_value).hexdigest(),
             "observed_at": preflight()["observed_at"], "fresh_inventory": "verified",
         })
@@ -242,13 +242,47 @@ class PlayPublishTest(unittest.TestCase):
             for note in notes:
                 self.assertLessEqual(len(note["text"]), 500)
 
-    def test_any_quota_limited_track_stops_before_oauth(self):
-        for quota_track in TRACK_NAMES:
-            with self.subTest(track=quota_track):
-                report = self.run_with(archive=preflight(quota_tracks=(quota_track,)))
-                self.assertEqual(report["result"], "blocked")
-                self.assertEqual(report["failure"], "preflight_quota_unverified")
-                self.assertEqual(report["blocking_track"], quota_track)
+    def test_quota_limited_reads_fall_back_to_the_exact_fresh_edit_inventory(self):
+        quota = {"result": "forbidden", "http_status": 403, "quota": QUOTA_REASON}
+        for quota_tracks in (("wear:internal",), TRACK_NAMES):
+            with self.subTest(quota_tracks=quota_tracks):
+                self.opener.open.reset_mock()
+                report = self.run_with(
+                    *completed_precommit(), response({"id": EDIT_ID}),
+                    http_error(403, "Listing releases quota exceeded"), http_error(403, "Listing releases quota exceeded"),
+                    archive=preflight(quota_tracks=quota_tracks),
+                )
+                self.assertEqual(report["result"], "committed")
+                validation = report["lifecycle_validation"]
+                self.assertEqual(validation["result"], "quota_fallback")
+                self.assertEqual(sorted(validation["quota_tracks"]), sorted(quota_tracks))
+                self.assertEqual(validation["fresh_inventory"], "verified")
+                for name in quota_tracks:
+                    self.assertEqual(report["preflight_tracks"][name], quota)
+                self.assertEqual(report["review_observation"]["result"], "unconfirmed")
+                self.assertEqual(self.operations().count(("POST", COMMIT_URL)), 1)
+
+    def test_quota_fallback_still_requires_the_exact_fresh_edit_inventory(self):
+        good = expected_inventory()
+        for tracks in (good[:-1], [good[0], track(PHONE_TRACK, 100006), *good[2:]]):
+            with self.subTest(tracks=tracks):
+                self.opener.open.reset_mock()
+                report = self.run_with(
+                    *edit_snapshot(tracks=tracks), response(status=204), archive=preflight(quota_tracks=TRACK_NAMES),
+                )
+                self.assertEqual(report["failure"], "fresh_inventory_mismatch")
+                self.assertEqual(report["lifecycle_validation"]["fresh_inventory"], "inventory_mismatch")
+                self.assertEqual(self.mutations(), [("POST", f"{APP_URL}/edits"), ("DELETE", EDIT_URL)])
+
+    def test_a_non_quota_read_failure_still_stops_before_oauth(self):
+        for observation in (
+            {"result": "forbidden", "http_status": 403},
+            {"result": "http_error", "http_status": 429, "quota": QUOTA_REASON},
+        ):
+            with self.subTest(observation=observation):
+                report = self.run_with(archive=preflight({"wear:internal": observation}, quota_tracks=("alpha",)))
+                self.assertEqual(report["failure"], "preflight_track_unverified")
+                self.assertEqual(report["blocking_track"], "wear:internal")
         self.oauth.assert_not_called()
         self.opener.open.assert_not_called()
 
@@ -279,6 +313,7 @@ class PlayPublishTest(unittest.TestCase):
             ({**preflight(), "observed_at": "2026-11-24T09:59:00"}, "preflight_timestamp_invalid"),
             ({**preflight(), "package_name": "PRIVATE_PACKAGE"}, "preflight_archive_unverified"),
             ({**preflight(), "result": "quota_limited"}, "preflight_archive_unverified"),
+            ({**preflight(quota_tracks=("internal",)), "result": "checked"}, "preflight_archive_unverified"),
         ]
         for archive, failure in cases:
             with self.subTest(failure=failure):

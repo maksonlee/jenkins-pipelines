@@ -225,17 +225,23 @@ def check_preflight_archive(input_directory, report):
         report.update(result="blocked", failure="preflight_outside_age_limit")
         return False
 
+    quota_tracks = []
     proven_tracks = {}
     for track in GUARDED_TRACKS:
         snapshot = archive["tracks"][track]
         if not isinstance(snapshot, dict) or type(snapshot.get("http_status")) is not int:
             report.update(result="blocked", failure="preflight_track_unverified", blocking_track=track)
             return False
-        if snapshot.get("http_status") == 403 and snapshot.get("quota") == QUOTA_REASON:
-            # Without a lifecycle read there is no proof of this track's state, so never publish around it.
-            report["preflight_tracks"][track] = outcome("forbidden", 403, quota=QUOTA_REASON)
-            report.update(result="blocked", failure="preflight_quota_unverified", blocking_track=track)
-            return False
+        if (
+            snapshot.get("result") == "forbidden"
+            and snapshot.get("http_status") == 403
+            and snapshot.get("quota") == QUOTA_REASON
+        ):
+            # The Play lifecycle read quota ran out. The fresh edit inventory must still show this track's exact
+            # releases before any write, and the guarded commit fails if changes are in review.
+            quota_tracks.append(track)
+            proven_tracks[track] = outcome("forbidden", 403, quota=QUOTA_REASON)
+            continue
         if track in EXPECTED_ACTIVE:
             allowed = outcome("ok", 200, releases=[published_release(EXPECTED_ACTIVE[track])])
         else:
@@ -244,13 +250,14 @@ def check_preflight_archive(input_directory, report):
             report.update(result="blocked", failure="preflight_track_unverified", blocking_track=track)
             return False
         proven_tracks[track] = snapshot
-    if archive["result"] != "checked":
+    if bool(quota_tracks) != (archive["result"] == "quota_limited"):
         report.update(result="blocked", failure="preflight_archive_unverified")
         return False
 
     report["preflight_tracks"] = proven_tracks
     report["lifecycle_validation"] = {
-        "result": "signed_preflight",
+        "result": "quota_fallback" if quota_tracks else "signed_preflight",
+        "quota_tracks": quota_tracks,
         "archive_build": report["build_number"],
         "archive_sha256": hashlib.sha256(archive_bytes).hexdigest(),
         "observed_at": observed_at.isoformat(),
