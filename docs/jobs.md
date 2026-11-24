@@ -22,7 +22,10 @@ Jobs that do not follow the layout yet:
 - `web/piano-practice-*`: the origin helper accepts releases only from `web/piano-practice-main-ci`.
 - `android/gst-stream-wall/release`: has the new path but keeps its own Jenkinsfile, with promotion, listing-only and
   qualification gates.
-- `android/cloud-cost-widgets-release`: still loads a pinned commit of an unmerged branch.
+- `android/cloud-cost-widgets/release`: has the new path but keeps its own Jenkinsfile and Play tools, with
+  `alpha-status`, `internal-preflight` and `internal-submit` modes. `internal-submit` accepts only a preflight build
+  that ran at the same jenkins-pipelines commit, so rerun the preflight if `main` moved in between. The old
+  `android/cloud-cost-widgets-release`, which loaded a pinned commit of an unmerged branch, is disabled.
 - `backstage`, `aosp`, `build-prj-0001`, `k8s-dynamic-agent-test`, `monitoring`, `artifactory`: unchanged.
 
 ## Standards

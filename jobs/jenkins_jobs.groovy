@@ -16,7 +16,7 @@ def projects = [
     [folder: 'android/taiwandrive', roles: ['ci', 'release'], repo: 'taiwandrive', type: 'android'],
     [folder: 'android/gst-stream-wall', roles: ['release'], repo: 'gst-stream-wall', type: 'android'],
     [folder: 'android/learn-chess', roles: ['ci'], repo: 'learn-chess', type: 'android'],
-    [folder: 'android/cloud-cost-widgets', roles: ['ci'], repo: 'cloud-cost-widgets', type: 'android'],
+    [folder: 'android/cloud-cost-widgets', roles: ['ci', 'release'], repo: 'cloud-cost-widgets', type: 'android'],
     [folder: 'flutter/taiwan-bus-app', roles: ['ci', 'release'], repo: 'taiwan-bus-app', type: 'flutter'],
     [folder: 'flutter/share-notes', roles: ['ci', 'release'], repo: 'share-notes', type: 'flutter'],
     [folder: 'flutter/classic-calculator', roles: ['ci', 'release'], repo: 'classic-calculator', type: 'flutter'],
@@ -30,13 +30,18 @@ def descriptions = [
     'flutter/release': 'Manual Google Play release for maksonlee/%s: release-branch commit only, quality gates, signed release AAB, then a manual approval before any Play access.',
 ]
 
+// Jobs with their own Jenkinsfile instead of androidRelease or flutterRelease.
+def jobDescriptions = [
+    'android/cloud-cost-widgets/release': 'Manual Google Play release for maksonlee/cloud-cost-widgets with its own Jenkinsfile: alpha-status reads the Play state, internal-preflight builds and verifies the signed phone and Wear OS bundles, and internal-submit uploads the bundles of an approved preflight build to Internal testing.',
+]
+
 projects.each { project ->
     folder(project.folder) {
         description("Jenkins jobs for maksonlee/${project.repo}.")
     }
     project.roles.each { role ->
         pipelineJob("${project.folder}/${role}") {
-            description(String.format(descriptions["${project.type}/${role}"], project.repo))
+            description(jobDescriptions["${project.folder}/${role}"] ?: String.format(descriptions["${project.type}/${role}"], project.repo))
             definition {
                 cpsScm {
                     scm {

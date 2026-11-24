@@ -18,7 +18,7 @@ pipeline {
         disableConcurrentBuilds()
         skipDefaultCheckout()
         buildDiscarder(logRotator(numToKeepStr: '5'))
-        copyArtifactPermission('/android/cloud-cost-widgets-release')
+        copyArtifactPermission('/android/cloud-cost-widgets/release')
     }
 
     parameters {
@@ -38,7 +38,7 @@ pipeline {
         PHONE_VERSION_CODE = '100011'
         WEAR_VERSION_NAME = '1.0.7'
         WEAR_VERSION_CODE = '200008'
-        RELEASE_TOOLS = 'Jenkinsfile/android/cloud-cost-widgets-release'
+        RELEASE_TOOLS = 'Jenkinsfile/android/cloud-cost-widgets/release'
     }
 
     stages {
@@ -154,7 +154,7 @@ python3 "$RELEASE_TOOLS/verify_bundles.py" source release-evidence
         stage('Verify the approved bundle archive') {
             when { expression { params.MODE == 'internal-submit' } }
             steps {
-                copyArtifacts(projectName: '/android/cloud-cost-widgets-release', selector: specific(params.SIGNED_BUILD),
+                copyArtifacts(projectName: '/android/cloud-cost-widgets/release', selector: specific(params.SIGNED_BUILD),
                         filter: 'release-evidence/source-commit.txt,release-evidence/pipeline-commit.txt,' +
                                 'release-evidence/upload-certificate-sha256.txt,release-evidence/signed-bundles.json,' +
                                 'release-evidence/alpha-status.json,release-evidence/bundles/*',

@@ -39,8 +39,9 @@ contracts. Update them in the same change as the behavior they describe.
   - `unity/math-runner-*`: job names are part of its evidence and seal.
   - `web/piano-practice-*`: the origin helper `release_ops.py` accepts only `ciJob == web/piano-practice-main-ci`.
   - `android/gst-stream-wall/release`: its own qualified Jenkinsfile.
-  - `android/cloud-cost-widgets-release`: loads a pinned SHA of the unmerged branch
-    `codex/cloud-cost-widgets-release`.
+  - `android/cloud-cost-widgets/release`: its own Jenkinsfile with alpha-status, internal-preflight and
+    internal-submit modes and its own Play tools. Merged from `codex/cloud-cost-widgets-release` on 2026-11-24;
+    the old `android/cloud-cost-widgets-release` job is disabled.
   - `backstage`, `aosp`, `build-prj-0001`, `k8s-dynamic-agent-test`, `monitoring`, `artifactory`.
 
 ## Checks
@@ -51,6 +52,7 @@ Groovy cannot run locally. These checks are offline unless noted:
 python3 -B -m unittest discover -s tests -t .                       # library scripts, Play tools, job list
 python3 -B -m unittest discover -s tests -t . -k release            # a subset by name
 python3 -B -m unittest Jenkinsfile/android/gst-stream-wall/release/test_publication_artifact_selection.py
+python3 -B -m unittest discover -s Jenkinsfile/android/cloud-cost-widgets/release -p 'test_*.py'
 python3 -I tools/jenkins_inventory.py --check                       # live Jenkins, GET only
 
 c=Jenkinsfile/unity/math-runner-android-build-in-docker

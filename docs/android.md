@@ -125,3 +125,4 @@ its own (`publishPlayListings: false`).
 | `android/learn-chess/ci` | `nativeAndroidCi`, traced evidence, emulator device suite, honors `[skip ci]` |
 | `android/cloud-cost-widgets/ci` | `nativeAndroidCi` for the phone and Wear OS apps; Kotlin compiled in-process |
 | `android/gst-stream-wall/release` | own Jenkinsfile (Rust/GStreamer image, upload, promotion and listing modes) |
+| `android/cloud-cost-widgets/release` | own Jenkinsfile and Play tools (phone and Wear OS bundles; alpha-status, internal-preflight and internal-submit modes) |
