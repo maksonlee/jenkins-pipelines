@@ -104,6 +104,12 @@ class AndroidCiContractTest(unittest.TestCase):
             self.assertIn("env.NATIVE_ANDROID_SKIPPED != 'true'", when)
         self.assertIn("currentBuild.result = 'NOT_BUILT'", STEP)
 
+    def test_in_process_kotlin_is_opt_in(self):
+        self.assertIn("kotlinInProcess     : cfg.kotlinInProcess == true", STEP)
+        self.assertIn("if (config.kotlinInProcess) {\n        gradleArgs << '-Pkotlin.compiler.execution.strategy=in-process'", STEP)
+        jobs = {p.parent.parent.name: p.read_text(encoding="utf-8") for p in ROOT.glob("Jenkinsfile/android/*/ci/Jenkinsfile")}
+        self.assertEqual(sorted(name for name, text in jobs.items() if "kotlinInProcess: true" in text), ["cloud-cost-widgets"])
+
     def test_learn_chess_keeps_existing_archive_paths(self):
         expected = [
             self.add("app/build/test-results/testDebugUnitTest/TEST-app.xml", "junit/app/TEST-app.xml", "app tests"),

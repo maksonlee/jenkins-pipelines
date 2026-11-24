@@ -22,6 +22,9 @@ It then runs `./gradlew <gradleTasks> --continue --console=plain --no-daemon` in
 - The image runs with the shared container limits, the Gradle cache, and the worker's Android SDK mounted read-only
   from `/home/administrator/jenkins/android-cache`.
 - `--max-workers` is added only when `maxWorkers` is set; otherwise the project's `gradle.properties` decides.
+- `kotlinInProcess: true` adds `-Pkotlin.compiler.execution.strategy=in-process`. Kotlin then compiles inside the
+  Gradle process, without a separate Kotlin daemon that inherits the Gradle heap, so a project with a large Gradle
+  heap stays within the container's 6 GB limit. The project's own settings are unchanged.
 - Android user home is a writable directory in the workspace, with the worker's `debug.keystore` mounted
   read-only.
 - No release signing material, Play credentials or Artifactory upload is involved.
@@ -120,5 +123,5 @@ its own (`publishPlayListings: false`).
 | `android/headshot-maker-android/{ci,release}` | package `com.maksonlee.headshotmaker`; same as beepbeep |
 | `android/taiwandrive/{ci,release}` | engine and pack JVM tests; alpha/internal; no bundled offline pack; signer checked against Vault |
 | `android/learn-chess/ci` | `nativeAndroidCi`, traced evidence, emulator device suite, honors `[skip ci]` |
-| `android/cloud-cost-widgets/ci` | `nativeAndroidCi` for the phone and Wear OS apps |
+| `android/cloud-cost-widgets/ci` | `nativeAndroidCi` for the phone and Wear OS apps; Kotlin compiled in-process |
 | `android/gst-stream-wall/release` | own Jenkinsfile (Rust/GStreamer image, upload, promotion and listing modes) |

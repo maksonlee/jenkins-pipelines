@@ -8,6 +8,8 @@
 // With trace: true (learn-chess) it also keeps the plain Gradle log, run.json and summary.md, and with
 // deviceRunner it runs the project's device suite on a disposable emulator. With honorSkipCi, a GitHub push whose
 // head commit message contains [skip ci] or [ci skip] is recorded as NOT_BUILT, as GitHub Actions would skip it.
+// With kotlinInProcess, Kotlin compiles inside the Gradle process instead of a separate Kotlin daemon, so a project
+// whose Gradle heap is large still fits the shared container memory limit.
 
 def call(Map cfg) {
     def config = androidCiConfig(cfg)
@@ -177,6 +179,7 @@ def androidCiConfig(Map cfg) {
         branch              : (cfg.branch ?: 'main') as String,
         gradleTasks         : (cfg.gradleTasks ?: ['nativeAndroidCi']) as List,
         maxWorkers          : cfg.maxWorkers,
+        kotlinInProcess     : cfg.kotlinInProcess == true,
         debugApkModules     : (cfg.debugApkModules ?: []) as List,
         androidTestModules  : (cfg.androidTestModules ?: []) as List,
         lintModules         : (cfg.lintModules ?: []) as List,
@@ -237,6 +240,9 @@ def androidCiBuild(Map config) {
     def gradleArgs = config.gradleTasks + ['--continue', '--console=plain', '--no-daemon']
     if (config.maxWorkers != null) {
         gradleArgs << "--max-workers=${config.maxWorkers}"
+    }
+    if (config.kotlinInProcess) {
+        gradleArgs << '-Pkotlin.compiler.execution.strategy=in-process'
     }
     docker.image(env.NATIVE_ANDROID_IMAGE).inside(args.join(' ')) {
         withEnv([

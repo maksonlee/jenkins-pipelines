@@ -5,6 +5,9 @@ androidCi(
     repo: 'cloud-cost-widgets',
     gradleTasks: ['nativeAndroidCi'],
     maxWorkers: 2,
+    // gradle.properties gives Gradle -Xmx3g, and a separate Kotlin daemon would inherit it. Together they exceeded
+    // the 6 GB container limit once (ci #2), so Kotlin compiles inside the Gradle process.
+    kotlinInProcess: true,
     debugApkModules: ['apps/aws', 'apps/aws-wear'],
     androidTestModules: ['providers/aws', 'apps/aws-wear'],
     lintModules: ['apps/aws', 'apps/aws-wear', 'shared/core', 'providers/aws'],
