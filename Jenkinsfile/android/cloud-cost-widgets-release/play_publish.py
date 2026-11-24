@@ -59,7 +59,10 @@ FORM_FACTORS = {PHONE_INTERNAL: "phone", WEAR_INTERNAL: "wear"}
 # before #17 advanced it to 100009, which is published to testers.
 PREDECESSORS = {PHONE_INTERNAL: 100005, WEAR_INTERNAL: 200005}
 RELEASE_NOTES = {PHONE_INTERNAL: PHONE_NOTES, WEAR_INTERNAL: WEAR_NOTES}
-EXPECTED_ACTIVE = {PHONE_ALPHA: 100009, **PREDECESSORS}
+# Build #22's edit inventory also listed 1.0.4 on both Open testing tracks. Play Console shows the phone track
+# paused with that release superseded and the Wear OS track inactive. This release leaves both unchanged.
+INACTIVE_OPEN_TESTING = {"beta": 100005, "wear:beta": 200005}
+EXPECTED_ACTIVE = {PHONE_ALPHA: 100009, **INACTIVE_OPEN_TESTING, **PREDECESSORS}
 GUARDED_TRACKS = (PHONE_ALPHA, *TRACKS, *PRODUCTION_TRACKS)
 REPORTED_TRACKS = {
     f"{prefix}{name}" for prefix in ("", "wear:") for name in ("production", "beta", "alpha", "internal")

@@ -118,7 +118,10 @@ def preflight(override=None, quota_tracks=(), age_minutes=5):
 
 
 def expected_inventory():
-    return [track("alpha", ALPHA), track(PHONE_TRACK, PHONE_PREDECESSOR), track(WEAR_TRACK, WEAR_PREDECESSOR)]
+    return [
+        track("alpha", ALPHA), track(PHONE_TRACK, PHONE_PREDECESSOR), track(WEAR_TRACK, WEAR_PREDECESSOR),
+        track("beta", PHONE_PREDECESSOR), track("wear:beta", WEAR_PREDECESSOR),
+    ]
 
 
 def edit_snapshot(bundles=None, tracks=None):
@@ -289,8 +292,10 @@ class PlayPublishTest(unittest.TestCase):
         cases = [
             (good[1:], "fresh_inventory_mismatch"),
             ([track("alpha", 100010), *good[1:]], "fresh_inventory_mismatch"),
-            ([good[0], track(PHONE_TRACK, PHONE), good[2]], "fresh_inventory_mismatch"),
-            ([*good[:2], track(WEAR_TRACK, WEAR_PREDECESSOR, userFraction=0.5)], "fresh_inventory_mismatch"),
+            ([good[0], track(PHONE_TRACK, PHONE), *good[2:]], "fresh_inventory_mismatch"),
+            ([*good[:2], track(WEAR_TRACK, WEAR_PREDECESSOR, userFraction=0.5), *good[3:]], "fresh_inventory_mismatch"),
+            (good[:-1], "fresh_inventory_mismatch"),
+            ([*good[:3], track("beta", 100006), good[4]], "fresh_inventory_mismatch"),
             ([*good, track("production", 100009)], "fresh_inventory_mismatch"),
             ([*good, track("PRIVATE_UNRELATED", 100004, status="draft")], "unrelated_pending_release"),
         ]
@@ -310,8 +315,10 @@ class PlayPublishTest(unittest.TestCase):
         self.assertEqual(report["failure"], "fresh_inventory_mismatch")
         self.assertEqual(report["track_inventory"]["observed_active"], {
             "alpha": {"releases": [{"status": "completed", "version_codes": [ALPHA]}], "custom_targeting": True},
+            "beta": {"releases": [{"status": "completed", "version_codes": [PHONE_PREDECESSOR]}], "custom_targeting": False},
             "internal": {"releases": [{"status": "completed", "version_codes": [PHONE_PREDECESSOR]}], "custom_targeting": False},
             "wear:alpha": {"releases": [{"status": "completed", "version_codes": [200006]}], "custom_targeting": False},
+            "wear:beta": {"releases": [{"status": "completed", "version_codes": [WEAR_PREDECESSOR]}], "custom_targeting": False},
             "wear:internal": {"releases": [{"status": "completed", "version_codes": [WEAR_PREDECESSOR]}], "custom_targeting": False},
         })
         self.assertEqual(report["track_inventory"]["other_active_track_count"], 1)
