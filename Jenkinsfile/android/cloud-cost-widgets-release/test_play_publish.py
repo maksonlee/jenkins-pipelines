@@ -301,6 +301,21 @@ class PlayPublishTest(unittest.TestCase):
                 self.assertEqual(report["failure"], failure)
                 self.assertEqual(self.mutations(), [("POST", f"{APP_URL}/edits"), ("DELETE", EDIT_URL)])
 
+    def test_inventory_mismatch_reports_standard_tracks_and_counts_custom_ones(self):
+        tracks = [
+            track("alpha", ALPHA, countryTargeting={"countries": ["US"]}), *expected_inventory()[1:],
+            track("wear:alpha", 200006), track("PRIVATE_CUSTOM", 100004),
+        ]
+        report = self.run_with(*edit_snapshot(tracks=tracks), response(status=204))
+        self.assertEqual(report["failure"], "fresh_inventory_mismatch")
+        self.assertEqual(report["track_inventory"]["observed_active"], {
+            "alpha": {"releases": [{"status": "completed", "version_codes": [ALPHA]}], "custom_targeting": True},
+            "internal": {"releases": [{"status": "completed", "version_codes": [PHONE_PREDECESSOR]}], "custom_targeting": False},
+            "wear:alpha": {"releases": [{"status": "completed", "version_codes": [200006]}], "custom_targeting": False},
+            "wear:internal": {"releases": [{"status": "completed", "version_codes": [WEAR_PREDECESSOR]}], "custom_targeting": False},
+        })
+        self.assertEqual(report["track_inventory"]["other_active_track_count"], 1)
+
     def test_missing_predecessor_or_newer_code_never_uploads(self):
         cases = [
             ([bundle(ALPHA), bundle(WEAR_PREDECESSOR)], "predecessor_missing", PHONE_TRACK),

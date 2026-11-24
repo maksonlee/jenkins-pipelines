@@ -61,6 +61,9 @@ PREDECESSORS = {PHONE_INTERNAL: 100005, WEAR_INTERNAL: 200005}
 RELEASE_NOTES = {PHONE_INTERNAL: PHONE_NOTES, WEAR_INTERNAL: WEAR_NOTES}
 EXPECTED_ACTIVE = {PHONE_ALPHA: 100009, **PREDECESSORS}
 GUARDED_TRACKS = (PHONE_ALPHA, *TRACKS, *PRODUCTION_TRACKS)
+REPORTED_TRACKS = {
+    f"{prefix}{name}" for prefix in ("", "wear:") for name in ("production", "beta", "alpha", "internal")
+}
 PUBLISHED = "RELEASE_LIFECYCLE_STATE_PUBLISHED"
 NOT_SENT = "RELEASE_LIFECYCLE_STATE_NOT_SENT_FOR_REVIEW"
 QUOTA_REASON = "listing_releases_quota_exceeded"
@@ -174,7 +177,15 @@ def summarize_track_inventory(content, status):
         for track, code in EXPECTED_ACTIVE.items()
     }
     if active != expected:
-        return outcome("inventory_mismatch", status, targets=targets)
+        # Name only the standard tracks; custom track names are counted, not echoed.
+        observed = {
+            track: {"releases": releases, "custom_targeting": targeting}
+            for track, (releases, targeting) in sorted(active.items()) if track in REPORTED_TRACKS
+        }
+        return outcome(
+            "inventory_mismatch", status, targets=targets, observed_active=observed,
+            other_active_track_count=sum(track not in REPORTED_TRACKS for track in active),
+        )
     return outcome("ok", status, targets=targets)
 
 
