@@ -19,11 +19,8 @@ Read [docs/jobs.md](docs/jobs.md) for the job layout and standards, [docs/androi
 ## Checks
 
 ```bash
-python3 -B -m unittest discover -s tests -t .
-python3 -B -m unittest Jenkinsfile/android/gst-stream-wall/release/test_publication_artifact_selection.py
-python3 -B -m unittest discover -s Jenkinsfile/android/cloud-cost-widgets/release -p 'test_*.py'
+tools/run_checks.sh                                # every offline test and a Groovy syntax check (needs Docker)
 python3 -I tools/jenkins_inventory.py --check      # read-only; uses the Jenkins API settings in ~/.bashrc
-git diff --check
 ```
 
-The Unity and piano-practice jobs have their own checks in their directories.
+`admin/pipelines-ci` runs `tools/run_checks.sh` after every push to `main`.

@@ -1,6 +1,14 @@
 pipeline {
     agent { label 'ssh-agent-with-docker' }
 
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout()
+        timeout(time: 60, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+    }
+
     triggers {
         githubPush()
     }

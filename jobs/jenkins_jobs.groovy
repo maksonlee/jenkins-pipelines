@@ -35,28 +35,49 @@ def jobDescriptions = [
     'android/cloud-cost-widgets/release': 'Manual Google Play release for maksonlee/cloud-cost-widgets with its own Jenkinsfile: alpha-status reads the Play state, internal-preflight builds and verifies the signed phone and Wear OS bundles, and internal-submit uploads the bundles of an approved preflight build to Internal testing.',
 ]
 
+// Jobs outside the per-project layout, listed so that a rebuilt Jenkins gets them back. Their top-level folders
+// (admin, unity, web, backstage, artifactory) are not declared here and must exist before the seed runs.
+def standaloneJobs = [
+    [job: 'admin/pipelines-ci', description: 'Offline checks of maksonlee/jenkins-pipelines after every push to main: Python tests and a Groovy syntax check of the library, the Job DSL and all Jenkinsfiles.'],
+    [job: 'unity/math-runner-android-build-in-docker', description: 'Builds, verifies, archives and fingerprints the signed Math Runner Android App Bundle in the sealed Unity worker image.'],
+    [job: 'unity/math-runner-play-internal', description: 'Publishes a verified Math Runner AAB from the build job to Google Play Internal testing after a manual approval.'],
+    [job: 'web/piano-practice-main-ci', description: 'CI for maksonlee/piano-practice: builds and tests the site and archives the release bundle. Triggered by GitHub pushes.'],
+    [job: 'web/piano-practice-deploy', description: 'Manual deployment of a web/piano-practice-main-ci release bundle to the piano-practice origin.'],
+    [job: 'backstage/homelab-backstage-main-ci', description: 'CI for maksonlee/homelab-backstage: builds the image and pushes it to Harbor. Triggered by GitHub pushes.'],
+    [job: 'artifactory/artifactory-cleanup', description: 'Weekly cleanup of the Artifactory android-snapshots repository: every app keeps its newest version folders.'],
+]
+
+def pipelineFromScm = { String name, String text ->
+    pipelineJob(name) {
+        description(text)
+        definition {
+            cpsScm {
+                scm {
+                    git {
+                        remote {
+                            url('git@github.com:maksonlee/jenkins-pipelines.git')
+                            credentials('vault-github-ssh')
+                        }
+                        branch('*/main')
+                    }
+                }
+                scriptPath("Jenkinsfile/${name}/Jenkinsfile")
+                lightweight(true)
+            }
+        }
+    }
+}
+
 projects.each { project ->
     folder(project.folder) {
         description("Jenkins jobs for maksonlee/${project.repo}.")
     }
     project.roles.each { role ->
-        pipelineJob("${project.folder}/${role}") {
-            description(jobDescriptions["${project.folder}/${role}"] ?: String.format(descriptions["${project.type}/${role}"], project.repo))
-            definition {
-                cpsScm {
-                    scm {
-                        git {
-                            remote {
-                                url('git@github.com:maksonlee/jenkins-pipelines.git')
-                                credentials('vault-github-ssh')
-                            }
-                            branch('*/main')
-                        }
-                    }
-                    scriptPath("Jenkinsfile/${project.folder}/${role}/Jenkinsfile")
-                    lightweight(true)
-                }
-            }
-        }
+        def name = "${project.folder}/${role}"
+        pipelineFromScm(name, jobDescriptions[name] ?: String.format(descriptions["${project.type}/${role}"], project.repo))
     }
+}
+
+standaloneJobs.each { standalone ->
+    pipelineFromScm(standalone.job, standalone.description)
 }

@@ -41,7 +41,7 @@ args=(--keep "$KEEP_VERSIONS" --report snapshot-cleanup.json)
 if [[ "$DELETE_SNAPSHOTS" == true ]]; then
   args+=(--delete)
 fi
-python3 -I pipeline-code/Jenkinsfile/artifactory/artifactory-cleanup/cleanup_snapshots.py "${args[@]}"
+python3 -I Jenkinsfile/artifactory/artifactory-cleanup/cleanup_snapshots.py "${args[@]}"
 '''
                     }
                 }

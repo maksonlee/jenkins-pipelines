@@ -45,7 +45,10 @@ contracts. Update them in the same change as the behavior they describe.
   - `artifactory/artifactory-cleanup`: weekly; every app in `android-snapshots` keeps its newest `KEEP_VERSIONS`
     version folders (5, approved by the owner on 2026-11-25), and `math-runner` (Unity evidence) is never touched.
     Scheduled runs delete; uncheck `DELETE` to only report. Tests: `tests/artifactory/`.
-  - `backstage`: unchanged.
+  - `backstage/homelab-backstage-main-ci`: its own Jenkinsfile.
+  - Every job except `admin/seed-jobs` is listed in the DSL, the exceptions as `standaloneJobs`, so a rebuilt
+    Jenkins gets them back. `admin/pipelines-ci` runs `tools/run_checks.sh` after each push; it polls on purpose
+    (a webhook on this repository would reach every `githubPush()` job).
   - `aosp/aosp-build-in-docker`, `build-prj-0001`, `k8s-dynamic-agent-test` and
     `monitoring/taiwan-bus-production-health` were deleted on 2026-11-25: their Gerrit and Kubernetes hosts were
     unreachable and the monitor had been disabled since 2026-08-01. Their Jenkinsfiles remain in git history.
@@ -55,6 +58,7 @@ contracts. Update them in the same change as the behavior they describe.
 Groovy cannot run locally. These checks are offline unless noted:
 
 ```bash
+tools/run_checks.sh                                                 # all offline checks below + Groovy syntax; CI runs it
 python3 -B -m unittest discover -s tests -t .                       # library scripts, Play tools, job list
 python3 -B -m unittest discover -s tests -t . -k release            # a subset by name
 python3 -B -m unittest Jenkinsfile/android/gst-stream-wall/release/test_publication_artifact_selection.py

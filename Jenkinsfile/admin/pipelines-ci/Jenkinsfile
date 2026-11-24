@@ -1,0 +1,37 @@
+// Offline checks of this repository after every push to main: the Python tests and a Groovy syntax check of the
+// library, the Job DSL and all Jenkinsfiles (tools/run_checks.sh). It runs after the push, so it reports a broken
+// main quickly but cannot prevent it.
+//
+// The trigger polls instead of using a GitHub webhook on purpose: a push event for this repository would also reach
+// every githubPush() job that loads its Jenkinsfile and library from here.
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        timeout(time: 15, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+    }
+
+    triggers {
+        pollSCM('H/10 * * * *')
+    }
+
+    stages {
+        stage('Offline checks') {
+            steps {
+                sh '''#!/bin/bash
+set -euo pipefail
+tools/run_checks.sh
+'''
+            }
+        }
+    }
+
+    post {
+        cleanup {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}

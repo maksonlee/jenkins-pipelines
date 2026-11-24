@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DSL = (ROOT / "jobs/jenkins_jobs.groovy").read_text(encoding="utf-8")
 SEED = (ROOT / "Jenkinsfile/admin/seed-jobs/Jenkinsfile").read_text(encoding="utf-8")
 ENTRY = re.compile(r"\[folder: '([^']+)', roles: \[([^\]]*)\], repo: '([^']+)', type: '([^']+)'\]")
+STANDALONE = re.compile(r"\[job: '([^']+)', description: '[^']+'\]")
 PER_PROJECT_ROLES = ("ci", "release")
 
 
@@ -38,6 +39,17 @@ class JobDefinitionTest(unittest.TestCase):
             if path.parent.name in PER_PROJECT_ROLES
         }
         self.assertEqual(found - listed, set())
+
+    def test_every_job_outside_the_layout_is_listed_with_its_jenkinsfile(self):
+        listed = set(STANDALONE.findall(DSL))
+        self.assertIn("admin/pipelines-ci", listed)
+        for job in listed:
+            with self.subTest(job=job):
+                self.assertTrue((ROOT / "Jenkinsfile" / job / "Jenkinsfile").is_file())
+        per_project = {f"{folder}/{role}" for folder, roles, _, _ in entries() for role in roles}
+        found = {path.parent.relative_to(ROOT / "Jenkinsfile").as_posix() for path in (ROOT / "Jenkinsfile").rglob("Jenkinsfile")}
+        # The seed job creates the others, so it is the only job that has to be created by hand.
+        self.assertEqual(found - per_project - listed, {"admin/seed-jobs"})
 
     def test_top_level_folders_are_never_declared(self):
         for folder in re.findall(r"folder\(([^)]*)\)", DSL):

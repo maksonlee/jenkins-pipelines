@@ -120,11 +120,9 @@ def walk(jenkins, path=""):
 def expected_jobs(dsl_path):
     text = dsl_path.read_text(encoding="utf-8")
     pattern = re.compile(r"\[folder: '([^']+)', roles: \[([^\]]*)\]")
-    return {
-        f"{folder}/{role.strip().strip(chr(39))}": f"Jenkinsfile/{folder}/{role.strip().strip(chr(39))}/Jenkinsfile"
-        for folder, roles in pattern.findall(text)
-        for role in roles.split(",")
-    }
+    jobs = [f"{folder}/{role.strip().strip(chr(39))}" for folder, roles in pattern.findall(text) for role in roles.split(",")]
+    jobs += re.findall(r"\[job: '([^']+)', description:", text)
+    return {job: f"Jenkinsfile/{job}/Jenkinsfile" for job in jobs}
 
 
 def check(inventory, expected):

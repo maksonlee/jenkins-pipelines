@@ -12,6 +12,7 @@ project.
 | `flutter/<repo>/ci` | GitHub push | `flutterCi`: quality gates and a debug AAB uploaded to Artifactory snapshots. |
 | `flutter/<repo>/release` | manual | `flutterRelease`: quality gates, signed AAB, approval, Google Play upload. |
 | `admin/seed-jobs` | manual | Creates the folders and jobs listed in `jobs/jenkins_jobs.groovy`. |
+| `admin/pipelines-ci` | polls this repository | Runs `tools/run_checks.sh`: every offline test and a Groovy syntax check. |
 
 The folder is the GitHub repository name. A project's Jenkinsfile lives at `Jenkinsfile/<folder>/<role>/Jenkinsfile`
 and only passes the project's settings to one library step. See [android.md](android.md) and [flutter.md](flutter.md).
@@ -33,7 +34,9 @@ Jobs that do not follow the layout yet:
   because its per-build folders are Unity release evidence, and paths in any other layout are only reported.
   Every run archives the plan as `snapshot-cleanup.json`. `DELETE` defaults to true, so scheduled runs delete the
   planned folders, which go to the Artifactory trash can first. Uncheck it to only list them.
-- `backstage`: unchanged.
+- `backstage/homelab-backstage-main-ci`: builds the homelab-backstage image and pushes it to Harbor.
+
+These jobs are listed in `jobs/jenkins_jobs.groovy` too, so the seed can recreate them.
 - `aosp/aosp-build-in-docker`, `build-prj-0001`, `k8s-dynamic-agent-test` and
   `monitoring/taiwan-bus-production-health` were deleted on 2026-11-25, together with the Gerrit and Kubernetes
   credentials, cloud and plugins they alone used.
@@ -72,6 +75,10 @@ Jobs that do not follow the layout yet:
 - `Jenkinsfile/admin/seed-jobs/job-config.xml` is the configuration the seed job was created with. To recreate
   it: create the `admin` folder, then post this file to `/job/admin/createItem?name=seed-jobs`.
 - To change an existing job's definition, edit it in Jenkins and keep `jobs/jenkins_jobs.groovy` in step.
+- **Rebuilding Jenkins.** Create the top-level folders (`admin`, `android`, `flutter`, `unity`, `web`, `backstage`,
+  `artifactory`) and the credentials, recreate the seed job as above, and run it: it creates every other job.
+  Each job gets its parameters and triggers from its first build. `admin/pipelines-ci` polls instead of using a
+  webhook, because a push event for this repository would reach every `githubPush()` job that loads from it.
   `python3 tools/jenkins_inventory.py --check` reports any job whose SCM, branch, script path or lightweight flag
   differs from the file, and any job that is missing.
 
