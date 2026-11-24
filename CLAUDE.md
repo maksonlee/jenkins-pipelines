@@ -78,9 +78,9 @@ git diff --check
   - it switches `publish<Variant>Bundle` to `publish<Variant>Apps` when Play listings exist, unless
     `publishPlayListings: false`. `androidRelease` always sets false and picks the task explicitly.
 - **`androidRelease`** uploads only the verified AAB through GPP `--artifact-dir`, `--track` and `--release-status`.
-  GPP 4.0.0 supports these options on publish tasks; its default release status is `completed`. The signer must
-  match Vault `certificate_sha256`, which beepbeep, bluetoothfinder, floatinglevel and headshotmaker do not have
-  yet.
+  GPP 4.0.0 supports these options on publish tasks; its default release status is `completed`. The signer is
+  recorded, and compared with Vault `certificate_sha256` only when `verifyUploadCertificate: true`. Never put
+  fingerprints or other operational secrets in this public repository.
 - **`androidCi`** never reads signing material. It mounts the SDK read-only and the worker `debug.keystore`.
   Checkout polling must stay enabled, or `githubPush()` will not match the repository.
 - **Release jobs** use stage timeouts plus a 60-minute approval timeout, not one build timeout, because the input

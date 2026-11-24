@@ -2,7 +2,8 @@
 # Verify the signed release AAB on the agent before it is archived or offered for Play upload:
 # - it is the only AAB in its directory, and the pinned bundletool validates it;
 # - the manifest package is RELEASE_PACKAGE, and versionCode/versionName are recorded in release-manifest.txt;
-# - jarsigner verifies every entry, and the signer SHA-256 equals EXPECTED_UPLOAD_CERT_SHA256;
+# - jarsigner verifies every entry, and the signer certificate SHA-256 is recorded as signerSha256;
+# - with RELEASE_VERIFY_SIGNER=true, that SHA-256 must equal EXPECTED_UPLOAD_CERT_SHA256 (Vault certificate_sha256);
 # - no entry matches RELEASE_FORBIDDEN_AAB_ENTRY (an extended regex), when set.
 # Writes <aab>.sha256 with the bare file name next to the bundle.
 set -euo pipefail
@@ -52,20 +53,29 @@ if grep -qi 'unsigned entries' "$signature_report"; then
     echo 'AAB contains unsigned entries.' >&2
     exit 1
 fi
-expected_signer=$(printf %s "${EXPECTED_UPLOAD_CERT_SHA256:?ERROR: expected upload certificate SHA-256 is unset}" \
-    | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
 actual_signer=$(keytool -printcert -jarfile "$aab" \
     | awk -F': ' '$1 ~ /^[[:space:]]*SHA256$/ { print $2; exit }' \
     | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
-if [[ ! "$expected_signer" =~ ^[0-9A-F]{64}$ ]] || [[ ! "$actual_signer" =~ ^[0-9A-F]{64}$ ]]; then
-    echo 'Could not compare exactly one upload certificate SHA-256 fingerprint.' >&2
+if [[ ! "$actual_signer" =~ ^[0-9A-F]{64}$ ]]; then
+    echo 'Could not read exactly one signer certificate SHA-256 fingerprint.' >&2
     exit 1
 fi
-if [[ "$actual_signer" != "$expected_signer" ]]; then
-    echo 'AAB signer does not match the approved upload certificate.' >&2
-    exit 1
+if [[ "${RELEASE_VERIFY_SIGNER:-false}" == true ]]; then
+    expected_signer=$(printf %s "${EXPECTED_UPLOAD_CERT_SHA256:?ERROR: expected upload certificate SHA-256 is unset}" \
+        | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')
+    if [[ ! "$expected_signer" =~ ^[0-9A-F]{64}$ ]]; then
+        echo 'The expected upload certificate is not exactly one SHA-256 fingerprint.' >&2
+        exit 1
+    fi
+    if [[ "$actual_signer" != "$expected_signer" ]]; then
+        echo 'AAB signer does not match the approved upload certificate.' >&2
+        exit 1
+    fi
+    echo 'AAB signer matches the approved upload certificate.'
+else
+    echo 'No approved upload certificate is configured; Google Play checks the upload key when the AAB is uploaded.'
 fi
-echo 'AAB signer matches the approved upload certificate.'
+printf 'signerSha256=%s\n' "$actual_signer" >> "$release_dir/release-manifest.txt"
 
 if [[ -n "${RELEASE_FORBIDDEN_AAB_ENTRY:-}" ]] && unzip -Z1 "$aab" | grep -Eq -- "$RELEASE_FORBIDDEN_AAB_ENTRY"; then
     echo "AAB contains an entry matching $RELEASE_FORBIDDEN_AAB_ENTRY." >&2

@@ -67,8 +67,8 @@ Jobs that do not follow the layout yet:
 1. Add `Jenkinsfile/<type>/<repo>/<role>/Jenkinsfile` calling the step for that type.
 2. Add the project to `jobs/jenkins_jobs.groovy`, then run `python3 -B -m unittest discover -s tests -t .`.
 3. Merge to `main`, approve the script if asked, run `admin/seed-jobs`, then build each new job once.
-4. Add the GitHub webhook. For a release, make sure Vault has `secret/jenkins/mobile/app/<applicationId>`, including
-   `certificate_sha256` for native apps.
+4. Add the GitHub webhook. For a release, make sure Vault has `secret/jenkins/mobile/app/<applicationId>`. To also
+   compare a native app's signer, add `certificate_sha256` there and set `verifyUploadCertificate: true`.
 
 ## Migrating a project from an old job
 

@@ -52,6 +52,13 @@ class AndroidReleaseContractTest(unittest.TestCase):
         loaded = set(re.findall(r"libraryResource\('android/release/([^']+)'\)", STEP))
         self.assertEqual(loaded, {p.name for p in SCRIPTS.glob("*.sh")})
 
+    def test_vault_certificate_is_read_only_when_the_project_enables_it(self):
+        lookup = STEP.index("vaultKey: 'certificate_sha256'")
+        self.assertLess(STEP.index("if (config.verifyUploadCertificate) {"), lookup)
+        self.assertEqual(STEP.count("certificate_sha256'"), 1)
+        self.assertIn("verifyUploadCertificate  : cfg.verifyUploadCertificate == true", STEP)
+        self.assertNotIn("uploadCertificateSha256", STEP)
+
     def test_play_credentials_are_read_only_after_the_approval_input(self):
         approval = STEP.index("input message:")
         self.assertGreater(STEP.index("secret/jenkins/mobile/shared/play-service"), approval)
@@ -140,6 +147,7 @@ esac
             "BUNDLETOOL_JAR": str(bundletool),
             "BUNDLETOOL_SHA256": hashlib.sha256(bundletool.read_bytes()).hexdigest(),
             "EXPECTED_UPLOAD_CERT_SHA256": SIGNER.lower(),
+            "RELEASE_VERIFY_SIGNER": "true",
         }
 
     def test_verify_records_manifest_signer_and_checksum(self):
@@ -148,10 +156,26 @@ esac
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         release_dir = aab.parent
         self.assertEqual((release_dir / "release-manifest.txt").read_text(),
-                         "package=com.example.app\nversionCode=42\nversionName=1.2.3\n")
+                         f"package=com.example.app\nversionCode=42\nversionName=1.2.3\nsignerSha256={SIGNER}\n")
         self.assertEqual((release_dir / "app-release.aab.sha256").read_text(),
                          f"{hashlib.sha256(aab.read_bytes()).hexdigest()}  app-release.aab\n")
         self.assertIn("matches the approved upload certificate", result.stdout.decode())
+
+    def test_verify_without_an_approved_certificate_records_the_signer_only(self):
+        aab, settings = self.fake_bundle(signer="CD" * 32)
+        del settings["EXPECTED_UPLOAD_CERT_SHA256"]
+        settings["RELEASE_VERIFY_SIGNER"] = "false"
+        result = self.run_bash(VERIFY, settings)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertIn("Google Play checks the upload key", result.stdout.decode())
+        self.assertIn(f"signerSha256={'CD' * 32}", (aab.parent / "release-manifest.txt").read_text())
+        self.assertTrue((aab.parent / "app-release.aab.sha256").exists())
+
+        unsigned = self.fake_bundle(jar_report="jar verified. Warning: unsigned entries")[1]
+        unsigned["RELEASE_VERIFY_SIGNER"] = "false"
+        result = self.run_bash(VERIFY, unsigned)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsigned entries", result.stderr.decode())
 
     def test_verify_fails_closed(self):
         cases = {

@@ -63,6 +63,7 @@ the image or KVM are missing.
 androidRelease(
     repo: 'taiwandrive',
     packageName: 'com.maksonlee.taiwandrive',
+    verifyUploadCertificate: true,                      // the signer must equal Vault certificate_sha256
     verifyTasks: [':engine:test', ':pack:test', ':app:testDebugUnitTest', ':app:lintDebug'],  // default app unit tests + debug lint
     tracks: ['alpha', 'internal'],                      // PLAY_TRACK choices, first is the default; default ['internal']
     releaseStatuses: ['draft', 'completed'],            // default ['completed', 'draft']
@@ -87,13 +88,16 @@ this order:
      validates it;
    - the manifest package must equal `packageName`, and its versionCode and versionName are recorded in
      `release-manifest.txt`;
-   - strict `jarsigner -verify` must pass, and the signer SHA-256 must equal Vault `certificate_sha256` (or a
-     literal `uploadCertificateSha256` in the Jenkinsfile);
+   - strict `jarsigner -verify` must pass with no unsigned entries;
+   - the signer certificate SHA-256 is recorded as `signerSha256` and shown in the approval input. With
+     `verifyUploadCertificate: true` it must also equal Vault `certificate_sha256`. Without it, Google Play checks
+     the upload key when the AAB is uploaded, as with the old jobs. Fingerprints are never written to this public
+     repository;
    - no entry may match `forbiddenAabEntry`.
 
    The AAB, its `.sha256`, the signature report, the manifest summary and the bundletool output are archived and
    fingerprinted.
-5. **Approve** (only with `PUBLISH_TO_PLAY`). The input names the package, version, commit, AAB SHA-256, track and
+5. **Approve** (only with `PUBLISH_TO_PLAY`). The input names the package, version, commit, AAB SHA-256, signer, track and
    status. It times out after 60 minutes.
 6. **Publish.** The verified AAB is checked against its recorded SHA-256 and staged alone in
    `<module>/build/outputs/play-publication`. Then the job reads `secret/jenkins/mobile/shared/play-service` and runs
@@ -112,10 +116,7 @@ its own (`publishPlayListings: false`).
 | `android/bluetoothfinder/{ci,release}` | branch `2.x`; same as beepbeep |
 | `android/float-level/{ci,release}` | package `com.maksonlee.floatinglevel`; same as beepbeep |
 | `android/headshot-maker-android/{ci,release}` | package `com.maksonlee.headshotmaker`; same as beepbeep |
-| `android/taiwandrive/{ci,release}` | engine and pack JVM tests; alpha/internal; no bundled offline pack |
+| `android/taiwandrive/{ci,release}` | engine and pack JVM tests; alpha/internal; no bundled offline pack; signer checked against Vault |
 | `android/learn-chess/ci` | `nativeAndroidCi`, traced evidence, emulator device suite |
 | `android/cloud-cost-widgets/ci` | `nativeAndroidCi` for the phone and Wear OS apps |
 | `android/gst-stream-wall/release` | own Jenkinsfile (Rust/GStreamer image, upload, promotion and listing modes) |
-
-The four apps that read `-Psigning.*` still need `certificate_sha256` added to their Vault paths before their first
-release verification can pass.

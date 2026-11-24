@@ -4,10 +4,11 @@
 //
 // GIT_REF must be the release branch or a full commit SHA already contained in it. The job checks release notes,
 // runs the configured verification tasks and builds the signed AAB, then verifies it on the agent (bundletool,
-// manifest package and version, strict jarsigner, signer SHA-256 against the approved upload certificate) and
-// archives it. Only with PUBLISH_TO_PLAY and after a manual input naming the exact commit, version, SHA-256,
-// track and status does it read the Play service account and upload that same verified AAB through GPP
-// (--artifact-dir, --track, --release-status). See docs/android.md.
+// manifest package and version, strict jarsigner) and records its signer certificate SHA-256. With
+// verifyUploadCertificate the signer must also equal Vault certificate_sha256; otherwise Google Play checks the
+// upload key at upload time, as before. Only with PUBLISH_TO_PLAY and after a manual input naming the exact commit,
+// version, SHA-256, signer, track and status does it read the Play service account and upload that same verified
+// AAB through GPP (--artifact-dir, --track, --release-status). See docs/android.md.
 
 def call(Map cfg) {
     def config = androidReleaseConfig(cfg)
@@ -98,16 +99,13 @@ def call(Map cfg) {
                                 "RELEASE_PACKAGE=${config.packageName}",
                                 "BUNDLETOOL_JAR=${config.bundletoolJar}",
                                 "BUNDLETOOL_SHA256=${config.bundletoolSha256}",
-                                "RELEASE_FORBIDDEN_AAB_ENTRY=${config.forbiddenAabEntry ?: ''}"
+                                "RELEASE_FORBIDDEN_AAB_ENTRY=${config.forbiddenAabEntry ?: ''}",
+                                "RELEASE_VERIFY_SIGNER=${config.verifyUploadCertificate}"
                             ]) {
                                 sh libraryResource('android/release/verify-aab.sh')
                             }
                         }
-                        if (config.uploadCertificateSha256) {
-                            withEnv(["EXPECTED_UPLOAD_CERT_SHA256=${config.uploadCertificateSha256}"]) {
-                                verify()
-                            }
-                        } else {
+                        if (config.verifyUploadCertificate) {
                             withVault([vaultSecrets: [[
                                 path: config.keystoreVaultPath,
                                 engineVersion: 2,
@@ -115,6 +113,8 @@ def call(Map cfg) {
                             ]]]) {
                                 verify()
                             }
+                        } else {
+                            verify()
                         }
                         def manifest = [:]
                         readFile("${config.releaseDir}/release-manifest.txt").readLines().each { line ->
@@ -125,6 +125,7 @@ def call(Map cfg) {
                         }
                         env.RELEASE_VERSION_CODE = manifest.versionCode
                         env.RELEASE_VERSION_NAME = manifest.versionName
+                        env.RELEASE_SIGNER_SHA256 = manifest.signerSha256
                         env.RELEASE_AAB_SHA256 = readFile("${config.aab}.sha256").trim().split(/\s+/)[0]
                         currentBuild.description = "${config.repo} ${env.RELEASE_VERSION_NAME} (${env.RELEASE_VERSION_CODE}) ${env.RELEASE_COMMIT.take(12)}"
                     }
@@ -138,7 +139,9 @@ def call(Map cfg) {
                 options { timeout(time: config.approvalTimeoutMinutes, unit: 'MINUTES') }
                 steps {
                     input message: "Upload ${config.packageName} ${env.RELEASE_VERSION_NAME} (${env.RELEASE_VERSION_CODE}) " +
-                        "from ${env.RELEASE_COMMIT}, AAB SHA-256 ${env.RELEASE_AAB_SHA256}, to Google Play " +
+                        "from ${env.RELEASE_COMMIT}, AAB SHA-256 ${env.RELEASE_AAB_SHA256}, signed by certificate " +
+                        "SHA-256 ${env.RELEASE_SIGNER_SHA256}" +
+                        (config.verifyUploadCertificate ? ' (matches Vault certificate_sha256)' : '') + ', to Google Play ' +
                         "${params.PLAY_TRACK} as ${params.PLAY_RELEASE_STATUS}" +
                         (config.publishListingsWithRelease ? ', together with the store listing from this commit?' : '?')
                 }
@@ -184,7 +187,8 @@ def androidReleaseConfig(Map cfg) {
         packageName              : cfg.packageName as String,
         module                   : module,
         keystoreVaultPath        : (cfg.keystoreVaultPath ?: "secret/jenkins/mobile/app/${cfg.packageName}") as String,
-        uploadCertificateSha256  : cfg.uploadCertificateSha256 as String,
+        // Compare the signer with Vault certificate_sha256; only projects that keep that value enable it.
+        verifyUploadCertificate  : cfg.verifyUploadCertificate == true,
         passSigningProperties    : cfg.get('passSigningProperties', false) as boolean,
         verifyTasks              : (cfg.verifyTasks ?: [":${module}:testDebugUnitTest", ":${module}:lintDebug"]) as List,
         tracks                   : (cfg.tracks ?: ['internal']) as List,
@@ -214,9 +218,6 @@ def androidReleaseConfig(Map cfg) {
     }
     if (!(module ==~ /^[A-Za-z0-9_-]+$/)) {
         error "androidRelease: invalid module '${module}'"
-    }
-    if (config.uploadCertificateSha256 && !(config.uploadCertificateSha256 ==~ /^([0-9A-Fa-f]{2}:?){31}[0-9A-Fa-f]{2}$/)) {
-        error 'androidRelease: uploadCertificateSha256 must be one SHA-256 fingerprint'
     }
     config.verifyTasks.each { task ->
         if (!(task.toString() ==~ /^[A-Za-z0-9:_.-]+$/)) {

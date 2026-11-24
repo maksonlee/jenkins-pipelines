@@ -4,6 +4,8 @@
 androidRelease(
     repo: 'taiwandrive',
     packageName: 'com.maksonlee.taiwandrive',
+    // Vault keeps certificate_sha256 for this app; the AAB signer must match it.
+    verifyUploadCertificate: true,
     verifyTasks: [':engine:test', ':pack:test', ':app:testDebugUnitTest', ':app:lintDebug'],
     // alpha is Closed testing - Alpha. A draft app requires draft; use completed after Google has published
     // the first test release.
