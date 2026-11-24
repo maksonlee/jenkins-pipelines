@@ -16,6 +16,17 @@ def gstStreamWall() {
     return 'harbor.maksonlee.com/library/gst-stream-wall-android-build-env@sha256:11e2a4f7a262afd5a28c2280b7b0114db541d24e7eff498dee79e4a55a10dad1'
 }
 
+def python() {
+    // python:3.13-bookworm as last pulled by the Flutter job (image created 2026-11-05); runs repository-root
+    // Python tests and Play metadata validators.
+    return 'python@sha256:cc55e4ded9c95f6ce2133b3d096db43f214d280c2a8af65d83e246c8fa7d168c'
+}
+
+def postgis() {
+    // postgis/postgis:18-3.6 as last pulled by the Flutter job (image created 2026-10-26); disposable test database.
+    return 'postgis/postgis@sha256:4a43e3c3e5d55b9208240fc71db543b79c638766280c625a425bd0a2390989c4'
+}
+
 def unityAndroid() {
     // unity-android-build-env:6000.6.7f1-android-1; Unity 6000.6.7f1 with embedded Android tools.
     return 'harbor.maksonlee.com/library/unity-android-build-env@sha256:c45b47f9999a81df26f664419725ab5895438e5dbf6123bc002c766ecf3c4cf3'
