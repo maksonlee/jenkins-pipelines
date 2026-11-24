@@ -26,7 +26,8 @@ Jobs that do not follow the layout yet:
   `alpha-status`, `internal-preflight` and `internal-submit` modes. `internal-submit` accepts only a preflight build
   that ran at the same jenkins-pipelines commit, so rerun the preflight if `main` moved in between. Both bundles
   must be signed by the Vault upload key used for the build; no fingerprint is kept in this repository. The old
-  `android/cloud-cost-widgets-release`, which loaded a pinned commit of an unmerged branch, is disabled.
+  `android/cloud-cost-widgets-release`, which loaded a pinned commit of an unmerged branch, was deleted on
+  2026-11-25.
 - `backstage`, `aosp`, `build-prj-0001`, `k8s-dynamic-agent-test`, `monitoring`, `artifactory`: unchanged.
 
 ## Standards

@@ -41,7 +41,7 @@ contracts. Update them in the same change as the behavior they describe.
   - `android/gst-stream-wall/release`: its own qualified Jenkinsfile.
   - `android/cloud-cost-widgets/release`: its own Jenkinsfile with alpha-status, internal-preflight and
     internal-submit modes and its own Play tools. Merged from `codex/cloud-cost-widgets-release` on 2026-11-24;
-    the old `android/cloud-cost-widgets-release` job is disabled.
+    the old `android/cloud-cost-widgets-release` job and that branch were deleted on 2026-11-25.
   - `backstage`, `aosp`, `build-prj-0001`, `k8s-dynamic-agent-test`, `monitoring`, `artifactory`.
 
 ## Checks
