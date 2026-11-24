@@ -1,25 +1,57 @@
+// Weekly cleanup of the Artifactory android-snapshots repository: every app keeps its newest KEEP_VERSIONS version
+// folders, and math-runner (Unity release evidence) is never touched. With DELETE unchecked it only reports.
 pipeline {
     agent { label 'ssh-agent-with-docker' }
 
-    stages {
-        stage('Artifactory Cleanup') {
-            steps {
-                withVault([
-                    vaultSecrets: [[
-                        path: 'secret/jenkins/artifactory/maksonlee',
-                        engineVersion: 2,
-                        secretValues: [[envVar: 'ARTIFACTORY_PASSWORD', vaultKey: 'password']]
-                    ]]
-                ]) {
-                    sh '''#!/bin/bash
-echo "[INFO] Cleaning up old artifacts..."
-python3 pipeline-code/Jenkinsfile/artifactory/artifactory-cleanup/cleanup_old_artifacts.py
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10'))
+        timeout(time: 30, unit: 'MINUTES')
+    }
 
-echo "[INFO] Cleaning up empty folders..."
-python3 pipeline-code/Jenkinsfile/artifactory/artifactory-cleanup/cleanup_empty_folders.py
+    triggers {
+        cron('H 3 * * 0')
+    }
+
+    parameters {
+        booleanParam(name: 'DELETE', defaultValue: false,
+                description: 'Delete the planned version folders; unchecked only lists them')
+        string(name: 'KEEP_VERSIONS', defaultValue: '5', trim: true,
+                description: 'Version folders to keep per app, 1 to 99')
+    }
+
+    stages {
+        stage('Clean android-snapshots') {
+            steps {
+                script {
+                    if (!(params.KEEP_VERSIONS ==~ /[1-9][0-9]?/)) {
+                        error('KEEP_VERSIONS must be a number from 1 to 99')
+                    }
+                }
+                withVault([vaultSecrets: [[
+                    path: 'secret/jenkins/artifactory/maksonlee',
+                    engineVersion: 2,
+                    secretValues: [[envVar: 'ARTIFACTORY_PASSWORD', vaultKey: 'password']]
+                ]]]) {
+                    withEnv(["KEEP_VERSIONS=${params.KEEP_VERSIONS}", "DELETE_SNAPSHOTS=${params.DELETE}"]) {
+                        sh '''#!/bin/bash
+set -euo pipefail
+args=(--keep "$KEEP_VERSIONS" --report snapshot-cleanup.json)
+if [[ "$DELETE_SNAPSHOTS" == true ]]; then
+  args+=(--delete)
+fi
+python3 -I pipeline-code/Jenkinsfile/artifactory/artifactory-cleanup/cleanup_snapshots.py "${args[@]}"
 '''
+                    }
                 }
             }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'snapshot-cleanup.json', allowEmptyArchive: true
         }
     }
 }

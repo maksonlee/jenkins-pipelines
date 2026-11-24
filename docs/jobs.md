@@ -28,7 +28,11 @@ Jobs that do not follow the layout yet:
   must be signed by the Vault upload key used for the build; no fingerprint is kept in this repository. The old
   `android/cloud-cost-widgets-release`, which loaded a pinned commit of an unmerged branch, was deleted on
   2026-11-25.
-- `backstage`, `artifactory`: unchanged.
+- `artifactory/artifactory-cleanup`: runs weekly. In `android-snapshots`, every app under `com/maksonlee` keeps its
+  newest `KEEP_VERSIONS` (default 5) version folders, ordered by their newest file. `math-runner` is never touched,
+  because its per-build folders are Unity release evidence, and paths in any other layout are only reported.
+  `DELETE` defaults to false, so a run lists the folders and archives `snapshot-cleanup.json` without deleting.
+- `backstage`: unchanged.
 - `aosp/aosp-build-in-docker`, `build-prj-0001`, `k8s-dynamic-agent-test` and
   `monitoring/taiwan-bus-production-health` were deleted on 2026-11-25, together with the Gerrit and Kubernetes
   credentials, cloud and plugins they alone used.

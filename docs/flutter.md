@@ -70,7 +70,8 @@ The job is triggered by a GitHub push (`githubPush()`; webhook `https://jenkins.
 started by hand. It builds the branch tip:
 
 1. Runs the quality gates and builds a **debug** AAB.
-2. Archives it and uploads it to `android-snapshots/com/maksonlee/<repo>/<version>-SNAPSHOT/`.
+2. Archives it and uploads it to `android-snapshots/com/maksonlee/<repo>/<version>-SNAPSHOT/`. Old version
+   folders are pruned by `artifactory/artifactory-cleanup` (see [jobs.md](jobs.md)).
 
 It uses no release signing and no Google Play access.
 

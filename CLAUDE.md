@@ -42,7 +42,10 @@ contracts. Update them in the same change as the behavior they describe.
   - `android/cloud-cost-widgets/release`: its own Jenkinsfile with alpha-status, internal-preflight and
     internal-submit modes and its own Play tools. Merged from `codex/cloud-cost-widgets-release` on 2026-11-24;
     the old `android/cloud-cost-widgets-release` job and that branch were deleted on 2026-11-25.
-  - `backstage`, `artifactory`: unchanged.
+  - `artifactory/artifactory-cleanup`: weekly; every app in `android-snapshots` keeps its newest `KEEP_VERSIONS`
+    version folders, and `math-runner` (Unity evidence) is never touched. `DELETE` defaults to false, so a run only
+    reports until the owner approves deletion. Tests: `tests/artifactory/`.
+  - `backstage`: unchanged.
   - `aosp/aosp-build-in-docker`, `build-prj-0001`, `k8s-dynamic-agent-test` and
     `monitoring/taiwan-bus-production-health` were deleted on 2026-11-25: their Gerrit and Kubernetes hosts were
     unreachable and the monitor had been disabled since 2026-08-01. Their Jenkinsfiles remain in git history.
