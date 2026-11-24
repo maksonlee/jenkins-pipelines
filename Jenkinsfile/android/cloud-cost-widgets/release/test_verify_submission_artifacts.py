@@ -22,11 +22,12 @@ class SubmissionArtifactTest(unittest.TestCase):
         self.digests = {name: hashlib.sha256(data).hexdigest() for name, data in self.input_bytes.items()}
         self.source_commit = 'ab' * 20
         self.pipeline_commit = 'cd' * 20
+        self.upload_certificate = 'ae' * 32
         self.files = {'phone': self.root / 'bundles' / PHONE_FILE, 'wear': self.root / 'bundles' / WEAR_FILE}
         for name, value in (
             ('source-commit.txt', self.source_commit),
             ('pipeline-commit.txt', self.pipeline_commit),
-            ('upload-certificate-sha256.txt', verifier.UPLOAD_CERTIFICATE_SHA256),
+            ('upload-certificate-sha256.txt', self.upload_certificate),
         ):
             (self.root / name).write_text(value + '\n', encoding='ascii')
         for form_factor, path in self.files.items():
@@ -39,12 +40,12 @@ class SubmissionArtifactTest(unittest.TestCase):
                 {
                     'package': 'com.maksonlee.cloudcost.aws', 'version_name': '1.0.10', 'version_code': '100011',
                     'min_sdk': '26', 'target_sdk': '36', 'form_factor': 'phone', 'sha256': self.digests['phone'],
-                    'upload_certificate_sha256': verifier.UPLOAD_CERTIFICATE_SHA256, 'file': PHONE_FILE,
+                    'upload_certificate_sha256': self.upload_certificate, 'file': PHONE_FILE,
                 },
                 {
                     'package': 'com.maksonlee.cloudcost.aws', 'version_name': '1.0.7', 'version_code': '200008',
                     'min_sdk': '30', 'target_sdk': '35', 'form_factor': 'wear', 'sha256': self.digests['wear'],
-                    'upload_certificate_sha256': verifier.UPLOAD_CERTIFICATE_SHA256, 'file': WEAR_FILE,
+                    'upload_certificate_sha256': self.upload_certificate, 'file': WEAR_FILE,
                 },
             ],
         }
@@ -75,7 +76,6 @@ class SubmissionArtifactTest(unittest.TestCase):
     def test_rejects_mismatched_source_or_pipeline(self):
         for entry, value in (
             ('source-commit.txt', self.source_commit), ('pipeline-commit.txt', self.pipeline_commit),
-            ('upload-certificate-sha256.txt', verifier.UPLOAD_CERTIFICATE_SHA256),
         ):
             path = self.root / entry
             for invalid in ('0' * len(value), f' {value}\n'):
@@ -83,6 +83,18 @@ class SubmissionArtifactTest(unittest.TestCase):
                 with self.subTest(entry=entry), self.assertRaisesRegex(verifier.ArtifactVerificationError, entry):
                     self.load()
             path.write_text(value, encoding='ascii')
+
+    def test_bundles_must_name_the_archived_vault_certificate(self):
+        path = self.root / 'upload-certificate-sha256.txt'
+        for invalid in ('', 'AE' * 32, f' {self.upload_certificate}\n', f'{self.upload_certificate}\n' * 2):
+            path.write_text(invalid, encoding='ascii')
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                verifier.ArtifactVerificationError, 'upload-certificate-sha256.txt',
+            ):
+                self.load()
+        path.write_text('cd' * 32 + '\n', encoding='ascii')
+        with self.assertRaisesRegex(verifier.ArtifactVerificationError, 'manifest or signature'):
+            self.load()
 
     def test_rejects_wrong_target_or_signer_in_report(self):
         for index in (0, 1):

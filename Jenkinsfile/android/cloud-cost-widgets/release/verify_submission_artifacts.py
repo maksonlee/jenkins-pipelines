@@ -9,7 +9,7 @@ from pathlib import Path
 
 from verify_bundles import (
     BUNDLETOOL_SHA, PACKAGE, PHONE_BUNDLE_FILENAME, PHONE_VERSION_CODE,
-    UPLOAD_CERTIFICATE_SHA256, VERSION_NAME, WEAR_BUNDLE_FILENAME, WEAR_VERSION_CODE, WEAR_VERSION_NAME,
+    VERSION_NAME, WEAR_BUNDLE_FILENAME, WEAR_VERSION_CODE, WEAR_VERSION_NAME,
 )
 
 
@@ -62,11 +62,15 @@ def load_release_bundles(input_directory, source_commit, pipeline_commit, digest
     metadata = {
         'source-commit.txt': source_commit,
         'pipeline-commit.txt': pipeline_commit,
-        'upload-certificate-sha256.txt': UPLOAD_CERTIFICATE_SHA256,
     }
     for file, expected in metadata.items():
         if read_archive(root, file).splitlines() != [expected.encode('ascii')]:
             raise ArtifactVerificationError(f'Signed archive identity verification failed: {file}')
+    # The Vault upload key certificate recorded by the preflight build; both bundles must name it as their signer.
+    certificate = read_archive(root, 'upload-certificate-sha256.txt').splitlines()
+    if len(certificate) != 1 or re.fullmatch(rb'[a-f0-9]{64}', certificate[0]) is None:
+        raise ArtifactVerificationError('Signed archive identity verification failed: upload-certificate-sha256.txt')
+    upload_certificate = certificate[0].decode('ascii')
 
     expected_report = {
         'result': 'passed',
@@ -80,7 +84,7 @@ def load_release_bundles(input_directory, source_commit, pipeline_commit, digest
             'target_sdk': target,
             'form_factor': form_factor,
             'sha256': digests[form_factor],
-            'upload_certificate_sha256': UPLOAD_CERTIFICATE_SHA256,
+            'upload_certificate_sha256': upload_certificate,
             'file': filename,
         } for form_factor, _, version, code, minimum, target, filename in RELEASE_BUNDLES],
     }

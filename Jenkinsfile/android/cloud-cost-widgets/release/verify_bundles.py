@@ -27,7 +27,6 @@ RELEASE_BUNDLES = (
     ('wear', 'apps/aws-wear/build/outputs/bundle/release/aws-wear-release.aab',
      WEAR_VERSION_NAME, WEAR_VERSION_CODE, WEAR_BUNDLE_FILENAME),
 )
-UPLOAD_CERTIFICATE_SHA256 = 'e11bc3918c83d0082bf28b72f2f99bc6f2867c38559f701cf4fdce0f3702cec7'
 ANDROID = '{http://schemas.android.com/apk/res/android}'
 BUNDLETOOL = Path('/home/administrator/jenkins/android-cache/tools/bundletool-all-1.18.3.jar')
 BUNDLETOOL_SHA = 'a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29'
@@ -132,9 +131,11 @@ def verify_bundle(bundle, form_factor, version, code, expected_signer):
 def archive_release_bundles(source, evidence):
     if sha256(BUNDLETOOL) != BUNDLETOOL_SHA:
         raise VerificationError('Worker bundletool SHA-256 differs from the pinned tool')
+    # The certificate of the Vault upload key used for this build; no fingerprint is kept in this repository.
     certificate = (evidence / 'upload-certificate-sha256.txt').read_bytes().splitlines()
-    if certificate != [UPLOAD_CERTIFICATE_SHA256.encode('ascii')]:
-        raise VerificationError('The Vault-bound certificate differs from the pinned upload certificate')
+    if len(certificate) != 1 or re.fullmatch(rb'[a-f0-9]{64}', certificate[0]) is None:
+        raise VerificationError('Could not read the certificate SHA-256 of the Vault upload key')
+    upload_certificate = certificate[0].decode('ascii')
     configured = tuple(os.environ[name] for name in (
         'VERSION_NAME', 'PHONE_VERSION_CODE', 'WEAR_VERSION_NAME', 'WEAR_VERSION_CODE',
     ))
@@ -144,7 +145,7 @@ def archive_release_bundles(source, evidence):
     results = []
     for form_factor, output, version, code, filename in RELEASE_BUNDLES:
         bundle = source / output
-        result = verify_bundle(bundle, form_factor, version, code, UPLOAD_CERTIFICATE_SHA256)
+        result = verify_bundle(bundle, form_factor, version, code, upload_certificate)
         results.append((bundle, result | {'file': filename}))
 
     with tempfile.TemporaryDirectory(prefix='verified-', dir=evidence) as staging:

@@ -24,7 +24,9 @@ Jobs that do not follow the layout yet:
   qualification gates.
 - `android/cloud-cost-widgets/release`: has the new path but keeps its own Jenkinsfile and Play tools, with
   `alpha-status`, `internal-preflight` and `internal-submit` modes. `internal-submit` accepts only a preflight build
-  that ran at the same jenkins-pipelines commit, so rerun the preflight if `main` moved in between. The old
+  that ran at the same jenkins-pipelines commit, so rerun the preflight if `main` moved in between. Both bundles
+  must be signed by the Vault upload key used for the build; like the other apps without Vault
+  `certificate_sha256`, no expected fingerprint is kept for it. The old
   `android/cloud-cost-widgets-release`, which loaded a pinned commit of an unmerged branch, is disabled.
 - `backstage`, `aosp`, `build-prj-0001`, `k8s-dynamic-agent-test`, `monitoring`, `artifactory`: unchanged.
 

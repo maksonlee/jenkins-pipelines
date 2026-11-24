@@ -1,6 +1,8 @@
 import json
+import subprocess
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -67,6 +69,21 @@ This jar contains entries whose signer certificate is self-signed.
         with self.assertRaises(VerificationError):
             signer_fingerprint(report + '\nSigner #2:\n')
 
+    def test_bundle_signer_must_be_the_vault_upload_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory) / 'aws-release.aab'
+            with zipfile.ZipFile(bundle, 'w') as archive:
+                archive.writestr('base/manifest/AndroidManifest.xml', b'manifest')
+                archive.writestr('base/dex/classes.dex', b'dex')
+            keytool = ('Signer #1:\n\nCertificate #1:\nSHA256: ' + ':'.join(['AE'] * 32) + '\n').encode()
+            jarsigner = subprocess.CompletedProcess([], 0, 'jar verified.\n', '')
+            with patch.object(verifier.subprocess, 'run', return_value=jarsigner), \
+                    patch.object(verifier, 'capture', return_value=keytool) as capture:
+                with self.assertRaisesRegex(VerificationError, 'phone AAB signer does not match'):
+                    verifier.verify_bundle(bundle, 'phone', '1.0.10', '100011', 'cd' * 32)
+            # Only keytool ran; bundletool is never reached for a bundle signed by another key.
+            self.assertEqual(capture.call_count, 1)
+
 
 class ReleaseArchiveTest(unittest.TestCase):
     def setUp(self):
@@ -81,8 +98,10 @@ class ReleaseArchiveTest(unittest.TestCase):
             bundle.parent.mkdir(parents=True)
             bundle.write_bytes(f'{form_factor} fixture'.encode())
             self.bundles[form_factor] = bundle
+        # Recorded by the Jenkinsfile from the Vault upload key used for the build.
+        self.upload_certificate = 'ae' * 32
         self.certificate = self.evidence / 'upload-certificate-sha256.txt'
-        self.certificate.write_text(verifier.UPLOAD_CERTIFICATE_SHA256 + '\n', encoding='ascii')
+        self.certificate.write_text(self.upload_certificate + '\n', encoding='ascii')
         self.source_commit = 'ab' * 20
         tool = self.root / 'bundletool.jar'
         tool.write_bytes(b'bundletool fixture')
@@ -101,7 +120,7 @@ class ReleaseArchiveTest(unittest.TestCase):
             )
         return fields | {
             'sha256': verifier.sha256(self.bundles[form_factor]),
-            'upload_certificate_sha256': verifier.UPLOAD_CERTIFICATE_SHA256,
+            'upload_certificate_sha256': self.upload_certificate,
         }
 
     def test_phone_and_wear_bundles_are_verified_and_archived_together(self):
@@ -109,8 +128,8 @@ class ReleaseArchiveTest(unittest.TestCase):
         with patch.object(verifier, 'verify_bundle', side_effect=lambda bundle, form_factor, *_: results[form_factor]) as verify:
             verifier.archive_release_bundles(self.root, self.evidence)
         self.assertEqual([call.args for call in verify.call_args_list], [
-            (self.bundles['phone'], 'phone', '1.0.10', '100011', verifier.UPLOAD_CERTIFICATE_SHA256),
-            (self.bundles['wear'], 'wear', '1.0.7', '200008', verifier.UPLOAD_CERTIFICATE_SHA256),
+            (self.bundles['phone'], 'phone', '1.0.10', '100011', self.upload_certificate),
+            (self.bundles['wear'], 'wear', '1.0.7', '200008', self.upload_certificate),
         ])
         archive = self.evidence / 'bundles'
         names = {'phone': 'phone-1.0.10-100011.aab', 'wear': 'wear-1.0.7-200008.aab'}
@@ -131,11 +150,16 @@ class ReleaseArchiveTest(unittest.TestCase):
                 verifier.archive_release_bundles(self.root, self.evidence)
         verify.assert_not_called()
 
-    def test_rejects_untrusted_signing_certificate_before_checking_bundle(self):
-        self.certificate.write_text('0' * 64 + '\n', encoding='ascii')
-        with patch.object(verifier, 'verify_bundle') as verify, self.assertRaisesRegex(VerificationError, 'pinned upload certificate'):
-            verifier.archive_release_bundles(self.root, self.evidence)
-        verify.assert_not_called()
+    def test_no_upload_certificate_is_pinned_in_this_repository(self):
+        self.assertFalse(hasattr(verifier, 'UPLOAD_CERTIFICATE_SHA256'))
+
+    def test_rejects_an_unreadable_vault_certificate_before_checking_bundles(self):
+        for content in ('', 'AE' * 32 + '\n', 'ae' * 31 + '\n', f'{self.upload_certificate}\n' * 2):
+            self.certificate.write_text(content, encoding='ascii')
+            with self.subTest(content=content), patch.object(verifier, 'verify_bundle') as verify, \
+                    self.assertRaisesRegex(VerificationError, 'Vault upload key'):
+                verifier.archive_release_bundles(self.root, self.evidence)
+            verify.assert_not_called()
 
     def test_nothing_is_archived_when_the_wear_bundle_fails(self):
         def verify(bundle, form_factor, *_):
