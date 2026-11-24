@@ -120,5 +120,5 @@ its own (`publishPlayListings: false`).
 | `android/headshot-maker-android/{ci,release}` | package `com.maksonlee.headshotmaker`; same as beepbeep |
 | `android/taiwandrive/{ci,release}` | engine and pack JVM tests; alpha/internal; no bundled offline pack; signer checked against Vault |
 | `android/learn-chess/ci` | `nativeAndroidCi`, traced evidence, emulator device suite, honors `[skip ci]` |
-| `android/cloud-cost-widgets/ci` | `nativeAndroidCi` for the phone and Wear OS apps; no repository webhook, so it runs when started by hand |
+| `android/cloud-cost-widgets/ci` | `nativeAndroidCi` for the phone and Wear OS apps |
 | `android/gst-stream-wall/release` | own Jenkinsfile (Rust/GStreamer image, upload, promotion and listing modes) |
