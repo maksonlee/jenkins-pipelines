@@ -28,7 +28,8 @@ Never point a job at a mutable tag.
 shares one reproducible base. That changes its JDK and toolchain paths, so the gst-stream-wall release must be
 qualified again before `gstStreamWall()` moves.
 
-**Agent disk.** The agent's Docker daemon also keeps old tags that no job references any more, for example
-`flutter-android-build-env:3.44.0`, `:3.44.0-fvm`, `gst-stream-wall-android-build-env:1.98.0-1` and dangling layers.
-Check `docker system df` before removing anything. Keep `cdlee/android-build-env` / `android-build-env:latest`
-while the gst image still builds on it.
+**Agent disk.** Old tags that no job referenced (`flutter-android-build-env:3.44.0`, `:3.44.0-fvm` and
+`gst-stream-wall-android-build-env:1.98.0-1`) and unused dangling images were removed on 2026-11-24. Before removing
+an image, check `docker system df` and `docker ps -a`: other projects share this Docker daemon, and
+`docker image prune` keeps a dangling image that a stopped container still uses. Keep `cdlee/android-build-env` /
+`android-build-env:latest` while the gst image still builds on it.
