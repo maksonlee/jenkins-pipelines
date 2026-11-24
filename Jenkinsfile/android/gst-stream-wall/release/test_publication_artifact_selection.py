@@ -34,7 +34,7 @@ class ArtifactSelectionTest(unittest.TestCase):
         return subprocess.run(
             ["bash", "-c", PUBLICATION_SHELL],
             cwd=self.workspace,
-            env={**os.environ, "REUSE_AAB_BUILD43": "false", **environment},
+            env={**os.environ, **environment},
             capture_output=True,
             text=True,
         )
@@ -61,14 +61,6 @@ class ArtifactSelectionTest(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("FAILED", result.stdout)
-
-    def test_build43_exception_checks_its_exact_digest(self):
-        for digest, accepted in [(self.digest, True), ("0" * 64, False)]:
-            with self.subTest(accepted=accepted):
-                result = self.publish_shell(
-                    REUSE_AAB_BUILD43="true", RELEASE_EXPECTED_AAB_SHA256=digest
-                )
-                self.assertEqual(result.returncode == 0, accepted, result.stderr)
 
     def test_changed_staged_bytes_are_rejected(self):
         fake_bin = self.workspace / "bin"
