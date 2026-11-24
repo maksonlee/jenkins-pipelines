@@ -114,7 +114,7 @@ printf '%s\\n' "$PRODUCT_SHA" > ../release-evidence/source-commit.txt
                                 cacheRoot: cache,
                                 mountAndroidCache: false,
                                 insideArgs: "--mount type=bind,src=${cache}/flutter-android-sdk,dst=/home/ubuntu/Android,readonly",
-                                keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.cloudcost.aws'
+                                keystoreVaultPath: 'secret/jenkins/mobile/shared/upload-key'
                         ) {
                             sh '''#!/bin/bash
 set +x

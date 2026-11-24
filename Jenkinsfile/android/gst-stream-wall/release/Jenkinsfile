@@ -162,7 +162,7 @@ install -d \
                     ]))
                 }
                 withVault([vaultSecrets: [[
-                    path: 'secret/jenkins/mobile/app/com.maksonlee.gststreamwall',
+                    path: 'secret/jenkins/mobile/shared/upload-key',
                     engineVersion: 2,
                     secretValues: [[
                         envVar: 'EXPECTED_UPLOAD_CERT_SHA256',
@@ -373,7 +373,7 @@ def androidReleaseConfig(Map overrides = [:]) {
             // approvals. Never let the shared helper auto-upgrade
             // publishReleaseBundle to publishReleaseApps for this project.
             publishPlayListings: false,
-            keystoreVaultPath: 'secret/jenkins/mobile/app/com.maksonlee.gststreamwall',
+            keystoreVaultPath: 'secret/jenkins/mobile/shared/upload-key',
             jksPath: '/tmp/gst-stream-wall-upload.jks',
             passSigningProperties: false
     ] + overrides

@@ -25,8 +25,7 @@ Jobs that do not follow the layout yet:
 - `android/cloud-cost-widgets/release`: has the new path but keeps its own Jenkinsfile and Play tools, with
   `alpha-status`, `internal-preflight` and `internal-submit` modes. `internal-submit` accepts only a preflight build
   that ran at the same jenkins-pipelines commit, so rerun the preflight if `main` moved in between. Both bundles
-  must be signed by the Vault upload key used for the build; like the other apps without Vault
-  `certificate_sha256`, no expected fingerprint is kept for it. The old
+  must be signed by the Vault upload key used for the build; no fingerprint is kept in this repository. The old
   `android/cloud-cost-widgets-release`, which loaded a pinned commit of an unmerged branch, is disabled.
 - `backstage`, `aosp`, `build-prj-0001`, `k8s-dynamic-agent-test`, `monitoring`, `artifactory`: unchanged.
 
@@ -72,8 +71,10 @@ Jobs that do not follow the layout yet:
 1. Add `Jenkinsfile/<type>/<repo>/<role>/Jenkinsfile` calling the step for that type.
 2. Add the project to `jobs/jenkins_jobs.groovy`, then run `python3 -B -m unittest discover -s tests -t .`.
 3. Merge to `main`, approve the script if asked, run `admin/seed-jobs`, then build each new job once.
-4. Add the GitHub webhook. For a release, make sure Vault has `secret/jenkins/mobile/app/<applicationId>`. To also
-   compare a native app's signer, add `certificate_sha256` there and set `verifyUploadCertificate: true`.
+4. Add the GitHub webhook. For a release:
+   - A native app is signed with the shared `secret/jenkins/mobile/shared/upload-key`, so register that upload key in Play. To
+     also compare its signer with the `certificate_sha256` there, set `verifyUploadCertificate: true`.
+   - A Flutter app needs its own `secret/jenkins/mobile/app/<applicationId>`.
 
 ## Migrating a project from an old job
 

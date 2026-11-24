@@ -72,6 +72,18 @@ class AndroidReleaseContractTest(unittest.TestCase):
         self.assertIn("verifyUploadCertificate  : cfg.verifyUploadCertificate == true", STEP)
         self.assertNotIn("uploadCertificateSha256", STEP)
 
+    def test_native_release_jobs_sign_with_the_shared_upload_key(self):
+        shared = "secret/jenkins/mobile/shared/upload-key"
+        self.assertIn(f"keystoreVaultPath        : (cfg.keystoreVaultPath ?: '{shared}') as String", STEP)
+        self.assertNotIn("mobile/app", STEP)
+        jobs = sorted(ROOT.glob("Jenkinsfile/android/*/release/Jenkinsfile"))
+        self.assertGreaterEqual(len(jobs), 5)
+        for job in jobs:
+            text = job.read_text(encoding="utf-8")
+            self.assertNotIn("secret/jenkins/mobile/app/", text, job)
+            if "androidRelease(" not in text:
+                self.assertIn(shared, text, job)
+
     def test_play_credentials_are_read_only_after_the_approval_input(self):
         approval = STEP.index("input message:")
         self.assertGreater(STEP.index("secret/jenkins/mobile/shared/play-service"), approval)

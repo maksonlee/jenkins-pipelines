@@ -86,8 +86,9 @@ this order:
 2. **Release notes.** Every locale under `<module>/src/main/play/release-notes/` needs a non-empty `<track>.txt` or
    `default.txt`.
 3. **Build.** `gradleRelease(':<module>:bundleRelease', extraArgs: verifyTasks)`. Signing comes from Vault
-   `secret/jenkins/mobile/app/<packageName>` (`upload_jks_b64`, `store_password`, `key_password`, `key_alias`)
-   through the `SIGNING_*` environment variables. `passSigningProperties: true` would also pass them as
+   `secret/jenkins/mobile/shared/upload-key` (`upload_jks_b64`, `store_password`, `key_password`, `key_alias`), the upload key all
+   native apps share, through the `SIGNING_*` environment variables. An app registered in Play with its own key sets
+   `keystoreVaultPath`. `passSigningProperties: true` would also pass them as
    `-Psigning.*` Gradle properties, which put the passwords on the Gradle command line; no project uses it.
 4. **Verify.** On the agent:
    - the AAB must be the only bundle in its directory, and bundletool 1.18.3 (checked against its pinned SHA-256)

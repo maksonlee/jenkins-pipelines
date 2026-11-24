@@ -91,8 +91,11 @@ git diff --check
 - **`buildImages.groovy`** pins every image by digest; never use a mutable tag. `flutter-android-build-env` is built
   `FROM` the `android-build-env` digest, and the gst image still uses the legacy 2025 base.
 - **Vault layout:**
-  - `secret/jenkins/mobile/app/<applicationId>` holds `upload_jks_b64`, `store_password`, `key_password`,
-    `key_alias` and, optionally, `certificate_sha256`;
+  - `secret/jenkins/mobile/shared/upload-key` holds the upload key the native Android apps share: `upload_jks_b64`,
+    `store_password`, `key_password`, `key_alias` and `certificate_sha256`. `androidRelease` and the gst and
+    cloud-cost-widgets release Jenkinsfiles read it;
+  - `secret/jenkins/mobile/app/<applicationId>` holds the same fields for apps with their own key: the 4 Flutter
+    apps (each registered in Play with a different key) and the sealed Unity math-runner;
   - `secret/jenkins/mobile/shared/play-service` holds `json_b64`.
 - **Unity:**
   - `publish.py` is pinned by `PUBLISHER_SHA256` in its Jenkinsfile, so update the hash with any edit.

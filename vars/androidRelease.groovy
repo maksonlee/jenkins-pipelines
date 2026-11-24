@@ -187,8 +187,9 @@ def androidReleaseConfig(Map cfg) {
         branch                   : (cfg.branch ?: 'main') as String,
         packageName              : cfg.packageName as String,
         module                   : module,
-        keystoreVaultPath        : (cfg.keystoreVaultPath ?: "secret/jenkins/mobile/app/${cfg.packageName}") as String,
-        // Compare the signer with Vault certificate_sha256; only projects that keep that value enable it.
+        // The native apps share one upload key; a project registered in Play with its own key sets its path.
+        keystoreVaultPath        : (cfg.keystoreVaultPath ?: 'secret/jenkins/mobile/shared/upload-key') as String,
+        // Compare the signer with Vault certificate_sha256 at that path; only projects that opt in compare it.
         verifyUploadCertificate  : cfg.verifyUploadCertificate == true,
         passSigningProperties    : cfg.get('passSigningProperties', false) as boolean,
         verifyTasks              : (cfg.verifyTasks ?: [":${module}:testDebugUnitTest", ":${module}:lintDebug"]) as List,
