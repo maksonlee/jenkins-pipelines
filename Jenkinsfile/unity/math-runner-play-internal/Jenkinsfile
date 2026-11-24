@@ -142,7 +142,7 @@ python3 "$PUBLISHER_SCRIPT" verify "$SOURCE_BUILD_NUMBER" "$EXPECTED_AAB_SHA256"
                     env.APPROVAL_SUMMARY = sh(
                         script: '''#!/bin/bash
 set -euo pipefail
-python3 "$PUBLISHER_SCRIPT" describe artifact/verified.json "$EXPECTED_AAB_SHA256" "$RELEASE_STATUS" "$REPLACE_DRAFT_VERSION_CODE" "$EXPECTED_REPLACED_DRAFT_SHA256"
+python3 "$PUBLISHER_SCRIPT" describe artifact/verified.json "$EXPECTED_AAB_SHA256" "$RELEASE_STATUS" "${REPLACE_DRAFT_VERSION_CODE:-}" "${EXPECTED_REPLACED_DRAFT_SHA256:-}"
 ''',
                         returnStdout: true
                     ).trim()
@@ -179,7 +179,7 @@ printf '%s  %s\n' "$EXPECTED_AAB_SHA256" artifact/SportsDayMath.aab | sha256sum 
 set +x
 set -euo pipefail
 umask 077
-python3 "$PUBLISHER_SCRIPT" publish artifact/verified.json "$EXPECTED_AAB_SHA256" "$RELEASE_STATUS" "$REPLACE_DRAFT_VERSION_CODE" "$EXPECTED_REPLACED_DRAFT_SHA256"
+python3 "$PUBLISHER_SCRIPT" publish artifact/verified.json "$EXPECTED_AAB_SHA256" "$RELEASE_STATUS" "${REPLACE_DRAFT_VERSION_CODE:-}" "${EXPECTED_REPLACED_DRAFT_SHA256:-}"
 '''
                 }
                 archiveArtifacts artifacts: 'artifact/publish-result.json', fingerprint: true
