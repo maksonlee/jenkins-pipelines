@@ -113,8 +113,13 @@ git diff --check
   fingerprints or other operational secrets in this public repository.
 - **`androidCi`** never reads signing material. It mounts the SDK read-only and the worker `debug.keystore`.
   Checkout polling must stay enabled, or `githubPush()` will not match the repository.
-- **Release jobs** use stage timeouts plus a 60-minute approval timeout, not one build timeout, because the input
-  holds the only executor.
+- **Approvals hold no executor** (since 2026-11-25). A pipeline with an `input` has `agent none` at the top: the
+  stages before the first approval are one group stage with the agent, the approval stage has none, and each later
+  stage takes the agent again with `when { beforeAgent true; ... }`; post actions wrap their steps in
+  `node('ssh-agent-with-docker')`. An approval stage must contain nothing that needs a workspace (`sh`, `readFile`).
+  The workspace is the same directory before and after the approval. The sealed Unity publisher
+  (`unity/math-runner-play-internal`) still holds the executor while it waits.
+- **Release jobs** use stage timeouts plus a 60-minute approval timeout, not one build timeout.
 - **`buildImages.groovy`** pins every image by digest; never use a mutable tag. `flutter-android-build-env` is built
   `FROM` the `android-build-env` digest, and so is the gst image since 2026-11-25.
 - **Vault layout:**
