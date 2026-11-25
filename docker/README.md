@@ -30,6 +30,9 @@ Never point a job at a mutable tag.
   is built on every run by the veil-backend CI. Its cargo registry is cached in
   `/home/administrator/jenkins/rust-cache/veil-backend`, and its pinned MariaDB and Vault test inputs are in
   `/home/administrator/jenkins/veil-test-inputs`.
+- `Jenkinsfile/android/veil-android/ci/Dockerfile` (`android()` by digest plus Rust 1.98.0, four Android targets and
+  a host C toolchain) is built on every run by the veil-android CI. Its cargo cache is
+  `/home/administrator/jenkins/android-cache/rust/veil-android`.
 - The `aosp-builder` images were removed from the agent with the AOSP jobs on 2026-11-25.
 
 **Open item:** `gst-stream-wall-android-build-env` should be rebuilt on `android()` so that every Android image

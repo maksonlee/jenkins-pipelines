@@ -1,0 +1,91 @@
+@Library('jenkins-shared-lib') _
+
+// CI for maksonlee/veil-android main: the repository's documented full gate (checks, debug lint, the debug,
+// unsigned release and instrumentation APKs) with one Gradle worker, strict dependency verification and in-process
+// Kotlin. The image adds the exact Rust toolchain the Gradle build requires; `cargo fetch` fills the cargo cache
+// first because the build itself compiles the native crate with `--locked --offline`. No signing material and no
+// Play credentials are read: the project signs outside Gradle.
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout()
+        timeout(time: 120, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10'))
+    }
+
+    triggers {
+        githubPush()
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                deleteDir()
+                dir('pipeline-source') {
+                    checkout scm
+                }
+                dir('source') {
+                    git branch: 'main', credentialsId: 'vault-github-ssh',
+                            url: 'git@github.com:maksonlee/veil-android.git'
+                    sh '''#!/bin/bash
+set -euo pipefail
+echo "veil-android main: $(git rev-parse HEAD)"
+install -d /home/administrator/jenkins/android-cache/rust/veil-android/cargo
+'''
+                }
+            }
+        }
+
+        stage('Full gate') {
+            steps {
+                script {
+                    def image = sh(returnStdout: true,
+                            script: 'docker build --quiet pipeline-source/Jenkinsfile/android/veil-android/ci').trim()
+                    def cacheRoot = '/home/administrator/jenkins/android-cache'
+                    def insideArgs = [
+                            "-v ${cacheRoot}/rust/veil-android/cargo:/home/ubuntu/.cargo",
+                            "-v ${cacheRoot}/flutter-android-sdk:/home/ubuntu/Android:ro",
+                            '-e HOME=/home/ubuntu',
+                            '-e CARGO_HOME=/home/ubuntu/.cargo'
+                    ].join(' ')
+                    dir('source') {
+                        docker.image(image).inside(insideArgs) {
+                            sh '''#!/bin/bash
+set -euo pipefail
+cargo fetch --locked --manifest-path native/message-crypto/Cargo.toml
+'''
+                        }
+                        gradleRelease(':app:assembleDebug', [
+                                requiresSigning: false,
+                                image: image,
+                                insideArgs: insideArgs,
+                                mountAndroidCache: false,
+                                publishPlayListings: false,
+                                maxWorkers: 1,
+                                extraArgs: [
+                                        ':app:check', ':app:lintDebug', ':app:assembleRelease',
+                                        ':app:assembleDebugAndroidTest',
+                                        '--dependency-verification', 'strict',
+                                        '-Pkotlin.compiler.execution.strategy=in-process'
+                                ]
+                        ])
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            junit testResults: 'source/app/build/test-results/**/*.xml', allowEmptyResults: true
+            archiveArtifacts artifacts: 'source/app/build/outputs/apk/**/*.apk,source/app/build/reports/lint-results-debug.*',
+                    allowEmptyArchive: true, fingerprint: true
+        }
+        cleanup {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}
