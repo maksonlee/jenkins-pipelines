@@ -57,6 +57,7 @@ def standaloneJobs = [
     [job: 'web/piano-practice-deploy', description: 'Former name of web/piano-practice/deploy; kept until it is retired.'],
     [job: 'web/piano-practice/deploy', description: 'Manual deployment of a piano-practice CI release bundle to the piano-practice origin: verify-only, stage-only or activate-production.'],
     [job: 'backstage/homelab-backstage-main-ci', description: 'CI for maksonlee/homelab-backstage: builds the image and pushes it to Harbor. Triggered by GitHub pushes.'],
+    [job: 'web/hongyu-portal/deploy', description: 'Manual deployment of maksonlee/hongyu-portal to its origin: verify-only, stage-only or activate-production.'],
     [job: 'artifactory/artifactory-cleanup', description: 'Weekly cleanup of the Artifactory android-snapshots repository: every app keeps its newest version folders.'],
 ]
 

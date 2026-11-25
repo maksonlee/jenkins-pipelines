@@ -1,0 +1,213 @@
+// Manual deployment of maksonlee/hongyu-portal to its origin.
+//
+// verify-only builds the release from a commit on main (production dependencies, security audit, manifest) and
+// reads what is live. stage-only also unpacks it beside the live release, builds Laravel's caches there and runs
+// `nginx -t`; the site does not change. activate-production then asks for approval, renames the `current` link,
+// checks the public site and renames the link back if a check fails.
+def jsonField(String file, String key) {
+    withEnv(["JSON_FILE=${file}", "JSON_KEY=${key}"]) {
+        return sh(returnStdout: true, script: '''#!/bin/bash
+set -euo pipefail
+python3 -c 'import json, os; print(json.load(open(os.environ["JSON_FILE"]))[os.environ["JSON_KEY"]])'
+''').trim()
+    }
+}
+
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout()
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+    }
+
+    parameters {
+        string(name: 'GIT_REF', defaultValue: 'main', trim: true,
+                description: 'main, or a full commit SHA already on main')
+        choice(name: 'MODE', choices: ['verify-only', 'stage-only', 'activate-production'],
+                description: 'Build and compare only, stage at the origin, or switch production')
+        string(name: 'EXPECTED_RELEASE', defaultValue: '', trim: true,
+                description: 'Required to stage or activate: the release ID a verify-only run printed for this commit')
+    }
+
+    environment {
+        TOOLS = 'pipeline-source/Jenkinsfile/web/hongyu-portal/deploy'
+        CI_TOOLS = 'pipeline-source/Jenkinsfile/web/hongyu-portal/ci'
+        ORIGIN = 'ubuntu@app.maksonlee.com'
+        SITE = 'https://www.hongyu.taipei'
+        EVIDENCE = 'deploy-evidence'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    if (!(params.GIT_REF ==~ /main|[0-9a-f]{40}/)) {
+                        error('GIT_REF must be main or a full commit SHA')
+                    }
+                    if (!(params.MODE in ['verify-only', 'stage-only', 'activate-production'])) {
+                        error('Choose a supported mode')
+                    }
+                    if (params.MODE != 'verify-only' && !(params.EXPECTED_RELEASE ==~ /[0-9a-f]{12}-[0-9a-f]{12}/)) {
+                        error('Enter the release ID from a verify-only run before using the origin')
+                    }
+                }
+                deleteDir()
+                dir('pipeline-source') {
+                    checkout scm
+                }
+                dir('source') {
+                    git branch: 'main', credentialsId: 'vault-github-ssh',
+                            url: 'git@github.com:maksonlee/hongyu-portal.git'
+                    withEnv(["GIT_REF=${params.GIT_REF}"]) {
+                        sh '''#!/bin/bash
+set -euo pipefail
+if [[ "$GIT_REF" == main ]]; then
+  commit=$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')
+else
+  commit=$(git rev-parse --verify "$GIT_REF^{commit}")
+  git merge-base --is-ancestor "$commit" refs/remotes/origin/main
+fi
+git checkout --quiet --detach "$commit"
+test -z "$(git status --porcelain)"
+printf '%s\\n' "$commit" > ../release-commit.txt
+'''
+                    }
+                }
+                script {
+                    env.RELEASE_COMMIT = readFile('release-commit.txt').trim()
+                    env.DEPLOY_MODE = params.MODE
+                    env.EXPECTED_RELEASE = params.EXPECTED_RELEASE
+                }
+            }
+        }
+
+        stage('Build and check the release') {
+            steps {
+                timeout(time: 20, unit: 'MINUTES') {
+                    sh '''#!/bin/bash
+set -euo pipefail
+mkdir -p build/tree "$EVIDENCE"
+git -C source archive "$RELEASE_COMMIT" | tar -x -C build/tree
+image=$(docker build --quiet "$CI_TOOLS")
+# Production dependencies and the security audit: the only step with network access.
+docker run --rm --init --cpus=4 --memory=4g --user "$(id -u):$(id -g)" \\
+  --mount "type=bind,src=$WORKSPACE/build/tree,dst=/app" --workdir /app \\
+  --env HOME=/tmp --env COMPOSER_HOME=/tmp/composer "$image" bash -euo pipefail -c '
+    composer install --no-dev --classmap-authoritative --no-interaction --no-progress --prefer-dist
+    composer audit --locked --no-dev
+  '
+python3 "$TOOLS/release_ops.py" package build/tree "$RELEASE_COMMIT" "$EVIDENCE" > /dev/null
+cat "$EVIDENCE/candidate.json"
+ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN" \\
+  'sudo -n python3 - status' < "$TOOLS/release_ops.py" > "$EVIDENCE/origin-status.json"
+python3 - "$EVIDENCE" "$DEPLOY_MODE" "$EXPECTED_RELEASE" <<'PY'
+import json, sys
+evidence, mode, expected = sys.argv[1:]
+candidate = json.load(open(f'{evidence}/candidate.json'))
+status = json.load(open(f'{evidence}/origin-status.json'))
+print(f"Candidate {candidate['releaseId']} from {candidate['commit']}; live release: {status['current']}; "
+      f"already staged: {candidate['releaseId'] in status['releases']}")
+if mode != 'verify-only' and expected != candidate['releaseId']:
+    raise SystemExit('The built release differs from EXPECTED_RELEASE; run verify-only again')
+PY
+'''
+                    script {
+                        env.RELEASE_ID = jsonField("${env.EVIDENCE}/candidate.json", 'releaseId')
+                        env.ARCHIVE_SHA256 = jsonField("${env.EVIDENCE}/candidate.json", 'archiveSha256')
+                        env.LIVE_RELEASE = jsonField("${env.EVIDENCE}/origin-status.json", 'current')
+                        if (!(env.RELEASE_ID ==~ /[0-9a-f]{12}-[0-9a-f]{12}/) || !(env.ARCHIVE_SHA256 ==~ /[0-9a-f]{64}/) ||
+                                !(env.LIVE_RELEASE ==~ /[A-Za-z0-9._-]{1,80}/)) {
+                            error('Unexpected release identifiers')
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Stage at the origin') {
+            when { expression { params.MODE in ['stage-only', 'activate-production'] } }
+            steps {
+                timeout(time: 10, unit: 'MINUTES') {
+                    sh '''#!/bin/bash
+set -euo pipefail
+ssh_origin=(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN")
+remote="/tmp/hongyu-release-$RELEASE_ID.tar.gz"
+scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes "$EVIDENCE/hongyu-release.tar.gz" "$ORIGIN:$remote"
+trap '"${ssh_origin[@]}" "rm -f $remote"' EXIT
+"${ssh_origin[@]}" "sudo -n python3 - stage $RELEASE_ID $RELEASE_COMMIT $remote $ARCHIVE_SHA256" \\
+  < "$TOOLS/release_ops.py" > "$EVIDENCE/staged.json"
+cat "$EVIDENCE/staged.json"
+'''
+                }
+            }
+        }
+
+        stage('Approve the production switch') {
+            when { expression { params.MODE == 'activate-production' } }
+            steps {
+                timeout(time: 30, unit: 'MINUTES') {
+                    input message: "Switch ${env.SITE} to release ${env.RELEASE_ID} (commit ${env.RELEASE_COMMIT})? " +
+                            "It replaces ${env.LIVE_RELEASE}; a failed public check switches back."
+                }
+            }
+        }
+
+        stage('Switch production and check it') {
+            when { expression { params.MODE == 'activate-production' } }
+            steps {
+                timeout(time: 10, unit: 'MINUTES') {
+                    sh '''#!/bin/bash
+set -euo pipefail
+touch "$EVIDENCE/activation-requested"
+ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN" \\
+  "sudo -n python3 - activate $RELEASE_ID $RELEASE_COMMIT" < "$TOOLS/release_ops.py" > "$EVIDENCE/activation.json"
+cat "$EVIDENCE/activation.json"
+
+check() {  # path, expected status
+  local status
+  status=$(curl --silent --show-error --max-time 20 --output /dev/null --write-out '%{http_code}' "$SITE$1")
+  printf '%s %s\\n' "$status" "$1" >> "$EVIDENCE/public-checks.txt"
+  [[ "$status" == "$2" ]] || { echo "Unexpected HTTP $status for $1" >&2; return 1; }
+}
+: > "$EVIDENCE/public-checks.txt"
+test "$(curl --fail --silent --show-error --max-time 20 "$SITE/healthz")" = ok
+for page in / /about /services /process /quality /contact /robots.txt; do check "$page" 200; done
+check /up 404
+check /this-page-does-not-exist 404
+cat "$EVIDENCE/public-checks.txt"
+'''
+                }
+            }
+        }
+    }
+
+    post {
+        unsuccessful {
+            script {
+                if (fileExists("${env.EVIDENCE}/activation.json")) {
+                    def state = jsonField("${env.EVIDENCE}/activation.json", 'state')
+                    def previous = jsonField("${env.EVIDENCE}/activation.json", 'previousRelease')
+                    if (state == 'activated' && previous ==~ /[A-Za-z0-9._-]{1,80}/) {
+                        withEnv(["PREVIOUS_RELEASE=${previous}"]) {
+                            sh '''#!/bin/bash
+set -euo pipefail
+ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN" \\
+  "sudo -n python3 - rollback $RELEASE_ID $PREVIOUS_RELEASE" < "$TOOLS/release_ops.py" > "$EVIDENCE/rollback.json"
+cat "$EVIDENCE/rollback.json"
+'''
+                        }
+                    }
+                }
+            }
+        }
+        always {
+            archiveArtifacts artifacts: 'deploy-evidence/*.json,deploy-evidence/*.txt', allowEmptyArchive: true
+        }
+        cleanup {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}

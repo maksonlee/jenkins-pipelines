@@ -22,6 +22,9 @@ python3 -B -m unittest "$p/tests/test_publish.py" "$p/tests/test_artifactory_ada
 echo '== piano-practice deploy tests'
 python3 -B -m unittest discover -s Jenkinsfile/web/piano-practice/deploy -p 'test_*.py'
 
+echo '== hongyu-portal deploy tests'
+python3 -B -m unittest discover -s Jenkinsfile/web/hongyu-portal/deploy -p 'test_*.py'
+
 echo '== Groovy syntax'
 work=$(mktemp -d "${TMPDIR:-/tmp}/groovy-check.XXXXXX")
 trap 'rm -rf "$work"' EXIT
