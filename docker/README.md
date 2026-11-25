@@ -39,10 +39,13 @@ Never point a job at a mutable tag.
 - The `aosp-builder` images were removed from the agent with the AOSP jobs on 2026-11-25.
 
 The gst image moved from the legacy 2025 base (SDKMAN JDKs, Gradle on Java 21) to `android()` on 2026-11-25, so
-every Android image now shares one base and Gradle runs on Temurin 25. `1.98.0-2` stays in Harbor for a rollback.
+every Android image now shares one base and Gradle runs on Temurin 25. Qualified the same day: `ci` #3 passed
+(139 tests), and `release` #6, without publishing, rebuilt the tagged `android-v0.1.0-alpha.23` commit into an AAB
+byte-identical to the one `release` #4 built on the old image. `1.98.0-2` stays in Harbor for a rollback.
 
 **Agent disk.** Old tags that no job referenced (`flutter-android-build-env:3.44.0`, `:3.44.0-fvm` and
 `gst-stream-wall-android-build-env:1.98.0-1`) and unused dangling images were removed on 2026-11-24. Before removing
 an image, check `docker system df` and `docker ps -a`: other projects share this Docker daemon, and
-`docker image prune` keeps a dangling image that a stopped container still uses. Keep `cdlee/android-build-env` /
-`android-build-env:latest` while the gst image still builds on it.
+`docker image prune` keeps a dangling image that a stopped container still uses. No job uses the legacy
+`cdlee/android-build-env` / `android-build-env:latest` or `gst-stream-wall-android-build-env:1.98.0-2` any more;
+they are still on the agent (about 5.6 GB together) until the owner approves removing them.
