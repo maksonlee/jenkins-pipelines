@@ -1,0 +1,21 @@
+@Library('jenkins-shared-lib') _
+
+// Debug CI for maksonlee/learn-go-board-game main: the core and content-validator tests, app unit tests, debug lint
+// and the debug and instrumentation APKs. The repository forbids release tasks without its upload key, so only
+// debug tasks are listed.
+androidCi(
+    repo: 'learn-go-board-game',
+    gradleTasks: [
+        ':core:go:test', ':core:lesson:test', ':tools:content-validator:test', ':tools:content-validator:run',
+        ':app:testDebugUnitTest', ':app:lintDebug', ':app:assembleDebug', ':app:assembleDebugAndroidTest'
+    ],
+    debugApkModules: ['app'],
+    androidTestModules: ['app'],
+    lintModules: ['app'],
+    unitTestTasks: [
+        'app': 'testDebugUnitTest',
+        'core/go': 'test',
+        'core/lesson': 'test',
+        'tools/content-validator': 'test'
+    ]
+)

@@ -124,6 +124,7 @@ its own (`publishPlayListings: false`).
 | `android/headshot-maker-android/{ci,release}` | package `com.maksonlee.headshotmaker`; same as beepbeep |
 | `android/taiwandrive/{ci,release}` | engine and pack JVM tests; alpha/internal; no bundled offline pack; signer checked against Vault |
 | `android/learn-chess/ci` | `nativeAndroidCi`, traced evidence, emulator device suite, honors `[skip ci]` |
+| `android/learn-go-board-game/ci` | core, lesson and content-validator tests, app unit tests, debug lint, debug APKs |
 | `android/cloud-cost-widgets/ci` | `nativeAndroidCi` for the phone and Wear OS apps; Kotlin compiled in-process |
 | `android/gst-stream-wall/release` | own Jenkinsfile (Rust/GStreamer image, upload, promotion and listing modes) |
 | `android/cloud-cost-widgets/release` | own Jenkinsfile and Play tools (phone and Wear OS bundles; alpha-status, internal-preflight and internal-submit modes) |
