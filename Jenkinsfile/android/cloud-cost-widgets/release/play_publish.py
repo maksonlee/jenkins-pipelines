@@ -1,4 +1,4 @@
-"""Advance phone Internal testing to 100013 in one guarded edit; phone Alpha and every Wear OS track stay unchanged."""
+"""Advance Wear OS Internal testing to 200012 in one guarded edit; every phone track stays unchanged."""
 
 import hashlib
 import json
@@ -22,7 +22,7 @@ from play_submission_preflight import (
 from verify_submission_artifacts import ArtifactVerificationError, load_release_bundles, read_archive
 
 
-PHONE_NOTES = [
+WEAR_NOTES = [
     {"language": "en-US", "text": (
         "In budget details, filters read as plain text, such as SERVICE = Amazon Simple Storage Service, and "
         "budgets without filters no longer show raw AWS data."
@@ -35,25 +35,25 @@ PHONE_NOTES = [
 PHONE_ALPHA = "alpha"
 PHONE_INTERNAL = "internal"
 WEAR_INTERNAL = "wear:internal"
-PHONE_VERSION_NAME = "1.0.12"
-# Phone 1.0.12 shows budget filters as readable lines, so it ships alone beside Wear OS 1.0.10. Wear OS 1.0.11,
-# with the same change, ships in a separate run.
-TRACKS = {PHONE_INTERNAL: 100013}
-FORM_FACTORS = {PHONE_INTERNAL: "phone"}
-SIGNED_DIGEST_PARAMETERS = {PHONE_INTERNAL: "SIGNED_PHONE_SHA256"}
+WEAR_VERSION_NAME = "1.0.11"
+# Wear OS 1.0.11 shows budget filters as readable lines, so it ships alone beside phone 1.0.12, which #15
+# committed with the same change.
+TRACKS = {WEAR_INTERNAL: 200012}
+FORM_FACTORS = {WEAR_INTERNAL: "wear"}
+SIGNED_DIGEST_PARAMETERS = {WEAR_INTERNAL: "SIGNED_WEAR_SHA256"}
 # The alpha-status run of android/cloud-cost-widgets/release #2 (2026-11-24) read phone Alpha 100009 as published,
-# release build #11 (2026-11-25) committed Wear OS Internal 200011 (1.0.10) and #13 phone Internal 100012 (1.0.11).
-# Phone Alpha and Wear OS Internal are guarded and left unchanged.
-PREDECESSORS = {PHONE_INTERNAL: 100012}
-UNCHANGED_TRACKS = {PHONE_ALPHA: 100009, WEAR_INTERNAL: 200011}
-RELEASE_NOTES = {PHONE_INTERNAL: PHONE_NOTES}
+# #11 (2026-11-25) committed Wear OS Internal 200012 (1.0.11) and #15 phone Internal 100013 (1.0.12). The phone
+# tracks are guarded and left unchanged.
+PREDECESSORS = {WEAR_INTERNAL: 200011}
+UNCHANGED_PHONE = {PHONE_ALPHA: 100009, PHONE_INTERNAL: 100013}
+RELEASE_NOTES = {WEAR_INTERNAL: WEAR_NOTES}
 # Build #22's edit inventory also listed 1.0.4 on both Open testing tracks. Play Console shows the phone track
 # paused with that release superseded and the Wear OS track inactive. This release leaves both unchanged.
 INACTIVE_OPEN_TESTING = {"beta": 100005, "wear:beta": 200005}
-EXPECTED_ACTIVE = {**UNCHANGED_TRACKS, **INACTIVE_OPEN_TESTING, **PREDECESSORS}
+EXPECTED_ACTIVE = {**UNCHANGED_PHONE, **INACTIVE_OPEN_TESTING, **PREDECESSORS}
 # The tracks whose lifecycle the archived status read covers; all of them hold a release. A track without one,
 # such as production, must be absent from the fresh edit inventory, which is compared exactly before any write.
-GUARDED_TRACKS = (*UNCHANGED_TRACKS, *TRACKS)
+GUARDED_TRACKS = (*UNCHANGED_PHONE, *TRACKS)
 REPORTED_TRACKS = {
     f"{prefix}{name}" for prefix in ("", "wear:") for name in ("production", "beta", "alpha", "internal")
 }
@@ -438,7 +438,7 @@ def run_publish(input_directory, encoded, release_inputs):
         "package_name": PACKAGE_NAME,
         "source_sha": None,
         "source_pipeline_sha": None,
-        "version_names": {"phone": PHONE_VERSION_NAME},
+        "version_names": {"wear": WEAR_VERSION_NAME},
         "build_number": None,
         "candidates": {track: {"version_code": code, "sha256": None} for track, code in TRACKS.items()},
         "predecessor_version_codes": dict(PREDECESSORS),

@@ -29,11 +29,11 @@ pipeline {
     }
 
     environment {
-        // Phone 1.0.12 ships alone: only the phone bundle is built, verified and submitted. Every Wear OS track
-        // stays unchanged, with Wear OS 1.0.10 (200011) on Internal testing (Wear OS).
+        // Wear OS 1.0.11 ships alone: only the Wear OS bundle is built, verified and submitted. The phone app stays
+        // at 1.0.12 (100013) on Internal testing and every other phone track is unchanged.
         PRODUCT_SHA = '3b563cc10500d16c2175941d9eb8edfc5fc3b56a'
-        PHONE_VERSION_NAME = '1.0.12'
-        PHONE_VERSION_CODE = '100013'
+        WEAR_VERSION_NAME = '1.0.11'
+        WEAR_VERSION_CODE = '200012'
         RELEASE_TOOLS = 'Jenkinsfile/android/cloud-cost-widgets/release'
     }
 
@@ -84,7 +84,7 @@ python3 "$RELEASE_TOOLS/play_alpha_status.py" release-evidence/alpha-status.json
                     }
                 }
 
-                stage('Build and verify the signed phone bundle') {
+                stage('Build and verify the signed Wear OS bundle') {
                     when { expression { params.MODE == 'internal-preflight' } }
                     steps {
                         script {
@@ -132,7 +132,7 @@ printf '%s\\n' '{"result":"failed","reason":"gradle-release-build-failed"}' > re
   export CLOUD_COST_RELEASE_KEY_ALIAS="${KEY_ALIAS:?}"
   export CLOUD_COST_RELEASE_KEY_PASSWORD="${KEY_PASSWORD:?}"
   cd source
-  ./gradlew :apps:aws:bundleRelease --console=plain --no-daemon --max-workers=2
+  ./gradlew :apps:aws-wear:bundleRelease --console=plain --no-daemon --max-workers=2
   test "$(git rev-parse --verify 'HEAD^{commit}')" = "$PRODUCT_SHA"
   test -z "$(git status --porcelain=v1)"
 )
@@ -159,15 +159,15 @@ python3 "$RELEASE_TOOLS/verify_bundles.py" source release-evidence
                         script {
                             // The digest the preflight build recorded for its one archived bundle. The verifier below checks
                             // the archived bytes, report and commits against it, and the approval step shows it.
-                            env.SIGNED_PHONE_SHA256 = sh(returnStdout: true, script: '''#!/bin/bash
+                            env.SIGNED_WEAR_SHA256 = sh(returnStdout: true, script: '''#!/bin/bash
 set -euo pipefail
 sums=signed-input/release-evidence/bundles/SHA256SUMS
 test -f "$sums" && test ! -L "$sums"
 test "$(wc -l < "$sums")" = 1
-grep -Ex '[a-f0-9]{64}  phone-[0-9.]+-[0-9]+[.]aab' "$sums" | cut -c1-64
+grep -Ex '[a-f0-9]{64}  wear-[0-9.]+-[0-9]+[.]aab' "$sums" | cut -c1-64
 ''').trim()
-                            if (!(env.SIGNED_PHONE_SHA256 ==~ /[a-f0-9]{64}/)) {
-                                error('The preflight build did not archive exactly one phone bundle digest')
+                            if (!(env.SIGNED_WEAR_SHA256 ==~ /[a-f0-9]{64}/)) {
+                                error('The preflight build did not archive exactly one Wear OS bundle digest')
                             }
                         }
                         sh '''#!/bin/bash
@@ -179,27 +179,27 @@ python3 "$RELEASE_TOOLS/verify_submission_artifacts.py" signed-input/release-evi
             }
         }
 
-        stage('Approve the phone submission') {
+        stage('Approve the Wear OS submission') {
             when { expression { params.MODE == 'internal-submit' } }
             steps {
                 // Shorter than the publisher's 30-minute limit on the age of the preflight's Play status read.
                 timeout(time: 25, unit: 'MINUTES') {
-                    input message: "Submit phone ${env.PHONE_VERSION_NAME} (${env.PHONE_VERSION_CODE}) of " +
-                            "com.maksonlee.cloudcost.aws to Internal testing, replacing 100012? Source " +
+                    input message: "Submit Wear OS ${env.WEAR_VERSION_NAME} (${env.WEAR_VERSION_CODE}) of " +
+                            "com.maksonlee.cloudcost.aws to Internal testing (Wear OS), replacing 200011? Source " +
                             "${env.PRODUCT_SHA}, preflight build #${params.SIGNED_BUILD}, AAB SHA-256 " +
-                            "${env.SIGNED_PHONE_SHA256}. Phone Alpha and every Wear OS track stay unchanged."
+                            "${env.SIGNED_WEAR_SHA256}. Every phone track stays unchanged."
                 }
             }
         }
 
-        stage('Submit the phone release to Internal testing') {
+        stage('Submit the Wear OS release to Internal testing') {
             agent { label 'ssh-agent-with-docker' }
             when { beforeAgent true; expression { params.MODE == 'internal-submit' } }
             steps {
                 script {
                     writeFile file: 'release-evidence/release-sequencing.txt', text:
-                            'The requested release target is Internal testing for the phone app, version 100012 to 100013.\n' +
-                            'Phone Closed testing Alpha 100009, Internal testing (Wear OS) 200011 and both production tracks stay unchanged.\n' +
+                            'The requested release target is Internal testing (Wear OS) for the watch app, version 200011 to 200012.\n' +
+                            'Phone Internal testing 100013, phone Closed testing Alpha 100009 and both production tracks stay unchanged.\n' +
                             'Open evidence includes intended review access, live AWS, physical devices, Play-installed pairing, and final listing and privacy declarations.\n'
                     writeFile file: 'release-evidence/internal-submit.json', text:
                             '{"result":"outcome-unavailable","reason":"verify-live-state-before-any-other-submission"}\n'
