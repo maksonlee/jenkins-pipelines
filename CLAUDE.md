@@ -46,6 +46,14 @@ contracts. Update them in the same change as the behavior they describe.
   - `android/cloud-cost-widgets/release`: its own Jenkinsfile with alpha-status, internal-preflight and
     internal-submit modes and its own Play tools. Merged from `codex/cloud-cost-widgets-release` on 2026-11-24;
     the old `android/cloud-cost-widgets-release` job and that branch were deleted on 2026-11-25.
+  - `android/veil-android/release` (unsigned build, `sign-aab.sh` outside Gradle, the Flutter Play tools) and
+    `android/termstay/release` (runs the repository's own release script, which reads Vault with the agent's token
+    and the private `termstay-cache/release.env` on the agent): their own Jenkinsfiles.
+  - Deploy jobs, all manual with `verify-only` first and an approval before production changes:
+    `web/hongyu-portal/deploy` and `web/veil-backend/deploy` (each with its own `release_ops.py` and tests),
+    `web/share-notes/deploy` and `web/readerplay/deploy` (both on `resources/web/static_site_release.py`), and
+    `flutter/taiwan-bus-app/backend-deploy` (runs the repository's deploy script). They log in to the hosts with
+    the agent's own SSH key. An origin helper is sent over SSH on every run; nothing is installed on a host.
   - `artifactory/artifactory-cleanup`: weekly; every app in `android-snapshots` keeps its newest `KEEP_VERSIONS`
     version folders (5, approved by the owner on 2026-11-25), and `math-runner` (Unity evidence) is never touched.
     Scheduled runs delete; uncheck `DELETE` to only report. Tests: `tests/artifactory/`.
@@ -111,6 +119,10 @@ git diff --check
   - `secret/jenkins/mobile/app/<applicationId>` holds the same fields for apps with their own key: the 4 Flutter
     apps (each registered in Play with a different key) and the sealed Unity math-runner;
   - `secret/jenkins/mobile/shared/play-service` holds `json_b64`.
+- **This Jenkins has no `readJSON`** (no pipeline-utility-steps); read JSON with a python one-liner. An empty
+  string parameter is not exported to `sh`, so scripts use `${NAME:-}`.
+- **Seeding.** A change to `jobs/jenkins_jobs.groovy` needs its script approved again. Compare the pending script
+  with the pushed file before approving, and do not edit the local file while a seed run is waiting.
 - **Unity:**
   - `publish.py` is pinned by `PUBLISHER_SHA256` in its Jenkinsfile, so update the hash with any edit.
   - The build job's tests expect exactly 8 `sh '''` blocks and 5 embedded `PY` heredocs.
