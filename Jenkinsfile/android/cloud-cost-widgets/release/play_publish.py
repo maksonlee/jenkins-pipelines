@@ -1,4 +1,4 @@
-"""Advance Wear OS Internal testing to 200009 in one guarded edit; every phone track stays unchanged."""
+"""Advance Wear OS Internal testing to 200010 in one guarded edit; every phone track stays unchanged."""
 
 import hashlib
 import json
@@ -24,26 +24,27 @@ from verify_submission_artifacts import ArtifactVerificationError, load_release_
 
 WEAR_NOTES = [
     {"language": "en-US", "text": (
-        "The Tile shows the budget on a card: its name, the amount and where the amount came from. Its button "
-        "now reads Open and fits. The Tile picker shows a preview and the app icon, and the watch-face "
-        "complication list uses the app icon too."
+        "Tap the Tile's budget card to open the budget; the Open button is gone. The app icon at the top replaces "
+        "the Tile name and matches the app's icon. If the budget chosen for the Tile is removed, the Tile shows "
+        "the first budget."
     )},
     {"language": "zh-TW", "text": (
-        "資訊方塊改用卡片顯示預算名稱、金額和資料來源，按鈕改成「開啟」，不會再被截斷。"
-        "新增資訊方塊時會看到預覽圖和 App 圖示，錶面資料欄位清單也改用 App 圖示。"
+        "點資訊方塊上的預算卡片就會開啟這筆預算，不再有「開啟」按鈕。最上方只顯示 App 圖示，不再重複資訊方塊名稱，"
+        "圖示也和 App 一致。資訊方塊選的預算被移除時，改顯示第一筆預算。"
     )},
 ]
 PHONE_ALPHA = "alpha"
 PHONE_INTERNAL = "internal"
 WEAR_INTERNAL = "wear:internal"
-WEAR_VERSION_NAME = "1.0.8"
-# Wear OS 1.0.8 changes only the Tile and its picker entry, so it ships alone beside phone 1.0.10.
-TRACKS = {WEAR_INTERNAL: 200009}
+WEAR_VERSION_NAME = "1.0.9"
+# Wear OS 1.0.9 changes only the Tile, so it ships alone beside phone 1.0.10.
+TRACKS = {WEAR_INTERNAL: 200010}
 FORM_FACTORS = {WEAR_INTERNAL: "wear"}
 SIGNED_DIGEST_PARAMETERS = {WEAR_INTERNAL: "SIGNED_WEAR_SHA256"}
-# The alpha-status run of android/cloud-cost-widgets/release #2 (2026-11-24) read phone Alpha 100009, phone
-# Internal 100011 and Wear OS Internal 200008 as published. The phone tracks are guarded and left unchanged.
-PREDECESSORS = {WEAR_INTERNAL: 200008}
+# The alpha-status run of android/cloud-cost-widgets/release #2 (2026-11-24) read phone Alpha 100009 and phone
+# Internal 100011 as published, and #7 (2026-11-25) committed Wear OS Internal 200009 (1.0.8). The phone tracks
+# are guarded and left unchanged.
+PREDECESSORS = {WEAR_INTERNAL: 200009}
 UNCHANGED_PHONE = {PHONE_ALPHA: 100009, PHONE_INTERNAL: 100011}
 RELEASE_NOTES = {WEAR_INTERNAL: WEAR_NOTES}
 # Build #22's edit inventory also listed 1.0.4 on both Open testing tracks. Play Console shows the phone track

@@ -22,14 +22,14 @@ UPLOAD_URL = (
 COMMIT_URL = f"{EDIT_URL}:commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW"
 PHONE_TRACK = "internal"
 WEAR_TRACK = "wear:internal"
-# This release ships Wear OS 1.0.8 alone. The phone stays at 100011 on Internal testing and 100009 on Alpha.
+# This release ships Wear OS 1.0.9 alone. The phone stays at 100011 on Internal testing and 100009 on Alpha.
 PHONE = 100011
-WEAR = 200009
-WEAR_PREDECESSOR = 200008
+WEAR = 200010
+WEAR_PREDECESSOR = 200009
 ALPHA = 100009
 PHONE_BETA = 100005
 WEAR_BETA = 200005
-WEAR_BUNDLE = b"verified test wear bytes for 1.0.8"
+WEAR_BUNDLE = b"verified test wear bytes for 1.0.9"
 WEAR_DIGEST = hashlib.sha256(WEAR_BUNDLE).hexdigest()
 RELEASE_INPUTS = {
     "PRODUCT_SHA": "a" * 40,
@@ -190,7 +190,7 @@ class PlayPublishTest(unittest.TestCase):
         report = self.run_with(*completed_precommit(), response({"id": EDIT_ID}), live(WEAR_TRACK, WEAR))
 
         self.assertEqual(report["result"], "committed")
-        self.assertEqual(report["version_names"], {"wear": "1.0.8"})
+        self.assertEqual(report["version_names"], {"wear": "1.0.9"})
         self.assertEqual(report["build_number"], 19)
         self.assertEqual(report["candidates"], {WEAR_TRACK: {"version_code": WEAR, "sha256": WEAR_DIGEST}})
         self.loader.assert_called_once_with(
@@ -225,7 +225,7 @@ class PlayPublishTest(unittest.TestCase):
         self.assertEqual(requests[3].get_header("Content-type"), "application/octet-stream")
         self.assertEqual(json.loads(requests[4].data), {
             "track": "wear:internal",
-            "releases": [{"versionCodes": ["200009"], "status": "completed", "releaseNotes": publish.WEAR_NOTES}],
+            "releases": [{"versionCodes": ["200010"], "status": "completed", "releaseNotes": publish.WEAR_NOTES}],
         })
         self.assertIsNone(requests[5].data)
         # No phone track is ever written.

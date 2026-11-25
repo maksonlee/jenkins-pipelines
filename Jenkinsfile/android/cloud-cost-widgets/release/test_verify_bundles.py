@@ -10,7 +10,7 @@ import verify_bundles as verifier
 from verify_bundles import VerificationError, require_signature, signer_fingerprint, verify_manifest
 
 
-def manifest(version_code, minimum, target, feature='', metadata='', version='1.0.8'):
+def manifest(version_code, minimum, target, feature='', metadata='', version='1.0.9'):
     return f'''<manifest xmlns:android="http://schemas.android.com/apk/res/android"
         package="com.maksonlee.cloudcost.aws" android:versionName="{version}" android:versionCode="{version_code}">
         <uses-sdk android:minSdkVersion="{minimum}" android:targetSdkVersion="{target}"/>
@@ -24,7 +24,7 @@ STANDALONE = '<meta-data android:name="com.google.android.wearable.standalone" a
 
 class ManifestTest(unittest.TestCase):
     def test_phone_and_standalone_watch(self):
-        phone = verify_manifest(manifest('100009', '26', '36'), '1.0.8', '100009', 'phone')
+        phone = verify_manifest(manifest('100009', '26', '36'), '1.0.9', '100009', 'phone')
         wear = verify_manifest(manifest('200006', '30', '35', WATCH, STANDALONE, version='1.0.5'), '1.0.5', '200006', 'wear')
         self.assertEqual((phone['form_factor'], wear['form_factor']), ('phone', 'wear'))
 
@@ -37,7 +37,7 @@ class ManifestTest(unittest.TestCase):
             manifest('100009', '26', '36', WATCH),
         ):
             with self.subTest(manifest=xml), self.assertRaises(VerificationError):
-                verify_manifest(xml, '1.0.8', '100009', 'phone')
+                verify_manifest(xml, '1.0.9', '100009', 'phone')
 
     def test_rejects_optional_watch_hardware_or_missing_standalone_declaration(self):
         for xml in (
@@ -107,13 +107,13 @@ class ReleaseArchiveTest(unittest.TestCase):
         tool.write_bytes(b'bundletool fixture')
         self.enterContext(patch.multiple(verifier, BUNDLETOOL=tool, BUNDLETOOL_SHA=verifier.sha256(tool)))
         self.enterContext(patch.dict('os.environ', {
-            'PRODUCT_SHA': self.source_commit, 'WEAR_VERSION_NAME': '1.0.8', 'WEAR_VERSION_CODE': '200009',
+            'PRODUCT_SHA': self.source_commit, 'WEAR_VERSION_NAME': '1.0.9', 'WEAR_VERSION_CODE': '200010',
         }))
 
     def verified(self, form_factor):
         self.assertEqual(form_factor, 'wear')
         fields = verify_manifest(
-            manifest('200009', '30', '35', WATCH, STANDALONE, version='1.0.8'), '1.0.8', '200009', 'wear',
+            manifest('200010', '30', '35', WATCH, STANDALONE, version='1.0.9'), '1.0.9', '200010', 'wear',
         )
         return fields | {
             'sha256': verifier.sha256(self.bundles[form_factor]),
@@ -122,17 +122,17 @@ class ReleaseArchiveTest(unittest.TestCase):
 
     def test_only_the_wear_bundle_is_released(self):
         self.assertEqual([entry[0] for entry in verifier.RELEASE_BUNDLES], ['wear'])
-        self.assertEqual((verifier.WEAR_VERSION_NAME, verifier.WEAR_VERSION_CODE), ('1.0.8', '200009'))
+        self.assertEqual((verifier.WEAR_VERSION_NAME, verifier.WEAR_VERSION_CODE), ('1.0.9', '200010'))
 
     def test_the_wear_bundle_is_verified_and_archived(self):
         results = {form_factor: self.verified(form_factor) for form_factor in ('wear',)}
         with patch.object(verifier, 'verify_bundle', side_effect=lambda bundle, form_factor, *_: results[form_factor]) as verify:
             verifier.archive_release_bundles(self.root, self.evidence)
         self.assertEqual([call.args for call in verify.call_args_list], [
-            (self.bundles['wear'], 'wear', '1.0.8', '200009', self.upload_certificate),
+            (self.bundles['wear'], 'wear', '1.0.9', '200010', self.upload_certificate),
         ])
         archive = self.evidence / 'bundles'
-        names = {'wear': 'wear-1.0.8-200009.aab'}
+        names = {'wear': 'wear-1.0.9-200010.aab'}
         self.assertEqual({path.name for path in archive.iterdir()}, {*names.values(), 'SHA256SUMS'})
         for form_factor, name in names.items():
             self.assertEqual((archive / name).read_bytes(), self.bundles[form_factor].read_bytes())
