@@ -43,6 +43,14 @@ every Android image now shares one base and Gradle runs on Temurin 25. Qualified
 (139 tests), and `release` #6, without publishing, rebuilt the tagged `android-v0.1.0-alpha.23` commit into an AAB
 byte-identical to the one `release` #4 built on the old image. `1.98.0-2` stays in Harbor for a rollback.
 
+**What `docker system df` calls reclaimable.** It counts every image without a container, which includes every
+image the jobs use between runs: the four build images above and the six images built from the Dockerfiles under
+`Jenkinsfile/` (untagged, so they are listed as dangling, as is the Playwright image pulled by digest). Do not run
+`docker image prune` or `docker builder prune -a` to get that space back; the jobs would rebuild or pull
+everything. On 2026-11-25 only old images that no project referenced and the unused build cache were removed
+(about 6 GB). The large volumes belong to other projects (a taiwan-bus TDX corpus database and the termstay Windows
+test VM).
+
 **Agent disk.** Old tags that no job referenced (`flutter-android-build-env:3.44.0`, `:3.44.0-fvm` and
 `gst-stream-wall-android-build-env:1.98.0-1`) and unused dangling images were removed on 2026-11-24. Before removing
 an image, check `docker system df` and `docker ps -a`: other projects share this Docker daemon, and
