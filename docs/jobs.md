@@ -39,7 +39,8 @@ Jobs that do not follow the layout yet:
   are in review. Do not rerun the preflight repeatedly. `production-submit` builds and uploads nothing: it reads
   the status, proves in a deleted edit that Play holds the bundles named in `play_promote.py` with the digests the
   earlier preflight builds archived, asks for approval with that text, then stages both Production tracks and
-  commits them unsent, so they go for review from Publishing overview together with any countries change. Bundles
+  commits them. With managed publishing off Play sends the commit for review itself and rejects
+  `changesNotSentForReview=true`. A rejected commit records only the name of a known cause from Play's message. Bundles
   must be signed by the Vault upload key used for the build; no fingerprint is kept in this repository. The old
   `android/cloud-cost-widgets-release`, which loaded a pinned commit of an unmerged branch, was deleted on
   2026-11-25.

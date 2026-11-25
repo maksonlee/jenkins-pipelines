@@ -16,7 +16,7 @@ PACKAGE = "com.maksonlee.cloudcost.aws"
 APP_URL = f"https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}"
 EDIT_ID = "PRIVATE_EDIT"
 EDIT_URL = f"{APP_URL}/edits/{EDIT_ID}"
-COMMIT_URL = f"{EDIT_URL}:commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW&changesNotSentForReview=true"
+COMMIT_URL = f"{EDIT_URL}:commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW"
 PHONE = 100013
 WEAR = 200012
 ALPHA = 100009
@@ -174,13 +174,13 @@ class PlayPromoteTest(unittest.TestCase):
             ("DELETE", EDIT_URL),
         ])
 
-    def test_submit_stages_both_tracks_and_commits_them_unsent(self):
+    def test_submit_stages_both_tracks_and_commits_them_for_review(self):
         report = self.run_with(
             "submit", *precommit(), response({"id": EDIT_ID}),
-            live("production", PHONE, NOT_SENT), live("wear:production", WEAR, NOT_SENT),
+            live("production", PHONE, IN_REVIEW), live("wear:production", WEAR, IN_REVIEW),
         )
         self.assertEqual(report["result"], "committed")
-        self.assertEqual(report["review_observation"]["result"], "observed_not_sent_for_review")
+        self.assertEqual(report["review_observation"]["result"], "observed_submitted")
         self.assertEqual(report["cleanup"]["result"], "not_attempted")
         self.assertEqual(self.operations(), [
             ("POST", f"{APP_URL}/edits"), ("GET", f"{EDIT_URL}/bundles"), ("GET", f"{EDIT_URL}/tracks"),
@@ -189,6 +189,7 @@ class PlayPromoteTest(unittest.TestCase):
             ("GET", f"{APP_URL}/tracks/production/releases"), ("GET", f"{APP_URL}/tracks/wear:production/releases"),
         ])
         requests = [call.args[0] for call in self.opener.open.call_args_list]
+        self.assertIsNone(requests[5].data)
         self.assertEqual(json.loads(requests[3].data), {"track": "production", "releases": [{
             "status": "completed", "versionCodes": ["100013"], "releaseNotes": promote.PHONE_NOTES,
         }]})
@@ -275,10 +276,30 @@ class PlayPromoteTest(unittest.TestCase):
         self.assertNotIn(("POST", COMMIT_URL), self.operations())
 
     def test_a_rejected_commit_is_cleaned_up_once(self):
-        report = self.run_with("submit", *precommit(), http_error(400, "PRIVATE_TEXT", "CHANGES_ALREADY_IN_REVIEW"), response({}))
+        report = self.run_with(
+            "submit", *precommit(), http_error(400, "PRIVATE_TEXT", "CHANGES_ALREADY_IN_REVIEW"), response(status=204),
+        )
         self.assertEqual(report["result"], "rejected")
         self.assertEqual(report["commit"]["google_reasons"], ["CHANGES_ALREADY_IN_REVIEW"])
+        self.assertEqual(report["cleanup"]["result"], "deleted")
         self.assertEqual(self.operations()[-2:], [("POST", COMMIT_URL), ("DELETE", EDIT_URL)])
+
+    def test_a_rejected_commit_names_only_a_known_cause(self):
+        cases = [
+            ("Changes are sent for review automatically. The query parameter changesNotSentForReview must not be "
+             "set.", "review_sent_automatically"),
+            ("Changes cannot be sent for review automatically. Please set the query parameter "
+             "changesNotSentForReview to true.", "review_must_be_sent_from_console"),
+            ("PRIVATE_TEXT: no countries or regions are selected for this track.", "countries"),
+            ("Only releases with status draft may be created on draft app. PRIVATE_TEXT", "draft_app"),
+            ("PRIVATE_TEXT", "unrecognized"),
+        ]
+        for message, cause in cases:
+            with self.subTest(cause=cause):
+                report = self.run_with("submit", *precommit(), http_error(400, message), response(status=204))
+                self.assertEqual(report["result"], "rejected")
+                self.assertEqual(report["commit"]["cause"], cause)
+                self.assertEqual(report["cleanup"]["result"], "deleted")
 
     def test_an_ambiguous_commit_is_reconciled_by_reading_the_production_tracks(self):
         cases = [

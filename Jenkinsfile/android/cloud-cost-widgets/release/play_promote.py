@@ -1,9 +1,9 @@
 """Promote the phone and Wear OS bundles on Internal testing to both Production tracks in one guarded edit.
 
 `check` opens an edit, proves Play's bundle catalog and track inventory, deletes the edit and writes the approval
-text. `submit` repeats the proof in a new edit, stages both Production releases and commits them without sending
-them for review, so they join the Production countries change in Publishing overview and go for review together.
-No bundle is uploaded: both were built, signed and verified by earlier release builds and are already on Play.
+text. `submit` repeats the proof in a new edit, stages both Production releases and commits them. Managed publishing
+is off, so Play sends the commit for review itself. No bundle is uploaded: both were built, signed and verified by
+earlier release builds and are already on Play.
 """
 
 import json
@@ -15,11 +15,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from play_alpha_status import TRACK_NAMES as STATUS_TRACKS, lifecycle_error
-from play_preflight import APPLICATION_URL, PACKAGE_NAME, NoRedirect, PreflightError, get_access_token
-from play_publish import cleanup_edit, publisher_request
+from play_preflight import APPLICATION_URL, PACKAGE_NAME, NoRedirect, PreflightError, get_access_token, request_json
+from play_publish import PREREQUISITE_PATTERNS, cleanup_edit, publisher_request
 from play_submission_preflight import (
-    edit_request, error_outcome, outcome, read_edit_section, read_live_track, repeated_field,
-    require_edit_id, summarize_bundles, summarize_edit_track,
+    edit_request, error_outcome, filter_google_error, outcome, read_edit_section, read_google_error, read_live_track,
+    repeated_field, require_edit_id, summarize_bundles, summarize_edit_track,
 )
 
 
@@ -74,9 +74,20 @@ SUBMITTED_STATES = {
 }
 QUOTA_REASON = "listing_releases_quota_exceeded"
 MAX_STATUS_AGE_SECONDS = 30 * 60
-# The Production countries were saved in Play Console and wait in Publishing overview. Leaving these releases
-# unsent puts them beside that change, so all of it goes for review in one submission from Publishing overview.
-COMMIT_QUERY = "changesInReviewBehavior=ERROR_IF_IN_REVIEW&changesNotSentForReview=true"
+# Build #18 also passed changesNotSentForReview=true, and Play rejected the commit with 400 INVALID_ARGUMENT
+# without a named reason. With managed publishing off, Play sends a commit for review itself.
+COMMIT_QUERY = "changesInReviewBehavior=ERROR_IF_IN_REVIEW"
+# Play gives the cause of a rejected commit only in its message, which can quote private values, so only the name
+# of a known cause is recorded. The first match wins.
+COMMIT_CAUSES = (
+    ("review_must_be_sent_from_console", r"cannot be sent for review automatically|changesNotSentForReview to true"),
+    ("review_sent_automatically", r"sent for review automatically|changesNotSentForReview must not be set"),
+    ("countries", r"\bcountr(?:y|ies)\b|\bregions?\b"),
+    ("release_notes", r"release notes|recent changes|\blanguage\b"),
+    ("version_code", r"version ?code"),
+    ("in_review", r"\bin review\b"),
+    *PREREQUISITE_PATTERNS.items(),
+)
 EDIT_ROOT = f"{APPLICATION_URL}/edits"
 
 
@@ -89,8 +100,7 @@ def approval_text():
     ]
     return (
         f"Promote {PACKAGE_NAME}: " + "; ".join(parts) + f". Source {SOURCE_SHA}. Play's bundle catalog matched "
-        "both digests in this build. Every testing track stays unchanged. The releases are committed unsent and "
-        "go for review from Publishing overview with the Production countries."
+        "both digests in this build. Every testing track stays unchanged. Play sends the commit for review."
     )
 
 
@@ -217,6 +227,28 @@ def inspect_edit(opener, token, edit_url, report):
     return True
 
 
+def commit_error_details(response):
+    error = read_google_error(response)
+    details = filter_google_error(error)
+    message = error.get("message")
+    if isinstance(message, str):
+        details["cause"] = next(
+            (name for name, pattern in COMMIT_CAUSES if re.search(pattern, message, re.IGNORECASE | re.DOTALL)),
+            "unrecognized",
+        )
+    return details
+
+
+def commit_edit(opener, token, edit_url, edit_id):
+    request = urllib.request.Request(
+        f"{edit_url}:commit?{COMMIT_QUERY}", headers={"Authorization": f"Bearer {token}"}, method="POST",
+    )
+    receipt, status = request_json(opener, request, collect_error=commit_error_details)
+    if require_edit_id(receipt, status) != edit_id:
+        raise PreflightError("edit_receipt_mismatch", status)
+    return status
+
+
 def stage_tracks(opener, token, edit_url, report):
     for track, code in TRACKS.items():
         notes = RELEASE_NOTES[track]
@@ -316,9 +348,7 @@ def run(mode, status_path, encoded):
             return report
         cleanup_allowed = False
         try:
-            receipt, status = publisher_request(opener, token, "POST", f"{edit_url}:commit?{COMMIT_QUERY}")
-            if require_edit_id(receipt, status) != edit_id:
-                raise PreflightError("edit_receipt_mismatch", status)
+            status = commit_edit(opener, token, edit_url, edit_id)
         except PreflightError as error:
             report["commit"] = error_outcome(error)
             if error.http_status in {400, 401, 403, 404, 409, 412, 422}:
