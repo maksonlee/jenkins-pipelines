@@ -51,6 +51,17 @@ class JobDefinitionTest(unittest.TestCase):
         # The seed job creates the others, so it is the only job that has to be created by hand.
         self.assertEqual(found - per_project - listed, {"admin/seed-jobs"})
 
+    def test_a_jenkinsfile_that_uses_the_library_loads_it(self):
+        # groovyc cannot see this: an unloaded step only fails in Jenkins, as "No such property".
+        steps = {path.stem for path in (ROOT / "vars").glob("*.groovy")}
+        uses = re.compile(r"\b(" + "|".join(sorted(steps)) + r")\s*[.(]")
+        for jenkinsfile in sorted((ROOT / "Jenkinsfile").rglob("Jenkinsfile")):
+            text = jenkinsfile.read_text(encoding="utf-8")
+            code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("//"))
+            if uses.search(code):
+                with self.subTest(jenkinsfile=jenkinsfile.relative_to(ROOT).as_posix()):
+                    self.assertIn("@Library('jenkins-shared-lib') _", text)
+
     def test_top_level_folders_are_never_declared(self):
         for folder in re.findall(r"folder\(([^)]*)\)", DSL):
             self.assertEqual(folder.strip(), "project.folder")
