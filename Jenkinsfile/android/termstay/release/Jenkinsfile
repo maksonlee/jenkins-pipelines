@@ -32,8 +32,6 @@ pipeline {
         CACHE = '/home/administrator/jenkins/termstay-cache'
         VAULT_CLI = '/home/administrator/jenkins/veil-test-inputs/vault-2.1.0'
         VAULT_TOKEN_FILE = '/home/administrator/.vault-token'
-        BUNDLETOOL_JAR = '/home/administrator/jenkins/android-cache/tools/bundletool-all-1.18.3.jar'
-        BUNDLETOOL_SHA256 = 'a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29'
     }
 
     stages {
@@ -43,9 +41,6 @@ pipeline {
                 stage('Checkout') {
                     steps {
                         script {
-                            if (!(params.GIT_REF ==~ /main|[0-9a-f]{40}/)) {
-                                error('GIT_REF must be main or a full commit SHA')
-                            }
                             if (!(params.TRACKS in ['alpha', 'internal-and-alpha'])) {
                                 error('Choose supported tracks')
                             }
@@ -54,29 +49,16 @@ pipeline {
                         dir('pipeline-source') {
                             checkout scm
                         }
-                        dir('source') {
-                            git branch: 'main', credentialsId: 'vault-github-ssh',
-                                    url: 'git@github.com:maksonlee/termstay.git'
-                            withEnv(["GIT_REF=${params.GIT_REF}"]) {
-                                sh '''#!/bin/bash
+                        script {
+                            // A complete clone: the build number counts commits.
+                            env.RELEASE_COMMIT = checkoutReleaseCommit(repo: 'termstay', gitRef: params.GIT_REF)
+                        }
+                        sh '''#!/bin/bash
 set -euo pipefail
-test "$(git rev-parse --is-shallow-repository)" = false
-if [[ "$GIT_REF" == main ]]; then
-  commit=$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')
-else
-  commit=$(git rev-parse --verify "$GIT_REF^{commit}")
-  git merge-base --is-ancestor "$commit" refs/remotes/origin/main
-fi
-git checkout --quiet --detach "$commit"
-test -z "$(git status --porcelain)"
-printf '%s\\n' "$commit" > ../release-commit.txt
-mkdir -p .toolchains "$CACHE/toolchains"
+mkdir -p source/.toolchains "$CACHE/toolchains"
 test -s "$CACHE/release.env" && test -x "$VAULT_CLI" && test -s "$VAULT_TOKEN_FILE"
 '''
-                            }
-                        }
                         script {
-                            env.RELEASE_COMMIT = readFile('release-commit.txt').trim()
                             env.RELEASE_IMAGE = sh(returnStdout: true,
                                     script: 'docker build --quiet pipeline-source/Jenkinsfile/android/termstay/ci').trim()
                             env.RELEASE_CONTAINER_ARGS = (buildContainer.resourceArgs() + [
@@ -111,7 +93,6 @@ tool/setup-build-environment.sh
                     options { timeout(time: 20, unit: 'MINUTES') }
                     steps {
                         script {
-                            writeFile file: '.ci/verify-aab.sh', text: libraryResource('android/release/verify-aab.sh')
                             sh '''#!/bin/bash
 set -euo pipefail
 shopt -s nullglob
@@ -124,25 +105,17 @@ name=$(basename "${bundles[0]}")
 mkdir release
 cp "${bundles[0]}" "release/$name"
 printf '%s\\n' "$name" > bundle-name.txt
-RELEASE_AAB="release/$name" RELEASE_PACKAGE="$PACKAGE" RELEASE_FORBIDDEN_AAB_ENTRY= RELEASE_VERIFY_SIGNER=false \\
-  bash .ci/verify-aab.sh
-cat release/release-manifest.txt "release/$name.sha256"
 '''
                             env.BUNDLE_NAME = readFile('bundle-name.txt').trim()
-                            def manifest = [:]
-                            readFile('release/release-manifest.txt').readLines().each { line ->
-                                def separator = line.indexOf('=')
-                                if (separator > 0) {
-                                    manifest[line.substring(0, separator)] = line.substring(separator + 1)
-                                }
+                            if (!(env.BUNDLE_NAME ==~ /termstay-android-[0-9A-Za-z.]+-[0-9]+\.aab/)) {
+                                error('Unexpected bundle name')
                             }
-                            env.RELEASE_VERSION = "${manifest.versionName} (${manifest.versionCode})"
-                            env.RELEASE_SIGNER_SHA256 = manifest.signerSha256
-                            env.RELEASE_AAB_SHA256 = readFile("release/${env.BUNDLE_NAME}.sha256").tokenize()[0]
-                            if (!(env.BUNDLE_NAME ==~ /termstay-android-[0-9A-Za-z.]+-[0-9]+\.aab/) ||
-                                    !(env.RELEASE_AAB_SHA256 ==~ /[0-9a-f]{64}/) || !(env.RELEASE_SIGNER_SHA256 ==~ /[0-9A-Fa-f:]{64,95}/) ||
-                                    !(env.RELEASE_VERSION ==~ /[0-9A-Za-z._-]{1,40} \([0-9]{1,9}\)/)) {
-                                error('Unexpected release identifiers')
+                            def bundle = androidBundle.verify(aab: "release/${env.BUNDLE_NAME}", packageName: env.PACKAGE)
+                            env.RELEASE_VERSION = "${bundle.versionName} (${bundle.versionCode})"
+                            env.RELEASE_SIGNER_SHA256 = bundle.signerSha256
+                            env.RELEASE_AAB_SHA256 = bundle.sha256
+                            if (!(env.RELEASE_VERSION ==~ /[0-9A-Za-z._-]{1,40} \([0-9]{1,10}\)/)) {
+                                error('Unexpected release version')
                             }
                             currentBuild.description = "termstay ${env.RELEASE_VERSION} ${env.RELEASE_COMMIT.take(12)}"
                             archiveArtifacts artifacts: 'release/*', fingerprint: true

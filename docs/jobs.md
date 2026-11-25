@@ -12,6 +12,7 @@ project.
 | `flutter/<repo>/ci` | GitHub push | `flutterCi`: quality gates and a debug AAB uploaded to Artifactory snapshots. |
 | `flutter/<repo>/release` | manual | `flutterRelease`: quality gates, signed AAB, approval, Google Play upload. |
 | `web/<repo>/ci` | GitHub push | The project's own Jenkinsfile: its tests in a container without network access. |
+| `web/<repo>/deploy` | manual | `staticSiteDeploy` for a static site, or the project's own Jenkinsfile: verify-only, stage-only, activate-production. |
 | `admin/seed-jobs` | manual | Creates the folders and jobs listed in `jobs/jenkins_jobs.groovy`. |
 | `admin/pipelines-ci` | polls this repository | Runs `tools/run_checks.sh`: every offline test and a Groovy syntax check. |
 
@@ -49,13 +50,21 @@ Jobs that do not follow the layout yet:
   stops there and reports what is live; `stage-only` also unpacks the release beside the live one, builds
   Laravel's caches and runs `nginx -t`; `activate-production` asks for approval, renames the `current` link, reloads
   PHP-FPM, checks the public site and renames the link back if a check fails. It logs in with the agent's own SSH key.
-- `web/share-notes/deploy`: its own Jenkinsfile for the Share Notes web app, which is static files in one
-  directory; the origin helper is `resources/web/static_site_release.py`, shared with readerplay. It runs the Flutter tests and builds the web app from a commit on `master` in the Flutter
-  image, with the build identity from the repository's `tool/build_flutter.py`. `verify-only` stops there and
-  reports what is live; `stage-only` also unpacks the build beside the site; `activate-production` asks for
-  approval, copies the live files aside, syncs the release in by content, compares the public files with the built
-  ones and syncs the copy back if a check fails. It does not manage the nginx configuration or run the browser
-  tests in `tool/device/`. The Android app keeps `flutter/share-notes/{ci,release}`.
+- `web/share-notes/deploy` and `web/readerplay/deploy`: the `staticSiteDeploy` step, for a site that is static
+  files in one directory. A Jenkinsfile passes the site name, repository, public URL, where the files come from and
+  the public checks; the pipeline is `vars/staticSiteDeploy.groovy` with `resources/web/static-site-deploy.sh`, and
+  the origin helper is `resources/web/static_site_release.py`, which knows each site's directories by its name.
+  `verify-only` builds the release from a commit on the branch and reports what is live; `stage-only` also unpacks
+  it beside the site; `activate-production` asks for approval, copies the live files aside, syncs the release in by
+  content, checks the public site (`statusChecks`: HTTP status per path; `sameFiles`: public bytes equal to the
+  built file) and syncs the copy back if a check fails. nginx is not managed.
+  - share-notes (`flutterWeb: true`, branch `master`): `resources/web/flutter-web-build.sh` runs the Flutter tests
+    and builds the web app in the Flutter image, with the Flutter version from `.fvmrc` and the build identity from
+    the repository's `tool/build_flutter.py`. The browser tests in `tool/device/` are not run. The Android app
+    keeps `flutter/share-notes/{ci,release}`.
+  - readerplay (`directory: 'public'`): no build; it packages `public/` (the tests run in `web/readerplay/ci`).
+    Staged releases are kept in `/var/www/html/readerplay-releases`, and the deployed files become `root:root`.
+  A new static site needs an entry in `SITES` of the origin helper and a Jenkinsfile.
 - `web/veil-backend/deploy`: its own Jenkinsfile, image (the CI toolchain plus the aarch64 cross-compiler) and
   origin helper. `verify-only` cross-builds the release binary from a commit on `main`, checks the glibc version
   it needs and reports what is live. `stage-only` also copies it to the origin as a non-executable file; a staged
@@ -64,9 +73,6 @@ Jobs that do not follow the layout yet:
   migrations it adds), then runs the database backup unit, installs the binary, restarts the service and checks
   health on loopback and in public. An unhealthy start puts the previous binary back; migrations are not undone.
   nginx, the public pages, the configuration and Vault are not managed.
-- `web/readerplay/deploy`: the same flow and helper as share-notes, without a build: it packages `public/` from a
-  commit on `main` (the tests run in `web/readerplay/ci`). Staged releases are kept in
-  `/var/www/html/readerplay-releases`, and the deployed files become `root:root`.
 - `flutter/taiwan-bus-app/backend-deploy`: runs the repository's own `deploy/home-osm/deploy.sh` from a clean
   checkout of a commit on `main`, with the agent's SSH key. `verify-only` checks the HAProxy edge contract, runs
   the backend tests in a fresh virtual environment and compares the commit with the host's `DEPLOYED_REVISION`.
@@ -80,6 +86,23 @@ Jobs that do not follow the layout yet:
 - `backstage/homelab-backstage-main-ci`: builds the homelab-backstage image and pushes it to Harbor.
 
 These jobs are listed in `jobs/jenkins_jobs.groovy` too, so the seed can recreate them.
+
+## Helpers for jobs with their own Jenkinsfile
+
+A job that cannot use one of the pipeline steps still takes the common parts from the library instead of copying
+them (`@Library('jenkins-shared-lib') _` at the top):
+
+| Step | Use |
+| --- | --- |
+| `checkoutReleaseCommit(repo:, branch:, gitRef:)` | Clones the project into `source` and checks out the branch tip or a full SHA already on the branch; returns the commit. Every manual release and deploy job with its own Jenkinsfile uses it. |
+| `jsonField(file, key)` | One field of a JSON file as text (this Jenkins has no `readJSON`). Check the value with a regex before using it. |
+| `androidBundle.verify(aab:, packageName:, ...)` | `verify-aab.sh` with the pinned bundletool; returns the version, signer and SHA-256 of the bundle. Used by `androidRelease`, veil-android and termstay. |
+| `playUpload(...)` | The version preflight and the one-edit upload with the tools in `resources/play`; the only place those jobs read the Play service account, always after the approval. Used by `flutterRelease`, `androidRelease` and veil-android. |
+| `gradleRelease(task, cfg)` | Gradle in a build image with the Android cache; also used without signing by the gst-stream-wall and veil-android jobs. |
+
+Left separate on purpose: the four `web/<repo>/ci` jobs and the gst-stream-wall, veil-android and termstay CI jobs
+share only their options block, and the hongyu-portal, veil-backend and piano-practice deployments have their own
+release formats and origin helpers.
 - `aosp/aosp-build-in-docker`, `build-prj-0001`, `k8s-dynamic-agent-test` and
   `monitoring/taiwan-bus-production-health` were deleted on 2026-11-25, together with the Gerrit and Kubernetes
   credentials, cloud and plugins they alone used.

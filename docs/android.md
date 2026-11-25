@@ -90,7 +90,7 @@ this order:
    native apps share, through the `SIGNING_*` environment variables. An app registered in Play with its own key sets
    `keystoreVaultPath`. `passSigningProperties: true` would also pass them as
    `-Psigning.*` Gradle properties, which put the passwords on the Gradle command line; no project uses it.
-4. **Verify.** On the agent:
+4. **Verify.** On the agent (`androidBundle.verify`, which the veil-android and termstay release jobs also call):
    - the AAB must be the only bundle in its directory, and bundletool 1.18.3 (checked against its pinned SHA-256)
      validates it;
    - the manifest package must equal `packageName`, and its versionCode and versionName are recorded in
@@ -106,8 +106,9 @@ this order:
 5. **Approve** (only with `PUBLISH_TO_PLAY`). The input names the package, version, commit, AAB SHA-256, signer, track and
    status. It times out after 60 minutes.
 6. **Publish.** The verified AAB is checked against its recorded SHA-256 and staged alone in
-   `<module>/build/outputs/play-publication`. Then the job reads `secret/jenkins/mobile/shared/play-service` and
-   runs the shared Play tools in `resources/play`, the same ones the Flutter releases use:
+   `<module>/build/outputs/play-publication`. Then the `playUpload` step reads
+   `secret/jenkins/mobile/shared/play-service` and runs the shared Play tools in `resources/play`, the same step
+   the Flutter releases and veil-android use:
    - `play_version_preflight.py` refuses a version code that is not above every bundle already uploaded;
    - `release_notes.py` takes each language's `<track>.txt`, or `default.txt`, from
      `<module>/src/main/play/release-notes`;

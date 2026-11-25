@@ -12,6 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 BASH = os.environ.get("BASH", "bash")
 STEP = (ROOT / "vars/androidRelease.groovy").read_text(encoding="utf-8")
+BUNDLE = (ROOT / "vars/androidBundle.groovy").read_text(encoding="utf-8")
+UPLOAD = (ROOT / "vars/playUpload.groovy").read_text(encoding="utf-8")
 SCRIPTS = ROOT / "resources/android/release"
 RESOLVE, NOTES, VERIFY, STAGE = (
     (SCRIPTS / name).read_text(encoding="utf-8")
@@ -49,10 +51,10 @@ class AndroidReleaseContractTest(unittest.TestCase):
         for script in (RESOLVE, NOTES, VERIFY, STAGE):
             result = subprocess.run([BASH, "-n"], input=script.encode(), capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr.decode())
-        loaded = set(re.findall(r"libraryResource\('android/release/([^']+)'\)", STEP))
-        # Scripts the step does not load must be loaded by a release Jenkinsfile, by name.
-        for job in ROOT.glob("Jenkinsfile/android/*/release/Jenkinsfile"):
-            loaded |= set(re.findall(r"'android/release/([^']+\.sh)'", job.read_text(encoding="utf-8")))
+        # Every script is loaded by a library step or, by name, by a release Jenkinsfile.
+        loaded = set()
+        for user in list(ROOT.glob("vars/*.groovy")) + list(ROOT.glob("Jenkinsfile/android/*/release/Jenkinsfile")):
+            loaded |= set(re.findall(r"libraryResource\('android/release/([^']+\.sh)'\)", user.read_text(encoding="utf-8")))
         self.assertEqual(loaded, {p.name for p in SCRIPTS.glob("*.sh")})
 
     def test_no_release_job_puts_signing_passwords_on_the_gradle_command_line(self):
@@ -65,13 +67,23 @@ class AndroidReleaseContractTest(unittest.TestCase):
     def test_parameters_reach_scripts_explicitly(self):
         # A job's first build exports no parameter environment variables, so scripts get them through withEnv.
         self.assertIn('"PLAY_TRACK=${params.PLAY_TRACK}"', STEP)
-        self.assertIn('"PLAY_RELEASE_STATUS=${params.PLAY_RELEASE_STATUS}"', STEP)
-        self.assertIn('"EXPECTED_AAB_SHA256=${env.RELEASE_AAB_SHA256}"', STEP)
+        for argument in ("track: params.PLAY_TRACK", "releaseStatus: params.PLAY_RELEASE_STATUS",
+                         "expectedSha256: env.RELEASE_AAB_SHA256"):
+            self.assertIn(argument, STEP)
+        for setting in ('"PLAY_TRACK=${cfg.track}"', '"PLAY_RELEASE_STATUS=${cfg.releaseStatus}"',
+                        '"EXPECTED_AAB_SHA256=${cfg.expectedSha256}"', '"PLAY_ROLLOUT_FRACTION=${cfg.rolloutFraction ?: \'\'}"'):
+            self.assertIn(setting, UPLOAD)
 
     def test_vault_certificate_is_read_only_when_the_project_enables_it(self):
-        lookup = STEP.index("vaultKey: 'certificate_sha256'")
-        self.assertLess(STEP.index("if (config.verifyUploadCertificate) {"), lookup)
-        self.assertEqual(STEP.count("certificate_sha256'"), 1)
+        lookup = BUNDLE.index("vaultKey: 'certificate_sha256'")
+        self.assertLess(BUNDLE.index("if (cfg.certificateVaultPath) {"), lookup)
+        self.assertEqual(BUNDLE.count("certificate_sha256'"), 1)
+        self.assertIn('"RELEASE_VERIFY_SIGNER=${cfg.certificateVaultPath ? \'true\' : \'false\'}"', BUNDLE)
+        self.assertIn("certificateVaultPath: config.verifyUploadCertificate ? config.keystoreVaultPath : null", STEP)
+        self.assertNotIn("vaultKey", STEP)
+        # The jobs with their own Jenkinsfile only record the signer.
+        for job in ROOT.glob("Jenkinsfile/android/*/release/Jenkinsfile"):
+            self.assertNotIn("certificateVaultPath", job.read_text(encoding="utf-8"), job)
         self.assertIn("verifyUploadCertificate  : cfg.verifyUploadCertificate == true", STEP)
         self.assertNotIn("uploadCertificateSha256", STEP)
 
@@ -89,17 +101,32 @@ class AndroidReleaseContractTest(unittest.TestCase):
                 self.assertIn(shared, text, job)
 
     def test_play_credentials_are_read_only_after_the_approval_input(self):
-        approval = STEP.index("input message:")
-        self.assertGreater(STEP.index("secret/jenkins/mobile/shared/play-service"), approval)
-        self.assertEqual(STEP.count("secret/jenkins/mobile/shared/play-service"), 1)
-        self.assertIn("publishPlayListings: false", STEP)
+        # playUpload is the only place that reads the Play service account, and every caller reaches it after
+        # its approval input.
+        service = "secret/jenkins/mobile/shared/play-service"
+        self.assertEqual(UPLOAD.count(service), 1)
         for step in ("play/play-preflight.sh", "play/play-upload.sh", "release_notes.py"):
-            self.assertGreater(STEP.index(step), approval)
+            self.assertIn(step, UPLOAD)
+        self.assertNotIn(service, STEP)
+        self.assertNotIn("libraryResource('play/", STEP)
+        self.assertGreater(STEP.index("playUpload("), STEP.index("input message:"))
+        callers = 0
+        for user in list(ROOT.glob("vars/*.groovy")) + list((ROOT / "Jenkinsfile").rglob("Jenkinsfile")):
+            text = user.read_text(encoding="utf-8")
+            for call in ("playUpload(", "flutterAndroid.playPublish("):
+                if call in text and "input message:" in text:
+                    callers += 1
+                    self.assertGreater(text.index(call), text.index("input message:"), user)
+                elif call in text:
+                    self.assertEqual(user.name, "flutterAndroid.groovy", user)
+        self.assertEqual(callers, 3)
+        self.assertIn("publishPlayListings: false", STEP)
         # Gradle only builds; no Gradle Play Publisher task or option is left in the step.
         for gone in ("publishRelease", "--artifact-dir", "playServiceVaultPath"):
             self.assertNotIn(gone, STEP)
         # The store listing goes only for projects that opt in.
-        self.assertIn('"PLAY_METADATA_ROOT=${config.publishListingsWithRelease ? playRoot : \'\'}"', STEP)
+        self.assertIn("metadataRoot: config.publishListingsWithRelease ? playRoot : ''", STEP)
+        self.assertIn('"PLAY_METADATA_ROOT=${cfg.metadataRoot ?: \'\'}"', UPLOAD)
         self.assertNotIn("githubPush", STEP)
 
     def test_resolve_commit_requires_branch_history_clean_tree_and_no_forbidden_paths(self):

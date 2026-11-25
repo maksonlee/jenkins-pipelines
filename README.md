@@ -5,7 +5,7 @@ https://jenkins.maksonlee.com. Jenkins loads everything from this repository's `
 
 | Path | Contents |
 | --- | --- |
-| `vars/` | Library steps: `androidCi`, `androidRelease`, `flutterCi`, `flutterRelease`, and the shared `gradleRelease`, `withAndroidReleaseEnv`, `buildImages`, `buildContainer` helpers |
+| `vars/` | Library steps: `androidCi`, `androidRelease`, `flutterCi`, `flutterRelease`, `staticSiteDeploy`, and the helpers they and the jobs with their own Jenkinsfile share (`gradleRelease`, `withAndroidReleaseEnv`, `androidBundle`, `playUpload`, `checkoutReleaseCommit`, `jsonField`, `buildImages`, `buildContainer`) |
 | `resources/` | Shell and Python scripts the steps load with `libraryResource` |
 | `Jenkinsfile/<folder>/<job>/Jenkinsfile` | One file per Jenkins job, at the job's path |
 | `jobs/jenkins_jobs.groovy` | Job DSL list of per-project folders and jobs, applied by `admin/seed-jobs` |

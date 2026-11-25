@@ -53,7 +53,6 @@ def setEnvironment(Map config) {
     env.ARTIFACTORY_REPO = 'android-snapshots'
     env.ARTIFACTORY_ORG_PATH = 'com/maksonlee'
     env.ARTIFACTORY_MODULE = config.repo
-    env.PLAY_SERVICE_VAULT_PATH = 'secret/jenkins/mobile/shared/play-service'
 }
 
 def fetchImage() {
@@ -302,29 +301,18 @@ sha256sum -- "${aab_files[0]}" | cut -d' ' -f1
     return output
 }
 
-def writePlayTools() {
-    ['play_api.py', 'play_version_preflight.py', 'play_upload.py'].each { name ->
-        writeFile file: ".ci/play/${name}", text: libraryResource("play/${name}")
-    }
-}
-
-def withPlayService(Closure body) {
-    withVault([vaultSecrets: [[
-        path: env.PLAY_SERVICE_VAULT_PATH,
-        engineVersion: 2,
-        secretValues: [[envVar: 'PLAY_SERVICE_JSON_B64', vaultKey: 'json_b64']]
-    ]]]) {
-        body()
-    }
-}
-
-// Version preflight and upload, both after the approval input.
-def playPublish() {
-    writePlayTools()
-    withEnv(["PLAY_TOOLS=${pwd()}/.ci/play", "PLAY_AAB_GLOB=${env.FLUTTER_ARTIFACTS}"]) {
-        withPlayService {
-            sh libraryResource('play/play-preflight.sh')
-            sh libraryResource('play/play-upload.sh')
-        }
-    }
+// Version preflight and upload of the single built AAB with the notes loadReleaseNotes wrote and the project's
+// store listing. Call it only after the approval input.
+def playPublish(Map release) {
+    playUpload(
+        aabGlob: env.FLUTTER_ARTIFACTS,
+        packageName: env.PLAY_PACKAGE_NAME,
+        versionName: env.PLAY_VERSION_NAME,
+        versionCode: env.PLAY_VERSION_CODE,
+        track: release.track,
+        releaseStatus: release.releaseStatus,
+        rolloutFraction: release.rolloutFraction,
+        expectedSha256: release.expectedSha256,
+        metadataRoot: env.PLAY_METADATA_ROOT
+    )
 }

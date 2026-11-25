@@ -32,10 +32,7 @@ pipeline {
     environment {
         PACKAGE = 'com.maksonlee.veil'
         RELEASE_DIR = 'release'
-        BUNDLETOOL_JAR = '/home/administrator/jenkins/android-cache/tools/bundletool-all-1.18.3.jar'
-        BUNDLETOOL_SHA256 = 'a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29'
         UPLOAD_KEY_VAULT_PATH = 'secret/jenkins/mobile/shared/upload-key'
-        PLAY_SERVICE_VAULT_PATH = 'secret/jenkins/mobile/shared/play-service'
     }
 
     stages {
@@ -45,9 +42,6 @@ pipeline {
                 stage('Checkout') {
                     steps {
                         script {
-                            if (!(params.GIT_REF ==~ /main|[0-9a-f]{40}/)) {
-                                error('GIT_REF must be main or a full commit SHA')
-                            }
                             if (!(params.VERSION_CODE ==~ /[1-9][0-9]{0,6}/)) {
                                 error('VERSION_CODE must be a positive number')
                             }
@@ -60,21 +54,13 @@ pipeline {
                         dir('pipeline-source') {
                             checkout scm
                         }
+                        script {
+                            env.RELEASE_COMMIT = checkoutReleaseCommit(repo: 'veil-android', gitRef: params.GIT_REF)
+                        }
                         dir('source') {
-                            git branch: 'main', credentialsId: 'vault-github-ssh',
-                                    url: 'git@github.com:maksonlee/veil-android.git'
-                            withEnv(["GIT_REF=${params.GIT_REF}", "PUBLISH_TO_PLAY=${params.PUBLISH_TO_PLAY}"]) {
+                            withEnv(["PUBLISH_TO_PLAY=${params.PUBLISH_TO_PLAY}"]) {
                                 sh '''#!/bin/bash
 set -euo pipefail
-if [[ "$GIT_REF" == main ]]; then
-  commit=$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')
-else
-  commit=$(git rev-parse --verify "$GIT_REF^{commit}")
-  git merge-base --is-ancestor "$commit" refs/remotes/origin/main
-fi
-git checkout --quiet --detach "$commit"
-test -z "$(git status --porcelain)"
-printf '%s\\n' "$commit" > ../release-commit.txt
 install -d /home/administrator/jenkins/android-cache/rust/veil-android/cargo
 # The notes Play will show for this version, one file per language.
 python3 -I - "$VERSION_CODE" "$PUBLISH_TO_PLAY" > ../.play-release-notes.json <<'PY'
@@ -97,7 +83,6 @@ PY
                             }
                         }
                         script {
-                            env.RELEASE_COMMIT = readFile('release-commit.txt').trim()
                             currentBuild.description = "veil-android v${params.VERSION_CODE} ${env.RELEASE_COMMIT.take(12)}"
                         }
                     }
@@ -151,12 +136,11 @@ cargo fetch --locked --manifest-path native/message-crypto/Cargo.toml
                     options { timeout(time: 20, unit: 'MINUTES') }
                     steps {
                         script {
-                            ['android/release/sign-aab.sh', 'android/release/compare_bundle_entries.py',
-                             'android/release/verify-aab.sh'].each { name ->
-                                writeFile file: ".ci/${name.tokenize('/').last()}", text: libraryResource(name)
-                            }
+                            def signedAab = "${env.RELEASE_DIR}/veil-v${params.VERSION_CODE}.aab"
+                            writeFile file: '.ci/compare_bundle_entries.py',
+                                    text: libraryResource('android/release/compare_bundle_entries.py')
                             withEnv(['UNSIGNED_AAB=source/app/build/outputs/bundle/release/app-release.aab',
-                                     "SIGNED_AAB=${env.RELEASE_DIR}/veil-v${params.VERSION_CODE}.aab"]) {
+                                     "SIGNED_AAB=${signedAab}", "BUNDLETOOL_JAR=${androidBundle.bundletoolJar()}"]) {
                                 withVault([vaultSecrets: [[
                                     path: env.UPLOAD_KEY_VAULT_PATH, engineVersion: 2,
                                     secretValues: [
@@ -166,38 +150,26 @@ cargo fetch --locked --manifest-path native/message-crypto/Cargo.toml
                                         [envVar: 'KEY_ALIAS', vaultKey: 'key_alias']
                                     ]
                                 ]]]) {
-                                    sh 'bash .ci/sign-aab.sh'
+                                    sh libraryResource('android/release/sign-aab.sh')
                                 }
-                                withEnv(["RELEASE_AAB=${env.RELEASE_DIR}/veil-v${params.VERSION_CODE}.aab",
-                                         "RELEASE_PACKAGE=${env.PACKAGE}", 'RELEASE_FORBIDDEN_AAB_ENTRY=',
-                                         'RELEASE_VERIFY_SIGNER=false']) {
-                                    sh '''#!/bin/bash
+                                sh '''#!/bin/bash
 set -euo pipefail
 sha256sum "$UNSIGNED_AAB" | cut -d' ' -f1 > "$RELEASE_DIR/unsigned-aab.sha256"
 python3 -I .ci/compare_bundle_entries.py "$UNSIGNED_AAB" "$SIGNED_AAB" | tee "$RELEASE_DIR/entry-comparison.txt"
-bash .ci/verify-aab.sh
-grep -qx "versionCode=$VERSION_CODE" "$RELEASE_DIR/release-manifest.txt"
-# The repository's own inspection of the exact bytes that would be uploaded.
+'''
+                                def bundle = androidBundle.verify(aab: signedAab, packageName: env.PACKAGE)
+                                if (bundle.versionCode != params.VERSION_CODE || !(bundle.versionName ==~ /[0-9A-Za-z._-]{1,40}/)) {
+                                    error('The bundle does not carry the requested version code, or its version name is unexpected')
+                                }
+                                env.RELEASE_VERSION_NAME = bundle.versionName
+                                env.RELEASE_SIGNER_SHA256 = bundle.signerSha256
+                                env.RELEASE_AAB_SHA256 = bundle.sha256
+                                // The repository's own inspection of the exact bytes that would be uploaded.
+                                sh '''#!/bin/bash
+set -euo pipefail
 python3 source/scripts/verify-play-internal.py --bundle "$SIGNED_AAB" --bundletool "$BUNDLETOOL_JAR" \\
   --version-code "$VERSION_CODE" --output "$RELEASE_DIR/artifact-inspection.json"
-cat "$RELEASE_DIR/release-manifest.txt"
-cat "$SIGNED_AAB.sha256"
 '''
-                                }
-                            }
-                            def manifest = [:]
-                            readFile("${env.RELEASE_DIR}/release-manifest.txt").readLines().each { line ->
-                                def separator = line.indexOf('=')
-                                if (separator > 0) {
-                                    manifest[line.substring(0, separator)] = line.substring(separator + 1)
-                                }
-                            }
-                            env.RELEASE_VERSION_NAME = manifest.versionName
-                            env.RELEASE_SIGNER_SHA256 = manifest.signerSha256
-                            env.RELEASE_AAB_SHA256 = readFile("${env.RELEASE_DIR}/veil-v${params.VERSION_CODE}.aab.sha256").tokenize()[0]
-                            if (!(env.RELEASE_AAB_SHA256 ==~ /[0-9a-f]{64}/) || !(env.RELEASE_SIGNER_SHA256 ==~ /[0-9A-Fa-f:]{64,95}/) ||
-                                    !(env.RELEASE_VERSION_NAME ==~ /[0-9A-Za-z._-]{1,40}/)) {
-                                error('Unexpected release identifiers')
                             }
                             archiveArtifacts artifacts: "${env.RELEASE_DIR}/*", fingerprint: true
                             archiveArtifacts artifacts: 'source/app/build/outputs/mapping/release/mapping.txt', allowEmptyArchive: true
@@ -224,27 +196,16 @@ cat "$SIGNED_AAB.sha256"
             options { timeout(time: 30, unit: 'MINUTES') }
             steps {
                 script {
-                    ['play_api.py', 'play_version_preflight.py', 'play_upload.py'].each { name ->
-                        writeFile file: ".ci/play/${name}", text: libraryResource("play/${name}")
-                    }
-                    withEnv([
-                        "PLAY_TOOLS=${pwd()}/.ci/play",
-                        "PLAY_AAB_GLOB=${env.RELEASE_DIR}/*.aab",
-                        "PLAY_PACKAGE_NAME=${env.PACKAGE}",
-                        "PLAY_VERSION_NAME=${env.RELEASE_VERSION_NAME}",
-                        "PLAY_VERSION_CODE=${params.VERSION_CODE}",
-                        "PLAY_TRACK=${params.PLAY_TRACK}",
-                        "PLAY_RELEASE_STATUS=${params.PLAY_RELEASE_STATUS}",
-                        "EXPECTED_AAB_SHA256=${env.RELEASE_AAB_SHA256}"
-                    ]) {
-                        withVault([vaultSecrets: [[
-                            path: env.PLAY_SERVICE_VAULT_PATH, engineVersion: 2,
-                            secretValues: [[envVar: 'PLAY_SERVICE_JSON_B64', vaultKey: 'json_b64']]
-                        ]]]) {
-                            sh libraryResource('play/play-preflight.sh')
-                            sh libraryResource('play/play-upload.sh')
-                        }
-                    }
+                    // The release notes file written at checkout is still in the workspace.
+                    playUpload(
+                        aabGlob: "${env.RELEASE_DIR}/*.aab",
+                        packageName: env.PACKAGE,
+                        versionName: env.RELEASE_VERSION_NAME,
+                        versionCode: params.VERSION_CODE,
+                        track: params.PLAY_TRACK,
+                        releaseStatus: params.PLAY_RELEASE_STATUS,
+                        expectedSha256: env.RELEASE_AAB_SHA256
+                    )
                 }
             }
         }

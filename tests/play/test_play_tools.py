@@ -220,15 +220,16 @@ class PlayToolsTest(unittest.TestCase):
 
 class FlutterStepContractTest(unittest.TestCase):
     STEPS = {name: (ROOT / f"vars/{name}.groovy").read_text(encoding="utf-8")
-             for name in ("flutterAndroid", "flutterCi", "flutterRelease")}
+             for name in ("flutterAndroid", "flutterCi", "flutterRelease", "playUpload")}
 
     def test_scripts_exist_and_parse(self):
-        steps = dict(self.STEPS, androidRelease=(ROOT / "vars/androidRelease.groovy").read_text(encoding="utf-8"))
+        upload = self.STEPS["playUpload"]
+        written = upload[upload.index("['play_api.py'"):upload.index("].each { name ->\n        writeFile")]
+        self.assertIn('libraryResource("play/${name}")', upload)
         for folder, directory, always in (("flutter", FLUTTER, set()),
-                                          ("play", TOOLS, {"play_api.py", "play_version_preflight.py", "play_upload.py",
-                                                           "release_notes.py"})):
+                                          ("play", TOOLS, set(re.findall(r"'([a-z_]+\.py)'", written)))):
             loaded = set(always)
-            for text in steps.values():
+            for text in self.STEPS.values():
                 loaded |= set(re.findall(r"libraryResource\(['\"]%s/([^'\"$]+)['\"]\)" % folder, text))
             self.assertEqual(loaded, {p.name for p in directory.iterdir() if p.suffix in (".sh", ".py")}, folder)
         for script in list(TOOLS.glob("*.sh")) + list(FLUTTER.glob("*.sh")):
@@ -243,14 +244,19 @@ class FlutterStepContractTest(unittest.TestCase):
 
     def test_release_reads_play_credentials_only_after_approval(self):
         release = self.STEPS["flutterRelease"]
-        self.assertGreater(release.index("flutterAndroid.playPublish()"), release.index("input message:"))
+        self.assertGreater(release.index("flutterAndroid.playPublish("), release.index("input message:"))
         helper = self.STEPS["flutterAndroid"]
-        self.assertEqual(helper.count("PLAY_SERVICE_VAULT_PATH,"), 1)
-        self.assertIn("def playPublish()", helper[helper.index("def withPlayService"):])
+        # The service account is read in playUpload only, which the helper calls from playPublish alone.
+        for gone in ("play-service", "withVault([vaultSecrets: [[\n        path: env.PLAY", "json_b64"):
+            self.assertNotIn(gone, helper)
+        self.assertEqual(helper.count("playUpload("), 1)
+        self.assertIn("playUpload(", helper[helper.index("def playPublish(Map release)"):])
+        self.assertEqual(self.STEPS["playUpload"].count("secret/jenkins/mobile/shared/play-service"), 1)
         self.assertNotIn("PLAY_REQUIRE_PRODUCTION_APPROVAL", release)
-        # A job's first build exports no parameter environment variables, so the upload gets them through withEnv.
-        for name in ("PLAY_TRACK", "PLAY_RELEASE_STATUS", "PLAY_ROLLOUT_FRACTION"):
-            self.assertIn(f'"{name}=${{params.{name}', release)
+        # A job's first build exports no parameter environment variables, so the upload gets them as arguments.
+        for argument in ("track: params.PLAY_TRACK", "releaseStatus: params.PLAY_RELEASE_STATUS",
+                         "rolloutFraction: params.PLAY_ROLLOUT_FRACTION", "expectedSha256: env.RELEASE_AAB_SHA256"):
+            self.assertIn(argument, release)
         self.assertNotIn("githubPush", release)
 
 

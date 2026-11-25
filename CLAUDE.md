@@ -24,6 +24,7 @@ contracts. Update them in the same change as the behavior they describe.
   job shared by several projects:
   - `android/<repo>/{ci,release}`: `androidCi`, `androidRelease`
   - `flutter/<repo>/{ci,release}`: `flutterCi`, `flutterRelease`
+  - `web/<repo>/deploy` for a static site: `staticSiteDeploy` (share-notes, readerplay)
 - **Thin Jenkinsfiles.** A project's Jenkinsfile only passes settings to one step. Shell and Python live in
   `resources/` and are loaded with `libraryResource`, so they can be tested directly.
 - **Job DSL.** `jobs/jenkins_jobs.groovy` is applied by `admin/seed-jobs` with `ignoreExisting: true`:
@@ -50,8 +51,9 @@ contracts. Update them in the same change as the behavior they describe.
     `android/termstay/release` (runs the repository's own release script, which reads Vault with the agent's token
     and the private `termstay-cache/release.env` on the agent): their own Jenkinsfiles.
   - Deploy jobs, all manual with `verify-only` first and an approval before production changes:
-    `web/hongyu-portal/deploy` and `web/veil-backend/deploy` (each with its own `release_ops.py` and tests),
-    `web/share-notes/deploy` and `web/readerplay/deploy` (both on `resources/web/static_site_release.py`), and
+    `web/hongyu-portal/deploy` and `web/veil-backend/deploy` (each with its own Jenkinsfile, `release_ops.py` and
+    tests), `web/share-notes/deploy` and `web/readerplay/deploy` (the `staticSiteDeploy` step with
+    `resources/web/static-site-deploy.sh` and `static_site_release.py`; tests in `tests/web/`), and
     `flutter/taiwan-bus-app/backend-deploy` (runs the repository's deploy script). They log in to the hosts with
     the agent's own SSH key. An origin helper is sent over SSH on every run; nothing is installed on a host.
   - `artifactory/artifactory-cleanup`: weekly; every app in `android-snapshots` keeps its newest `KEEP_VERSIONS`
@@ -102,12 +104,18 @@ git diff --check
   - it exports `SIGNING_*` and also passes `-Psigning.*` unless `passSigningProperties: false`;
   - it switches `publish<Variant>Bundle` to `publish<Variant>Apps` when Play listings exist, unless
     `publishPlayListings: false`. `androidRelease` always sets false and picks the task explicitly.
-- **Play uploads.** `resources/play` (`play_api.py`, `play_version_preflight.py`, `play_upload.py`,
-  `release_notes.py`; tests in `tests/play/`) is the one upload path for `flutterRelease`, `androidRelease` and
-  `android/veil-android/release`. Gradle Play Publisher is not used by `androidRelease` since 2026-11-25. Three
-  jobs keep their own publisher on purpose: Unity math-runner (sealed), `android/cloud-cost-widgets/release` (two
-  bundles and guarded modes) and `android/gst-stream-wall/release` (promotion and listing-only modes through GPP);
-  termstay's release script uses GPP inside the repository.
+- **Helpers for jobs with their own Jenkinsfile.** Do not copy these into a Jenkinsfile again:
+  `checkoutReleaseCommit` (branch tip or a full SHA on the branch, into `source`), `jsonField`,
+  `androidBundle.verify` (the pinned bundletool and `verify-aab.sh`; returns version, signer and SHA-256) and
+  `playUpload`. A Jenkinsfile that calls a library step needs `@Library('jenkins-shared-lib') _`
+  (`tests/test_jobs.py` checks it).
+- **Play uploads.** The `playUpload` step with `resources/play` (`play_api.py`, `play_version_preflight.py`,
+  `play_upload.py`, `release_notes.py`; tests in `tests/play/`) is the one upload path for `flutterRelease`,
+  `androidRelease` and `android/veil-android/release`, and the only place they read the Play service account.
+  Gradle Play Publisher is not used by `androidRelease` since 2026-11-25. Three jobs keep their own publisher on
+  purpose: Unity math-runner (sealed), `android/cloud-cost-widgets/release` (two bundles and guarded modes) and
+  `android/gst-stream-wall/release` (promotion and listing-only modes through GPP); termstay's release script uses
+  GPP inside the repository.
 - **`androidRelease`** uploads only the verified AAB. The signer is
   recorded, and compared with Vault `certificate_sha256` only when `verifyUploadCertificate: true`. Never put
   fingerprints or other operational secrets in this public repository.

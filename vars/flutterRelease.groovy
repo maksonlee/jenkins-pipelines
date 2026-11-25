@@ -175,14 +175,12 @@ def call(Map cfg) {
                 steps {
                     script {
                         // Pass parameters explicitly: a job's first build has no parameter environment variables.
-                        withEnv([
-                            "EXPECTED_AAB_SHA256=${env.RELEASE_AAB_SHA256}",
-                            "PLAY_TRACK=${params.PLAY_TRACK}",
-                            "PLAY_RELEASE_STATUS=${params.PLAY_RELEASE_STATUS}",
-                            "PLAY_ROLLOUT_FRACTION=${params.PLAY_ROLLOUT_FRACTION?.trim() ?: ''}"
-                        ]) {
-                            flutterAndroid.playPublish()
-                        }
+                        flutterAndroid.playPublish(
+                            track: params.PLAY_TRACK,
+                            releaseStatus: params.PLAY_RELEASE_STATUS,
+                            rolloutFraction: params.PLAY_ROLLOUT_FRACTION?.trim() ?: '',
+                            expectedSha256: env.RELEASE_AAB_SHA256
+                        )
                     }
                 }
             }

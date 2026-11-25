@@ -1,3 +1,5 @@
+@Library('jenkins-shared-lib') _
+
 // Manual deployment of the maksonlee/veil-backend server binary to its origin.
 //
 // verify-only cross-builds the aarch64 release binary from a commit on main and reads what is live. stage-only
@@ -6,15 +8,6 @@
 // without rebuilding it, asks for approval, then backs up the database, installs the binary, restarts the service
 // and checks its health; an unhealthy start puts the previous binary back. Migrations are not undone by that.
 // The nginx site, the public pages, the configuration and Vault are not managed here.
-def jsonField(String file, String key) {
-    withEnv(["JSON_FILE=${file}", "JSON_KEY=${key}"]) {
-        return sh(returnStdout: true, script: '''#!/bin/bash
-set -euo pipefail
-python3 -c 'import json, os; value = json.load(open(os.environ["JSON_FILE"]))[os.environ["JSON_KEY"]]; print(",".join(value) if isinstance(value, list) else value)'
-''').trim()
-    }
-}
-
 pipeline {
     agent none
 
@@ -49,9 +42,6 @@ pipeline {
                 stage('Checkout') {
                     steps {
                         script {
-                            if (!(params.GIT_REF ==~ /main|[0-9a-f]{40}/)) {
-                                error('GIT_REF must be main or a full commit SHA')
-                            }
                             if (!(params.MODE in ['verify-only', 'stage-only', 'activate-production'])) {
                                 error('Choose a supported mode')
                             }
@@ -71,28 +61,12 @@ pipeline {
                 stage('Build the aarch64 binary') {
                     when { expression { params.MODE != 'activate-production' } }
                     steps {
-                        dir('source') {
-                            git branch: 'main', credentialsId: 'vault-github-ssh',
-                                    url: 'git@github.com:maksonlee/veil-backend.git'
-                            withEnv(["GIT_REF=${params.GIT_REF}"]) {
-                                sh '''#!/bin/bash
-set -euo pipefail
-if [[ "$GIT_REF" == main ]]; then
-  commit=$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')
-else
-  commit=$(git rev-parse --verify "$GIT_REF^{commit}")
-  git merge-base --is-ancestor "$commit" refs/remotes/origin/main
-fi
-git checkout --quiet --detach "$commit"
-test -z "$(git status --porcelain)"
-printf '%s\\n' "$commit" > ../release-commit.txt
-'''
-                            }
+                        script {
+                            env.RELEASE_COMMIT = checkoutReleaseCommit(repo: 'veil-backend', gitRef: params.GIT_REF)
                         }
                         timeout(time: 45, unit: 'MINUTES') {
                             sh '''#!/bin/bash
 set -euo pipefail
-commit=$(cat release-commit.txt)
 mkdir -p "$CARGO_CACHE"
 image=$(docker build --quiet "$TOOLS")
 run=(docker run --rm --init --cpus=4 --memory=6g --user "$(id -u):$(id -g)"
@@ -108,7 +82,7 @@ run=(docker run --rm --init --cpus=4 --memory=6g --user "$(id -u):$(id -g)"
     aarch64-linux-gnu-objdump -T target/aarch64-unknown-linux-gnu/release/veil-server > target/veil-server.symbols
   '
 python3 "$TOOLS/release_ops.py" package source/server/target/aarch64-unknown-linux-gnu/release/veil-server \\
-  "$commit" source/server/migrations source/server/target/veil-server.symbols "$EVIDENCE" > /dev/null
+  "$RELEASE_COMMIT" source/server/migrations source/server/target/veil-server.symbols "$EVIDENCE" > /dev/null
 cat "$EVIDENCE/candidate.json"
 ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN" \\
   'sudo -n python3 - status' < "$TOOLS/release_ops.py" > "$EVIDENCE/origin-status.json"

@@ -98,40 +98,16 @@ def call(Map cfg) {
                         options { timeout(time: 20, unit: 'MINUTES') }
                         steps {
                             script {
-                                def verify = {
-                                    withEnv([
-                                        "RELEASE_AAB=${config.aab}",
-                                        "RELEASE_PACKAGE=${config.packageName}",
-                                        "BUNDLETOOL_JAR=${config.bundletoolJar}",
-                                        "BUNDLETOOL_SHA256=${config.bundletoolSha256}",
-                                        "RELEASE_FORBIDDEN_AAB_ENTRY=${config.forbiddenAabEntry ?: ''}",
-                                        "RELEASE_VERIFY_SIGNER=${config.verifyUploadCertificate}"
-                                    ]) {
-                                        sh libraryResource('android/release/verify-aab.sh')
-                                    }
-                                }
-                                if (config.verifyUploadCertificate) {
-                                    withVault([vaultSecrets: [[
-                                        path: config.keystoreVaultPath,
-                                        engineVersion: 2,
-                                        secretValues: [[envVar: 'EXPECTED_UPLOAD_CERT_SHA256', vaultKey: 'certificate_sha256']]
-                                    ]]]) {
-                                        verify()
-                                    }
-                                } else {
-                                    verify()
-                                }
-                                def manifest = [:]
-                                readFile("${config.releaseDir}/release-manifest.txt").readLines().each { line ->
-                                    def separator = line.indexOf('=')
-                                    if (separator > 0) {
-                                        manifest[line.substring(0, separator)] = line.substring(separator + 1)
-                                    }
-                                }
-                                env.RELEASE_VERSION_CODE = manifest.versionCode
-                                env.RELEASE_VERSION_NAME = manifest.versionName
-                                env.RELEASE_SIGNER_SHA256 = manifest.signerSha256
-                                env.RELEASE_AAB_SHA256 = readFile("${config.aab}.sha256").trim().split(/\s+/)[0]
+                                def bundle = androidBundle.verify(
+                                    aab: config.aab,
+                                    packageName: config.packageName,
+                                    forbiddenEntry: config.forbiddenAabEntry,
+                                    certificateVaultPath: config.verifyUploadCertificate ? config.keystoreVaultPath : null
+                                )
+                                env.RELEASE_VERSION_CODE = bundle.versionCode
+                                env.RELEASE_VERSION_NAME = bundle.versionName
+                                env.RELEASE_SIGNER_SHA256 = bundle.signerSha256
+                                env.RELEASE_AAB_SHA256 = bundle.sha256
                                 currentBuild.description = "${config.repo} ${env.RELEASE_VERSION_NAME} (${env.RELEASE_VERSION_CODE}) ${env.RELEASE_COMMIT.take(12)}"
                             }
                             stash name: 'android-release-aab', includes: config.evidence
@@ -165,37 +141,20 @@ def call(Map cfg) {
                         withEnv(["RELEASE_AAB=${config.aab}", "PUBLICATION_DIR=${config.publicationDir}"]) {
                             sh libraryResource('android/release/stage-verified-aab.sh')
                         }
-                        // The same Play tools as the Flutter releases: a version preflight, then one edit with the
+                        // The same upload as the Flutter releases: a version preflight, then one edit with the
                         // verified bundle, the release notes and, when the project opts in, its store listing.
-                        ['play_api.py', 'play_version_preflight.py', 'play_upload.py', 'release_notes.py'].each { name ->
-                            writeFile file: ".ci/play/${name}", text: libraryResource("play/${name}")
-                        }
                         def playRoot = "${config.module}/src/main/play"
-                        withEnv([
-                            "PLAY_TOOLS=${pwd()}/.ci/play",
-                            "PLAY_AAB_GLOB=${config.publicationDir}/*.aab",
-                            "PLAY_PACKAGE_NAME=${config.packageName}",
-                            "PLAY_VERSION_NAME=${env.RELEASE_VERSION_NAME}",
-                            "PLAY_VERSION_CODE=${env.RELEASE_VERSION_CODE}",
-                            "PLAY_TRACK=${params.PLAY_TRACK}",
-                            "PLAY_RELEASE_STATUS=${params.PLAY_RELEASE_STATUS}",
-                            "EXPECTED_AAB_SHA256=${env.RELEASE_AAB_SHA256}",
-                            "RELEASE_NOTES_DIR=${playRoot}/release-notes",
-                            "PLAY_METADATA_ROOT=${config.publishListingsWithRelease ? playRoot : ''}"
-                        ]) {
-                            sh '''#!/bin/bash
-set -euo pipefail
-python3 -I "$PLAY_TOOLS/release_notes.py" "$RELEASE_NOTES_DIR" "$PLAY_TRACK" > .play-release-notes.json
-'''
-                            withVault([vaultSecrets: [[
-                                path: 'secret/jenkins/mobile/shared/play-service',
-                                engineVersion: 2,
-                                secretValues: [[envVar: 'PLAY_SERVICE_JSON_B64', vaultKey: 'json_b64']]
-                            ]]]) {
-                                sh libraryResource('play/play-preflight.sh')
-                                sh libraryResource('play/play-upload.sh')
-                            }
-                        }
+                        playUpload(
+                            aabGlob: "${config.publicationDir}/*.aab",
+                            packageName: config.packageName,
+                            versionName: env.RELEASE_VERSION_NAME,
+                            versionCode: env.RELEASE_VERSION_CODE,
+                            track: params.PLAY_TRACK,
+                            releaseStatus: params.PLAY_RELEASE_STATUS,
+                            expectedSha256: env.RELEASE_AAB_SHA256,
+                            releaseNotesDir: "${playRoot}/release-notes",
+                            metadataRoot: config.publishListingsWithRelease ? playRoot : ''
+                        )
                     }
                 }
             }
@@ -232,9 +191,7 @@ def androidReleaseConfig(Map cfg) {
         buildTimeoutMinutes      : (cfg.buildTimeoutMinutes ?: 90) as int,
         approvalTimeoutMinutes   : (cfg.approvalTimeoutMinutes ?: 60) as int,
         // A fixed sentence appended to the approval message, for a project-specific warning.
-        approvalNote             : (cfg.approvalNote ?: '') as String,
-        bundletoolJar            : '/home/administrator/jenkins/android-cache/tools/bundletool-all-1.18.3.jar',
-        bundletoolSha256         : 'a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29'
+        approvalNote             : (cfg.approvalNote ?: '') as String
     ]
     config.releaseDir = "${module}/build/outputs/bundle/release"
     config.aab = "${config.releaseDir}/${module}-release.aab"
