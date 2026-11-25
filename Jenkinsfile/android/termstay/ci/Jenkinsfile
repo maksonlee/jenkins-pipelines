@@ -1,3 +1,5 @@
+@Library('jenkins-shared-lib') _
+
 // CI for the Android client of maksonlee/termstay main. The repository builds only with its own toolchains, so
 // this job runs its documented entry points and nothing else: `tool/setup-build-environment.sh`, which installs
 // the pinned PowerShell, mise, Rust, Node and Android SDK under `.toolchains`, then `tool/build-android.ps1 -Abi
