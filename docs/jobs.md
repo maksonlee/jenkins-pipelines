@@ -11,6 +11,7 @@ project.
 | `android/<repo>/release` | manual | `androidRelease`: tests, signed AAB, verification, approval, Google Play upload. |
 | `flutter/<repo>/ci` | GitHub push | `flutterCi`: quality gates and a debug AAB uploaded to Artifactory snapshots. |
 | `flutter/<repo>/release` | manual | `flutterRelease`: quality gates, signed AAB, approval, Google Play upload. |
+| `web/<repo>/ci` | GitHub push | The project's own Jenkinsfile: its tests in a container without network access. |
 | `admin/seed-jobs` | manual | Creates the folders and jobs listed in `jobs/jenkins_jobs.groovy`. |
 | `admin/pipelines-ci` | polls this repository | Runs `tools/run_checks.sh`: every offline test and a Groovy syntax check. |
 

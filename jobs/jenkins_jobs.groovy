@@ -22,12 +22,14 @@ def projects = [
     [folder: 'flutter/share-notes', roles: ['ci', 'release'], repo: 'share-notes', type: 'flutter'],
     [folder: 'flutter/classic-calculator', roles: ['ci', 'release'], repo: 'classic-calculator', type: 'flutter'],
     [folder: 'flutter/kids-calculator', roles: ['ci', 'release'], repo: 'kids-calculator', type: 'flutter'],
+    [folder: 'web/readerplay', roles: ['ci'], repo: 'readerplay', type: 'web'],
 ]
 
 def descriptions = [
     'android/ci'    : 'Debug CI for maksonlee/%s: unit tests, debug lint, debug and instrumentation APKs with SHA256SUMS. Triggered by GitHub pushes; uses no release signing material.',
     'android/release': 'Manual Google Play release for maksonlee/%s: release-branch commit only, tests and lint, signed AAB verification, then a manual approval before the verified AAB is uploaded.',
     'flutter/ci'    : 'CI for maksonlee/%s: quality gates and a debug AAB uploaded to Artifactory snapshots. Triggered by GitHub pushes; uses no release signing material.',
+    'web/ci'        : 'CI for maksonlee/%s: the repository\'s tests in a container without network access. Triggered by GitHub pushes.',
     'flutter/release': 'Manual Google Play release for maksonlee/%s: release-branch commit only, quality gates, signed release AAB, then a manual approval before any Play access.',
 ]
 

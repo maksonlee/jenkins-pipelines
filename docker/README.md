@@ -15,6 +15,7 @@ Never point a job at a mutable tag.
 | `flutter()` | `flutter-android-build-env:jdk25-20261029` | `flutter-android-build-env/` | `android()` digest + Dart, FVM | `flutterCi`, `flutterRelease` |
 | `gstStreamWall()` | `gst-stream-wall-android-build-env:1.98.0-2` | `gst-stream-wall-android-build-env/` | **legacy** `cdlee/android-build-env@sha256:aa44…` (2025-07, SDKMAN JDKs; see `android-build-env/legacy-2025-07-21/`) | `android/gst-stream-wall/release` |
 | `unityAndroid()` | `unity-android-build-env:6000.6.7f1-android-1` | `unity-android-build-env/` | GameCI editor by digest | `unity/math-runner-*` (the digest is also bound into the Unity worker seal) |
+| `playwright()` | `mcr.microsoft.com/playwright:v1.65.1-noble` by digest | Microsoft | — | `web/readerplay/ci` |
 | `python()` | `python:3.13-bookworm` by digest | Docker Hub | — | Flutter backend tests and Play metadata validators |
 | `postgis()` | `postgis/postgis:18-3.6` by digest | Docker Hub | — | Flutter backend tests with `postgresDatabase` |
 

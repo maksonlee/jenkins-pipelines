@@ -31,3 +31,9 @@ def unityAndroid() {
     // unity-android-build-env:6000.6.7f1-android-1; Unity 6000.6.7f1 with embedded Android tools.
     return 'harbor.maksonlee.com/library/unity-android-build-env@sha256:c45b47f9999a81df26f664419725ab5895438e5dbf6123bc002c766ecf3c4cf3'
 }
+
+def playwright() {
+    // mcr.microsoft.com/playwright:v1.65.1-noble (Node 26, Chromium, git); the same base the piano-practice CI
+    // Dockerfile uses. Runs browser tests of static web projects.
+    return 'mcr.microsoft.com/playwright@sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579'
+}
