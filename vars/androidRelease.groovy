@@ -15,7 +15,7 @@ def call(Map cfg) {
     def config = androidReleaseConfig(cfg)
 
     pipeline {
-        agent { label 'ssh-agent-with-docker' }
+        agent none
 
         options {
             timestamps()
@@ -36,103 +36,108 @@ def call(Map cfg) {
         }
 
         stages {
-            stage('Resolve release') {
-                steps {
-                    script {
-                        def gitRef = params.GIT_REF?.trim()
-                        if (!gitRef || (gitRef != config.branch && !(gitRef ==~ /^[0-9a-fA-F]{40}$/))) {
-                            error "GIT_REF must be ${config.branch} or a full 40-character commit SHA"
-                        }
-                        if (!(params.PLAY_TRACK in config.tracks) || !(params.PLAY_RELEASE_STATUS in config.releaseStatuses)) {
-                            error 'PLAY_TRACK or PLAY_RELEASE_STATUS is not offered for this project'
-                        }
-                        env.GIT_REF = gitRef
-                    }
-                }
-            }
-
-            stage('Fetch code') {
-                steps {
-                    deleteDir()
-                    checkout(changelog: false, poll: false, scm: [
-                        $class: 'GitSCM',
-                        branches: [[name: env.GIT_REF]],
-                        extensions: [],
-                        userRemoteConfigs: [[
-                            credentialsId: 'vault-github-ssh',
-                            url: "git@github.com:maksonlee/${config.repo}.git"
-                        ]]
-                    ])
-                    script {
-                        withEnv([
-                            "RELEASE_BRANCH=${config.branch}",
-                            'RELEASE_FORBIDDEN_PATHS=' + config.forbiddenPaths.join('\n')
-                        ]) {
-                            env.RELEASE_COMMIT = sh(returnStdout: true,
-                                script: libraryResource('android/release/resolve-commit.sh')).trim()
-                        }
-                        // Pass parameters explicitly: a job's first build has no parameter environment variables.
-                        withEnv(["RELEASE_NOTES_DIR=${config.module}/src/main/play/release-notes", "PLAY_TRACK=${params.PLAY_TRACK}"]) {
-                            sh libraryResource('android/release/check-release-notes.sh')
-                        }
-                        currentBuild.description = "${config.repo} ${env.RELEASE_COMMIT.take(12)}"
-                    }
-                }
-            }
-
-            stage('Test, lint, build & sign AAB') {
-                options { timeout(time: config.buildTimeoutMinutes, unit: 'MINUTES') }
-                steps {
-                    script {
-                        gradleRelease(":${config.module}:bundleRelease", androidReleaseGradleConfig(config, [
-                            extraArgs: config.verifyTasks
-                        ]))
-                    }
-                }
-            }
-
-            stage('Verify AAB') {
-                options { timeout(time: 20, unit: 'MINUTES') }
-                steps {
-                    script {
-                        def verify = {
-                            withEnv([
-                                "RELEASE_AAB=${config.aab}",
-                                "RELEASE_PACKAGE=${config.packageName}",
-                                "BUNDLETOOL_JAR=${config.bundletoolJar}",
-                                "BUNDLETOOL_SHA256=${config.bundletoolSha256}",
-                                "RELEASE_FORBIDDEN_AAB_ENTRY=${config.forbiddenAabEntry ?: ''}",
-                                "RELEASE_VERIFY_SIGNER=${config.verifyUploadCertificate}"
-                            ]) {
-                                sh libraryResource('android/release/verify-aab.sh')
+            stage('Build and verify') {
+                agent { label 'ssh-agent-with-docker' }
+                stages {
+                    stage('Resolve release') {
+                        steps {
+                            script {
+                                def gitRef = params.GIT_REF?.trim()
+                                if (!gitRef || (gitRef != config.branch && !(gitRef ==~ /^[0-9a-fA-F]{40}$/))) {
+                                    error "GIT_REF must be ${config.branch} or a full 40-character commit SHA"
+                                }
+                                if (!(params.PLAY_TRACK in config.tracks) || !(params.PLAY_RELEASE_STATUS in config.releaseStatuses)) {
+                                    error 'PLAY_TRACK or PLAY_RELEASE_STATUS is not offered for this project'
+                                }
+                                env.GIT_REF = gitRef
                             }
                         }
-                        if (config.verifyUploadCertificate) {
-                            withVault([vaultSecrets: [[
-                                path: config.keystoreVaultPath,
-                                engineVersion: 2,
-                                secretValues: [[envVar: 'EXPECTED_UPLOAD_CERT_SHA256', vaultKey: 'certificate_sha256']]
-                            ]]]) {
-                                verify()
-                            }
-                        } else {
-                            verify()
-                        }
-                        def manifest = [:]
-                        readFile("${config.releaseDir}/release-manifest.txt").readLines().each { line ->
-                            def separator = line.indexOf('=')
-                            if (separator > 0) {
-                                manifest[line.substring(0, separator)] = line.substring(separator + 1)
-                            }
-                        }
-                        env.RELEASE_VERSION_CODE = manifest.versionCode
-                        env.RELEASE_VERSION_NAME = manifest.versionName
-                        env.RELEASE_SIGNER_SHA256 = manifest.signerSha256
-                        env.RELEASE_AAB_SHA256 = readFile("${config.aab}.sha256").trim().split(/\s+/)[0]
-                        currentBuild.description = "${config.repo} ${env.RELEASE_VERSION_NAME} (${env.RELEASE_VERSION_CODE}) ${env.RELEASE_COMMIT.take(12)}"
                     }
-                    stash name: 'android-release-aab', includes: config.evidence
-                    archiveArtifacts artifacts: config.evidence, fingerprint: true
+
+                    stage('Fetch code') {
+                        steps {
+                            deleteDir()
+                            checkout(changelog: false, poll: false, scm: [
+                                $class: 'GitSCM',
+                                branches: [[name: env.GIT_REF]],
+                                extensions: [],
+                                userRemoteConfigs: [[
+                                    credentialsId: 'vault-github-ssh',
+                                    url: "git@github.com:maksonlee/${config.repo}.git"
+                                ]]
+                            ])
+                            script {
+                                withEnv([
+                                    "RELEASE_BRANCH=${config.branch}",
+                                    'RELEASE_FORBIDDEN_PATHS=' + config.forbiddenPaths.join('\n')
+                                ]) {
+                                    env.RELEASE_COMMIT = sh(returnStdout: true,
+                                        script: libraryResource('android/release/resolve-commit.sh')).trim()
+                                }
+                                // Pass parameters explicitly: a job's first build has no parameter environment variables.
+                                withEnv(["RELEASE_NOTES_DIR=${config.module}/src/main/play/release-notes", "PLAY_TRACK=${params.PLAY_TRACK}"]) {
+                                    sh libraryResource('android/release/check-release-notes.sh')
+                                }
+                                currentBuild.description = "${config.repo} ${env.RELEASE_COMMIT.take(12)}"
+                            }
+                        }
+                    }
+
+                    stage('Test, lint, build & sign AAB') {
+                        options { timeout(time: config.buildTimeoutMinutes, unit: 'MINUTES') }
+                        steps {
+                            script {
+                                gradleRelease(":${config.module}:bundleRelease", androidReleaseGradleConfig(config, [
+                                    extraArgs: config.verifyTasks
+                                ]))
+                            }
+                        }
+                    }
+
+                    stage('Verify AAB') {
+                        options { timeout(time: 20, unit: 'MINUTES') }
+                        steps {
+                            script {
+                                def verify = {
+                                    withEnv([
+                                        "RELEASE_AAB=${config.aab}",
+                                        "RELEASE_PACKAGE=${config.packageName}",
+                                        "BUNDLETOOL_JAR=${config.bundletoolJar}",
+                                        "BUNDLETOOL_SHA256=${config.bundletoolSha256}",
+                                        "RELEASE_FORBIDDEN_AAB_ENTRY=${config.forbiddenAabEntry ?: ''}",
+                                        "RELEASE_VERIFY_SIGNER=${config.verifyUploadCertificate}"
+                                    ]) {
+                                        sh libraryResource('android/release/verify-aab.sh')
+                                    }
+                                }
+                                if (config.verifyUploadCertificate) {
+                                    withVault([vaultSecrets: [[
+                                        path: config.keystoreVaultPath,
+                                        engineVersion: 2,
+                                        secretValues: [[envVar: 'EXPECTED_UPLOAD_CERT_SHA256', vaultKey: 'certificate_sha256']]
+                                    ]]]) {
+                                        verify()
+                                    }
+                                } else {
+                                    verify()
+                                }
+                                def manifest = [:]
+                                readFile("${config.releaseDir}/release-manifest.txt").readLines().each { line ->
+                                    def separator = line.indexOf('=')
+                                    if (separator > 0) {
+                                        manifest[line.substring(0, separator)] = line.substring(separator + 1)
+                                    }
+                                }
+                                env.RELEASE_VERSION_CODE = manifest.versionCode
+                                env.RELEASE_VERSION_NAME = manifest.versionName
+                                env.RELEASE_SIGNER_SHA256 = manifest.signerSha256
+                                env.RELEASE_AAB_SHA256 = readFile("${config.aab}.sha256").trim().split(/\s+/)[0]
+                                currentBuild.description = "${config.repo} ${env.RELEASE_VERSION_NAME} (${env.RELEASE_VERSION_CODE}) ${env.RELEASE_COMMIT.take(12)}"
+                            }
+                            stash name: 'android-release-aab', includes: config.evidence
+                            archiveArtifacts artifacts: config.evidence, fingerprint: true
+                        }
+                    }
                 }
             }
 
@@ -151,7 +156,8 @@ def call(Map cfg) {
             }
 
             stage('Publish to Google Play') {
-                when { expression { params.PUBLISH_TO_PLAY } }
+                agent { label 'ssh-agent-with-docker' }
+                when { beforeAgent true; expression { params.PUBLISH_TO_PLAY } }
                 options { timeout(time: 30, unit: 'MINUTES') }
                 steps {
                     script {
@@ -197,7 +203,9 @@ python3 -I "$PLAY_TOOLS/release_notes.py" "$RELEASE_NOTES_DIR" "$PLAY_TRACK" > .
 
         post {
             always {
-                cleanWs(deleteDirs: true, notFailBuild: true)
+                node('ssh-agent-with-docker') {
+                    cleanWs(deleteDirs: true, notFailBuild: true)
+                }
             }
         }
     }

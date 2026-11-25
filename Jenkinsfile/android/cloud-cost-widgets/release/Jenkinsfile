@@ -11,7 +11,7 @@ def withPlayService(Closure body) {
 }
 
 pipeline {
-    agent { label 'ssh-agent-with-docker' }
+    agent none
 
     options {
         timestamps()
@@ -38,59 +38,62 @@ pipeline {
     }
 
     stages {
-        stage('Fetch release pipeline') {
-            steps {
-                script {
-                    if (!(params.MODE in ['alpha-status', 'internal-preflight', 'internal-submit'])) {
-                        error('Select alpha-status, internal-preflight, or internal-submit')
-                    }
-                    if (params.MODE == 'internal-submit' && !(params.SIGNED_BUILD ==~ /[1-9][0-9]{0,7}/)) {
-                        error('Provide the internal-preflight build number to submit')
-                    }
-                }
-                deleteDir()
-                checkout scm
-                sh '''#!/bin/bash
+        stage('Prepare') {
+            agent { label 'ssh-agent-with-docker' }
+            stages {
+                stage('Fetch release pipeline') {
+                    steps {
+                        script {
+                            if (!(params.MODE in ['alpha-status', 'internal-preflight', 'internal-submit'])) {
+                                error('Select alpha-status, internal-preflight, or internal-submit')
+                            }
+                            if (params.MODE == 'internal-submit' && !(params.SIGNED_BUILD ==~ /[1-9][0-9]{0,7}/)) {
+                                error('Provide the internal-preflight build number to submit')
+                            }
+                        }
+                        deleteDir()
+                        checkout scm
+                        sh '''#!/bin/bash
 set -euo pipefail
 mkdir release-evidence
 git rev-parse --verify 'HEAD^{commit}' > release-evidence/pipeline-commit.txt
 '''
-                script {
-                    if (params.MODE == 'internal-submit') {
-                        env.PIPELINE_SHA = readFile('release-evidence/pipeline-commit.txt').trim()
+                        script {
+                            if (params.MODE == 'internal-submit') {
+                                env.PIPELINE_SHA = readFile('release-evidence/pipeline-commit.txt').trim()
+                            }
+                        }
                     }
                 }
-            }
-        }
 
-        stage('Read Google Play release status') {
-            when { expression { params.MODE in ['alpha-status', 'internal-preflight'] } }
-            steps {
-                script {
-                    writeFile file: 'release-evidence/alpha-status.json', text: '{"result":"outcome-unavailable"}\n'
-                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) {
-                        withPlayService {
-                            sh '''#!/bin/bash
+                stage('Read Google Play release status') {
+                    when { expression { params.MODE in ['alpha-status', 'internal-preflight'] } }
+                    steps {
+                        script {
+                            writeFile file: 'release-evidence/alpha-status.json', text: '{"result":"outcome-unavailable"}\n'
+                            catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) {
+                                withPlayService {
+                                    sh '''#!/bin/bash
 set +x
 set -euo pipefail
 python3 "$RELEASE_TOOLS/play_alpha_status.py" release-evidence/alpha-status.json
 '''
+                                }
+                            }
                         }
                     }
                 }
-            }
-        }
 
-        stage('Build and verify the signed Wear OS bundle') {
-            when { expression { params.MODE == 'internal-preflight' } }
-            steps {
-                script {
-                    writeFile file: 'release-evidence/signed-bundles.json', text: '{"result":"failed","reason":"source-checkout-failed"}\n'
-                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) {
-                        dir('source') {
-                            git branch: 'main', credentialsId: 'vault-github-ssh',
-                                    url: 'git@github.com:maksonlee/cloud-cost-widgets.git'
-                            sh '''#!/bin/bash
+                stage('Build and verify the signed Wear OS bundle') {
+                    when { expression { params.MODE == 'internal-preflight' } }
+                    steps {
+                        script {
+                            writeFile file: 'release-evidence/signed-bundles.json', text: '{"result":"failed","reason":"source-checkout-failed"}\n'
+                            catchError(buildResult: 'FAILURE', stageResult: 'FAILURE', catchInterruptions: false) {
+                                dir('source') {
+                                    git branch: 'main', credentialsId: 'vault-github-ssh',
+                                            url: 'git@github.com:maksonlee/cloud-cost-widgets.git'
+                                    sh '''#!/bin/bash
 set -euo pipefail
 git merge-base --is-ancestor "$PRODUCT_SHA" HEAD
 git checkout --detach "$PRODUCT_SHA"
@@ -98,19 +101,19 @@ test "$(git rev-parse --verify 'HEAD^{commit}')" = "$PRODUCT_SHA"
 test -z "$(git status --porcelain=v1)"
 printf '%s\\n' "$PRODUCT_SHA" > ../release-evidence/source-commit.txt
 '''
-                        }
-                        def cache = '/home/administrator/jenkins/android-cache'
-                        def image = buildImages.android()
-                        writeFile file: 'release-evidence/build-image.txt', text: image + '\n'
-                        writeFile file: 'release-evidence/signed-bundles.json', text: '{"result":"failed","reason":"signing-environment-failed"}\n'
-                        withAndroidReleaseEnv(
-                                image: image,
-                                cacheRoot: cache,
-                                mountAndroidCache: false,
-                                insideArgs: "--mount type=bind,src=${cache}/flutter-android-sdk,dst=/home/ubuntu/Android,readonly",
-                                keystoreVaultPath: 'secret/jenkins/mobile/shared/upload-key'
-                        ) {
-                            sh '''#!/bin/bash
+                                }
+                                def cache = '/home/administrator/jenkins/android-cache'
+                                def image = buildImages.android()
+                                writeFile file: 'release-evidence/build-image.txt', text: image + '\n'
+                                writeFile file: 'release-evidence/signed-bundles.json', text: '{"result":"failed","reason":"signing-environment-failed"}\n'
+                                withAndroidReleaseEnv(
+                                        image: image,
+                                        cacheRoot: cache,
+                                        mountAndroidCache: false,
+                                        insideArgs: "--mount type=bind,src=${cache}/flutter-android-sdk,dst=/home/ubuntu/Android,readonly",
+                                        keystoreVaultPath: 'secret/jenkins/mobile/shared/upload-key'
+                                ) {
+                                    sh '''#!/bin/bash
 set +x
 set -euo pipefail
 export GRADLE_USER_HOME=/home/ubuntu/.gradle
@@ -134,43 +137,45 @@ printf '%s\\n' '{"result":"failed","reason":"gradle-release-build-failed"}' > re
   test -z "$(git status --porcelain=v1)"
 )
 '''
-                        }
-                        sh '''#!/bin/bash
+                                }
+                                sh '''#!/bin/bash
 set -euo pipefail
 printf '%s\\n' '{"result":"failed","reason":"bundle-verification-failed"}' > release-evidence/signed-bundles.json
 python3 "$RELEASE_TOOLS/verify_bundles.py" source release-evidence
 '''
+                            }
+                        }
                     }
                 }
-            }
-        }
 
-        stage('Verify the approved bundle archive') {
-            when { expression { params.MODE == 'internal-submit' } }
-            steps {
-                copyArtifacts(projectName: '/android/cloud-cost-widgets/release', selector: specific(params.SIGNED_BUILD),
-                        filter: 'release-evidence/source-commit.txt,release-evidence/pipeline-commit.txt,' +
-                                'release-evidence/upload-certificate-sha256.txt,release-evidence/signed-bundles.json,' +
-                                'release-evidence/alpha-status.json,release-evidence/bundles/*',
-                        target: 'signed-input', fingerprintArtifacts: true)
-                script {
-                    // The digest the preflight build recorded for its one archived bundle. The verifier below checks
-                    // the archived bytes, report and commits against it, and the approval step shows it.
-                    env.SIGNED_WEAR_SHA256 = sh(returnStdout: true, script: '''#!/bin/bash
+                stage('Verify the approved bundle archive') {
+                    when { expression { params.MODE == 'internal-submit' } }
+                    steps {
+                        copyArtifacts(projectName: '/android/cloud-cost-widgets/release', selector: specific(params.SIGNED_BUILD),
+                                filter: 'release-evidence/source-commit.txt,release-evidence/pipeline-commit.txt,' +
+                                        'release-evidence/upload-certificate-sha256.txt,release-evidence/signed-bundles.json,' +
+                                        'release-evidence/alpha-status.json,release-evidence/bundles/*',
+                                target: 'signed-input', fingerprintArtifacts: true)
+                        script {
+                            // The digest the preflight build recorded for its one archived bundle. The verifier below checks
+                            // the archived bytes, report and commits against it, and the approval step shows it.
+                            env.SIGNED_WEAR_SHA256 = sh(returnStdout: true, script: '''#!/bin/bash
 set -euo pipefail
 sums=signed-input/release-evidence/bundles/SHA256SUMS
 test -f "$sums" && test ! -L "$sums"
 test "$(wc -l < "$sums")" = 1
 grep -Ex '[a-f0-9]{64}  wear-[0-9.]+-[0-9]+[.]aab' "$sums" | cut -c1-64
 ''').trim()
-                    if (!(env.SIGNED_WEAR_SHA256 ==~ /[a-f0-9]{64}/)) {
-                        error('The preflight build did not archive exactly one Wear OS bundle digest')
-                    }
-                }
-                sh '''#!/bin/bash
+                            if (!(env.SIGNED_WEAR_SHA256 ==~ /[a-f0-9]{64}/)) {
+                                error('The preflight build did not archive exactly one Wear OS bundle digest')
+                            }
+                        }
+                        sh '''#!/bin/bash
 set -euo pipefail
 python3 "$RELEASE_TOOLS/verify_submission_artifacts.py" signed-input/release-evidence release-evidence/verified-input.json
 '''
+                    }
+                }
             }
         }
 
@@ -188,7 +193,8 @@ python3 "$RELEASE_TOOLS/verify_submission_artifacts.py" signed-input/release-evi
         }
 
         stage('Submit the Wear OS release to Internal testing') {
-            when { expression { params.MODE == 'internal-submit' } }
+            agent { label 'ssh-agent-with-docker' }
+            when { beforeAgent true; expression { params.MODE == 'internal-submit' } }
             steps {
                 script {
                     writeFile file: 'release-evidence/release-sequencing.txt', text:
@@ -211,11 +217,15 @@ python3 "$RELEASE_TOOLS/play_publish.py" signed-input/release-evidence release-e
 
     post {
         always {
-            archiveArtifacts artifacts: 'release-evidence/*.json,release-evidence/*.txt,release-evidence/bundles/*',
-                    allowEmptyArchive: true, followSymlinks: false, fingerprint: true
+            node('ssh-agent-with-docker') {
+                archiveArtifacts artifacts: 'release-evidence/*.json,release-evidence/*.txt,release-evidence/bundles/*',
+                        allowEmptyArchive: true, followSymlinks: false, fingerprint: true
+            }
         }
         cleanup {
-            cleanWs(deleteDirs: true, notFailBuild: true)
+            node('ssh-agent-with-docker') {
+                cleanWs(deleteDirs: true, notFailBuild: true)
+            }
         }
     }
 }

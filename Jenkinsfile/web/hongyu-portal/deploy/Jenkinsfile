@@ -14,7 +14,7 @@ python3 -c 'import json, os; print(json.load(open(os.environ["JSON_FILE"]))[os.e
 }
 
 pipeline {
-    agent { label 'ssh-agent-with-docker' }
+    agent none
 
     options {
         timestamps()
@@ -41,28 +41,31 @@ pipeline {
     }
 
     stages {
-        stage('Checkout') {
-            steps {
-                script {
-                    if (!(params.GIT_REF ==~ /main|[0-9a-f]{40}/)) {
-                        error('GIT_REF must be main or a full commit SHA')
-                    }
-                    if (!(params.MODE in ['verify-only', 'stage-only', 'activate-production'])) {
-                        error('Choose a supported mode')
-                    }
-                    if (params.MODE != 'verify-only' && !(params.EXPECTED_RELEASE ==~ /[0-9a-f]{12}-[0-9a-f]{12}/)) {
-                        error('Enter the release ID from a verify-only run before using the origin')
-                    }
-                }
-                deleteDir()
-                dir('pipeline-source') {
-                    checkout scm
-                }
-                dir('source') {
-                    git branch: 'main', credentialsId: 'vault-github-ssh',
-                            url: 'git@github.com:maksonlee/hongyu-portal.git'
-                    withEnv(["GIT_REF=${params.GIT_REF}"]) {
-                        sh '''#!/bin/bash
+        stage('Build and stage') {
+            agent { label 'ssh-agent-with-docker' }
+            stages {
+                stage('Checkout') {
+                    steps {
+                        script {
+                            if (!(params.GIT_REF ==~ /main|[0-9a-f]{40}/)) {
+                                error('GIT_REF must be main or a full commit SHA')
+                            }
+                            if (!(params.MODE in ['verify-only', 'stage-only', 'activate-production'])) {
+                                error('Choose a supported mode')
+                            }
+                            if (params.MODE != 'verify-only' && !(params.EXPECTED_RELEASE ==~ /[0-9a-f]{12}-[0-9a-f]{12}/)) {
+                                error('Enter the release ID from a verify-only run before using the origin')
+                            }
+                        }
+                        deleteDir()
+                        dir('pipeline-source') {
+                            checkout scm
+                        }
+                        dir('source') {
+                            git branch: 'main', credentialsId: 'vault-github-ssh',
+                                    url: 'git@github.com:maksonlee/hongyu-portal.git'
+                            withEnv(["GIT_REF=${params.GIT_REF}"]) {
+                                sh '''#!/bin/bash
 set -euo pipefail
 if [[ "$GIT_REF" == main ]]; then
   commit=$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')
@@ -74,20 +77,20 @@ git checkout --quiet --detach "$commit"
 test -z "$(git status --porcelain)"
 printf '%s\\n' "$commit" > ../release-commit.txt
 '''
+                            }
+                        }
+                        script {
+                            env.RELEASE_COMMIT = readFile('release-commit.txt').trim()
+                            env.DEPLOY_MODE = params.MODE
+                            env.EXPECTED_RELEASE = params.EXPECTED_RELEASE
+                        }
                     }
                 }
-                script {
-                    env.RELEASE_COMMIT = readFile('release-commit.txt').trim()
-                    env.DEPLOY_MODE = params.MODE
-                    env.EXPECTED_RELEASE = params.EXPECTED_RELEASE
-                }
-            }
-        }
 
-        stage('Build and check the release') {
-            steps {
-                timeout(time: 20, unit: 'MINUTES') {
-                    sh '''#!/bin/bash
+                stage('Build and check the release') {
+                    steps {
+                        timeout(time: 20, unit: 'MINUTES') {
+                            sh '''#!/bin/bash
 set -euo pipefail
 mkdir -p build/tree "$EVIDENCE"
 git -C source archive "$RELEASE_COMMIT" | tar -x -C build/tree
@@ -114,24 +117,24 @@ if mode != 'verify-only' and expected != candidate['releaseId']:
     raise SystemExit('The built release differs from EXPECTED_RELEASE; run verify-only again')
 PY
 '''
-                    script {
-                        env.RELEASE_ID = jsonField("${env.EVIDENCE}/candidate.json", 'releaseId')
-                        env.ARCHIVE_SHA256 = jsonField("${env.EVIDENCE}/candidate.json", 'archiveSha256')
-                        env.LIVE_RELEASE = jsonField("${env.EVIDENCE}/origin-status.json", 'current')
-                        if (!(env.RELEASE_ID ==~ /[0-9a-f]{12}-[0-9a-f]{12}/) || !(env.ARCHIVE_SHA256 ==~ /[0-9a-f]{64}/) ||
-                                !(env.LIVE_RELEASE ==~ /[A-Za-z0-9._-]{1,80}/)) {
-                            error('Unexpected release identifiers')
+                            script {
+                                env.RELEASE_ID = jsonField("${env.EVIDENCE}/candidate.json", 'releaseId')
+                                env.ARCHIVE_SHA256 = jsonField("${env.EVIDENCE}/candidate.json", 'archiveSha256')
+                                env.LIVE_RELEASE = jsonField("${env.EVIDENCE}/origin-status.json", 'current')
+                                if (!(env.RELEASE_ID ==~ /[0-9a-f]{12}-[0-9a-f]{12}/) || !(env.ARCHIVE_SHA256 ==~ /[0-9a-f]{64}/) ||
+                                        !(env.LIVE_RELEASE ==~ /[A-Za-z0-9._-]{1,80}/)) {
+                                    error('Unexpected release identifiers')
+                                }
+                            }
                         }
                     }
                 }
-            }
-        }
 
-        stage('Stage at the origin') {
-            when { expression { params.MODE in ['stage-only', 'activate-production'] } }
-            steps {
-                timeout(time: 10, unit: 'MINUTES') {
-                    sh '''#!/bin/bash
+                stage('Stage at the origin') {
+                    when { expression { params.MODE in ['stage-only', 'activate-production'] } }
+                    steps {
+                        timeout(time: 10, unit: 'MINUTES') {
+                            sh '''#!/bin/bash
 set -euo pipefail
 ssh_origin=(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN")
 remote="/tmp/hongyu-release-$RELEASE_ID.tar.gz"
@@ -141,6 +144,8 @@ trap '"${ssh_origin[@]}" "rm -f $remote"' EXIT
   < "$TOOLS/release_ops.py" > "$EVIDENCE/staged.json"
 cat "$EVIDENCE/staged.json"
 '''
+                        }
+                    }
                 }
             }
         }
@@ -156,7 +161,8 @@ cat "$EVIDENCE/staged.json"
         }
 
         stage('Switch production and check it') {
-            when { expression { params.MODE == 'activate-production' } }
+            agent { label 'ssh-agent-with-docker' }
+            when { beforeAgent true; expression { params.MODE == 'activate-production' } }
             steps {
                 timeout(time: 10, unit: 'MINUTES') {
                     sh '''#!/bin/bash
@@ -186,28 +192,34 @@ cat "$EVIDENCE/public-checks.txt"
 
     post {
         unsuccessful {
-            script {
-                if (fileExists("${env.EVIDENCE}/activation.json")) {
-                    def state = jsonField("${env.EVIDENCE}/activation.json", 'state')
-                    def previous = jsonField("${env.EVIDENCE}/activation.json", 'previousRelease')
-                    if (state == 'activated' && previous ==~ /[A-Za-z0-9._-]{1,80}/) {
-                        withEnv(["PREVIOUS_RELEASE=${previous}"]) {
-                            sh '''#!/bin/bash
+            node('ssh-agent-with-docker') {
+                script {
+                    if (fileExists("${env.EVIDENCE}/activation.json")) {
+                        def state = jsonField("${env.EVIDENCE}/activation.json", 'state')
+                        def previous = jsonField("${env.EVIDENCE}/activation.json", 'previousRelease')
+                        if (state == 'activated' && previous ==~ /[A-Za-z0-9._-]{1,80}/) {
+                            withEnv(["PREVIOUS_RELEASE=${previous}"]) {
+                                sh '''#!/bin/bash
 set -euo pipefail
 ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN" \\
   "sudo -n python3 - rollback $RELEASE_ID $PREVIOUS_RELEASE" < "$TOOLS/release_ops.py" > "$EVIDENCE/rollback.json"
 cat "$EVIDENCE/rollback.json"
 '''
+                            }
                         }
                     }
                 }
             }
         }
         always {
-            archiveArtifacts artifacts: 'deploy-evidence/*.json,deploy-evidence/*.txt', allowEmptyArchive: true
+            node('ssh-agent-with-docker') {
+                archiveArtifacts artifacts: 'deploy-evidence/*.json,deploy-evidence/*.txt', allowEmptyArchive: true
+            }
         }
         cleanup {
-            cleanWs(deleteDirs: true, notFailBuild: true)
+            node('ssh-agent-with-docker') {
+                cleanWs(deleteDirs: true, notFailBuild: true)
+            }
         }
     }
 }

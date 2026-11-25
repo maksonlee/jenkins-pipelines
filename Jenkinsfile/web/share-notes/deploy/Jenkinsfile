@@ -16,7 +16,7 @@ python3 -c 'import json, os; print(json.load(open(os.environ["JSON_FILE"]))[os.e
 }
 
 pipeline {
-    agent { label 'ssh-agent-with-docker' }
+    agent none
 
     options {
         timestamps()
@@ -43,28 +43,31 @@ pipeline {
     }
 
     stages {
-        stage('Checkout') {
-            steps {
-                script {
-                    if (!(params.GIT_REF ==~ /master|[0-9a-f]{40}/)) {
-                        error('GIT_REF must be master or a full commit SHA')
-                    }
-                    if (!(params.MODE in ['verify-only', 'stage-only', 'activate-production'])) {
-                        error('Choose a supported mode')
-                    }
-                    if (params.MODE != 'verify-only' && !(params.EXPECTED_RELEASE ==~ /[0-9a-f]{12}-[0-9a-f]{12}/)) {
-                        error('Enter the release ID from a verify-only run before using the origin')
-                    }
-                }
-                deleteDir()
-                dir('pipeline-source') {
-                    checkout scm
-                }
-                dir('source') {
-                    git branch: 'master', credentialsId: 'vault-github-ssh',
-                            url: 'git@github.com:maksonlee/share-notes.git'
-                    withEnv(["GIT_REF=${params.GIT_REF}"]) {
-                        sh '''#!/bin/bash
+        stage('Build and stage') {
+            agent { label 'ssh-agent-with-docker' }
+            stages {
+                stage('Checkout') {
+                    steps {
+                        script {
+                            if (!(params.GIT_REF ==~ /master|[0-9a-f]{40}/)) {
+                                error('GIT_REF must be master or a full commit SHA')
+                            }
+                            if (!(params.MODE in ['verify-only', 'stage-only', 'activate-production'])) {
+                                error('Choose a supported mode')
+                            }
+                            if (params.MODE != 'verify-only' && !(params.EXPECTED_RELEASE ==~ /[0-9a-f]{12}-[0-9a-f]{12}/)) {
+                                error('Enter the release ID from a verify-only run before using the origin')
+                            }
+                        }
+                        deleteDir()
+                        dir('pipeline-source') {
+                            checkout scm
+                        }
+                        dir('source') {
+                            git branch: 'master', credentialsId: 'vault-github-ssh',
+                                    url: 'git@github.com:maksonlee/share-notes.git'
+                            withEnv(["GIT_REF=${params.GIT_REF}"]) {
+                                sh '''#!/bin/bash
 set -euo pipefail
 if [[ "$GIT_REF" == master ]]; then
   commit=$(git rev-parse --verify 'refs/remotes/origin/master^{commit}')
@@ -83,22 +86,22 @@ if not re.fullmatch(r'[0-9]+\\.[0-9]+\\.[0-9]+', version):
 print(version)
 PY
 '''
+                            }
+                        }
+                        script {
+                            env.RELEASE_COMMIT = readFile('release-commit.txt').trim()
+                            env.FLUTTER_VERSION = readFile('flutter-version.txt').trim()
+                            env.DEPLOY_MODE = params.MODE
+                            env.FLUTTER_IMAGE = buildImages.flutter()
+                            env.BUILD_CONTAINER_RESOURCE_ARGS = buildContainer.resourceArgs().join(' ')
+                        }
                     }
                 }
-                script {
-                    env.RELEASE_COMMIT = readFile('release-commit.txt').trim()
-                    env.FLUTTER_VERSION = readFile('flutter-version.txt').trim()
-                    env.DEPLOY_MODE = params.MODE
-                    env.FLUTTER_IMAGE = buildImages.flutter()
-                    env.BUILD_CONTAINER_RESOURCE_ARGS = buildContainer.resourceArgs().join(' ')
-                }
-            }
-        }
 
-        stage('Test and build the web app') {
-            steps {
-                timeout(time: 40, unit: 'MINUTES') {
-                    sh '''#!/bin/bash
+                stage('Test and build the web app') {
+                    steps {
+                        timeout(time: 40, unit: 'MINUTES') {
+                            sh '''#!/bin/bash
 set -euo pipefail
 mkdir -p "$EVIDENCE" "$FLUTTER_CACHE_ROOT/fvm" "$FLUTTER_CACHE_ROOT/pub-cache"
 # The repository's helper decides the build identity shown in About; only its arguments are taken from it.
@@ -145,25 +148,25 @@ if mode != 'verify-only' and expected != candidate['releaseId']:
     raise SystemExit('The built release differs from EXPECTED_RELEASE; run verify-only again')
 PY
 '''
-                    script {
-                        env.RELEASE_ID = jsonField("${env.EVIDENCE}/candidate.json", 'releaseId')
-                        env.RELEASE_VERSION = jsonField("${env.EVIDENCE}/candidate.json", 'version')
-                        env.ARCHIVE_SHA256 = jsonField("${env.EVIDENCE}/candidate.json", 'archiveSha256')
-                        env.LIVE_VERSION = jsonField("${env.EVIDENCE}/origin-status.json", 'liveVersion')
-                        if (!(env.RELEASE_ID ==~ /[0-9a-f]{12}-[0-9a-f]{12}/) || !(env.ARCHIVE_SHA256 ==~ /[0-9a-f]{64}/) ||
-                                !(env.RELEASE_VERSION ==~ /[0-9A-Za-z.+-]{1,40}/) || !(env.LIVE_VERSION ==~ /[0-9A-Za-z.+-]{1,40}/)) {
-                            error('Unexpected release identifiers')
+                            script {
+                                env.RELEASE_ID = jsonField("${env.EVIDENCE}/candidate.json", 'releaseId')
+                                env.RELEASE_VERSION = jsonField("${env.EVIDENCE}/candidate.json", 'version')
+                                env.ARCHIVE_SHA256 = jsonField("${env.EVIDENCE}/candidate.json", 'archiveSha256')
+                                env.LIVE_VERSION = jsonField("${env.EVIDENCE}/origin-status.json", 'liveVersion')
+                                if (!(env.RELEASE_ID ==~ /[0-9a-f]{12}-[0-9a-f]{12}/) || !(env.ARCHIVE_SHA256 ==~ /[0-9a-f]{64}/) ||
+                                        !(env.RELEASE_VERSION ==~ /[0-9A-Za-z.+-]{1,40}/) || !(env.LIVE_VERSION ==~ /[0-9A-Za-z.+-]{1,40}/)) {
+                                    error('Unexpected release identifiers')
+                                }
+                            }
                         }
                     }
                 }
-            }
-        }
 
-        stage('Stage at the origin') {
-            when { expression { params.MODE in ['stage-only', 'activate-production'] } }
-            steps {
-                timeout(time: 10, unit: 'MINUTES') {
-                    sh '''#!/bin/bash
+                stage('Stage at the origin') {
+                    when { expression { params.MODE in ['stage-only', 'activate-production'] } }
+                    steps {
+                        timeout(time: 10, unit: 'MINUTES') {
+                            sh '''#!/bin/bash
 set -euo pipefail
 ssh_origin=(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN")
 remote="/tmp/share-notes-web-$RELEASE_ID.tar.gz"
@@ -173,6 +176,8 @@ trap '"${ssh_origin[@]}" "rm -f $remote"' EXIT
   < "$HELPER" > "$EVIDENCE/staged.json"
 cat "$EVIDENCE/staged.json"
 '''
+                        }
+                    }
                 }
             }
         }
@@ -188,7 +193,8 @@ cat "$EVIDENCE/staged.json"
         }
 
         stage('Switch production and check it') {
-            when { expression { params.MODE == 'activate-production' } }
+            agent { label 'ssh-agent-with-docker' }
+            when { beforeAgent true; expression { params.MODE == 'activate-production' } }
             steps {
                 timeout(time: 10, unit: 'MINUTES') {
                     sh '''#!/bin/bash
@@ -226,24 +232,30 @@ cat "$EVIDENCE/public-checks.txt"
 
     post {
         unsuccessful {
-            script {
-                if (fileExists("${env.EVIDENCE}/activation.json") &&
-                        jsonField("${env.EVIDENCE}/activation.json", 'state') == 'activated') {
-                    sh '''#!/bin/bash
+            node('ssh-agent-with-docker') {
+                script {
+                    if (fileExists("${env.EVIDENCE}/activation.json") &&
+                            jsonField("${env.EVIDENCE}/activation.json", 'state') == 'activated') {
+                        sh '''#!/bin/bash
 set -euo pipefail
 ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN" \\
   "sudo -n python3 - share-notes rollback $RELEASE_ID $RELEASE_COMMIT" < "$HELPER" > "$EVIDENCE/rollback.json"
 cat "$EVIDENCE/rollback.json"
 '''
+                    }
                 }
             }
         }
         always {
-            archiveArtifacts artifacts: 'deploy-evidence/*.json,deploy-evidence/*.txt,deploy-evidence/manifest.sha256',
-                    allowEmptyArchive: true
+            node('ssh-agent-with-docker') {
+                archiveArtifacts artifacts: 'deploy-evidence/*.json,deploy-evidence/*.txt,deploy-evidence/manifest.sha256',
+                        allowEmptyArchive: true
+            }
         }
         cleanup {
-            cleanWs(deleteDirs: true, notFailBuild: true)
+            node('ssh-agent-with-docker') {
+                cleanWs(deleteDirs: true, notFailBuild: true)
+            }
         }
     }
 }

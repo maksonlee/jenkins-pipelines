@@ -12,7 +12,7 @@ def call(Map cfg) {
     def config = flutterAndroid.config(cfg, 'flutterRelease')
 
     pipeline {
-        agent { label 'ssh-agent-with-docker' }
+        agent none
 
         options {
             timestamps()
@@ -36,117 +36,122 @@ def call(Map cfg) {
         }
 
         stages {
-            stage('Resolve release') {
-                steps {
-                    script {
-                        def gitRef = params.GIT_REF?.trim()
-                        if (!gitRef || (gitRef != config.branch && !(gitRef ==~ /^[0-9a-fA-F]{40}$/))) {
-                            error "GIT_REF must be ${config.branch} or a full 40-character commit SHA"
-                        }
-                        if (!(params.PLAY_TRACK in config.tracks)) {
-                            error 'PLAY_TRACK is not offered for this project'
-                        }
-                        def fraction = params.PLAY_ROLLOUT_FRACTION?.trim() ?: ''
-                        if (params.PLAY_RELEASE_STATUS == 'inProgress') {
-                            if (!(fraction ==~ /^0?\.[0-9]+$/) || fraction.toBigDecimal() <= 0) {
-                                error 'PLAY_ROLLOUT_FRACTION must be greater than 0 and less than 1 for inProgress'
-                            }
-                        } else if (fraction) {
-                            error 'PLAY_ROLLOUT_FRACTION is only used with PLAY_RELEASE_STATUS=inProgress'
-                        }
-                        env.GIT_REF = gitRef
-                    }
-                }
-            }
-
-            stage('Fetch code') {
-                steps {
-                    deleteDir()
-                    script {
-                        flutterAndroid.setEnvironment(config)
-                    }
-                    dir('source') {
-                        checkout(changelog: false, poll: false, scm: [
-                            $class: 'GitSCM',
-                            branches: [[name: env.GIT_REF]],
-                            extensions: [],
-                            userRemoteConfigs: [[credentialsId: 'vault-github-ssh', url: env.PROJECT_REPO]]
-                        ])
-                        script {
-                            withEnv(["RELEASE_BRANCH=${config.branch}", 'RELEASE_FORBIDDEN_PATHS=']) {
-                                env.RELEASE_COMMIT = sh(returnStdout: true,
-                                    script: libraryResource('android/release/resolve-commit.sh')).trim()
+            stage('Build and verify') {
+                agent { label 'ssh-agent-with-docker' }
+                stages {
+                    stage('Resolve release') {
+                        steps {
+                            script {
+                                def gitRef = params.GIT_REF?.trim()
+                                if (!gitRef || (gitRef != config.branch && !(gitRef ==~ /^[0-9a-fA-F]{40}$/))) {
+                                    error "GIT_REF must be ${config.branch} or a full 40-character commit SHA"
+                                }
+                                if (!(params.PLAY_TRACK in config.tracks)) {
+                                    error 'PLAY_TRACK is not offered for this project'
+                                }
+                                def fraction = params.PLAY_ROLLOUT_FRACTION?.trim() ?: ''
+                                if (params.PLAY_RELEASE_STATUS == 'inProgress') {
+                                    if (!(fraction ==~ /^0?\.[0-9]+$/) || fraction.toBigDecimal() <= 0) {
+                                        error 'PLAY_ROLLOUT_FRACTION must be greater than 0 and less than 1 for inProgress'
+                                    }
+                                } else if (fraction) {
+                                    error 'PLAY_ROLLOUT_FRACTION is only used with PLAY_RELEASE_STATUS=inProgress'
+                                }
+                                env.GIT_REF = gitRef
                             }
                         }
                     }
-                    script {
-                        flutterAndroid.resolveProject()
-                        flutterAndroid.resolveVersion()
-                        flutterAndroid.loadReleaseNotes(params.PLAY_TRACK)
-                        currentBuild.description = "${config.repo} ${env.PLAY_VERSION_NAME}+${env.PLAY_VERSION_CODE} ${env.RELEASE_COMMIT.take(12)}"
-                    }
-                }
-            }
 
-            stage('Fetch image') {
-                steps {
-                    script {
-                        flutterAndroid.fetchImage()
+                    stage('Fetch code') {
+                        steps {
+                            deleteDir()
+                            script {
+                                flutterAndroid.setEnvironment(config)
+                            }
+                            dir('source') {
+                                checkout(changelog: false, poll: false, scm: [
+                                    $class: 'GitSCM',
+                                    branches: [[name: env.GIT_REF]],
+                                    extensions: [],
+                                    userRemoteConfigs: [[credentialsId: 'vault-github-ssh', url: env.PROJECT_REPO]]
+                                ])
+                                script {
+                                    withEnv(["RELEASE_BRANCH=${config.branch}", 'RELEASE_FORBIDDEN_PATHS=']) {
+                                        env.RELEASE_COMMIT = sh(returnStdout: true,
+                                            script: libraryResource('android/release/resolve-commit.sh')).trim()
+                                    }
+                                }
+                            }
+                            script {
+                                flutterAndroid.resolveProject()
+                                flutterAndroid.resolveVersion()
+                                flutterAndroid.loadReleaseNotes(params.PLAY_TRACK)
+                                currentBuild.description = "${config.repo} ${env.PLAY_VERSION_NAME}+${env.PLAY_VERSION_CODE} ${env.RELEASE_COMMIT.take(12)}"
+                            }
+                        }
                     }
-                }
-            }
 
-            stage('Backend and metadata tests') {
-                options { timeout(time: 30, unit: 'MINUTES') }
-                steps {
-                    script {
-                        flutterAndroid.backendTests(config)
+                    stage('Fetch image') {
+                        steps {
+                            script {
+                                flutterAndroid.fetchImage()
+                            }
+                        }
                     }
-                }
-            }
 
-            stage('Prepare release signing') {
-                steps {
-                    script {
-                        flutterAndroid.prepareSigning()
+                    stage('Backend and metadata tests') {
+                        options { timeout(time: 30, unit: 'MINUTES') }
+                        steps {
+                            script {
+                                flutterAndroid.backendTests(config)
+                            }
+                        }
                     }
-                }
-            }
 
-            stage('Build') {
-                options { timeout(time: 60, unit: 'MINUTES') }
-                steps {
-                    script {
-                        flutterAndroid.build('appbundle-release')
+                    stage('Prepare release signing') {
+                        steps {
+                            script {
+                                flutterAndroid.prepareSigning()
+                            }
+                        }
                     }
-                }
-            }
 
-            stage('Connected Android tests') {
-                when { expression { flutterAndroid.hasConnectedTests() } }
-                options { timeout(time: 60, unit: 'MINUTES') }
-                steps {
-                    script {
-                        flutterAndroid.connectedTests()
+                    stage('Build') {
+                        options { timeout(time: 60, unit: 'MINUTES') }
+                        steps {
+                            script {
+                                flutterAndroid.build('appbundle-release')
+                            }
+                        }
                     }
-                }
-            }
 
-            stage('Release artifact checks') {
-                when { expression { flutterAndroid.hasReleaseArtifactChecks() } }
-                options { timeout(time: 20, unit: 'MINUTES') }
-                steps {
-                    script {
-                        flutterAndroid.releaseArtifactChecks()
+                    stage('Connected Android tests') {
+                        when { expression { flutterAndroid.hasConnectedTests() } }
+                        options { timeout(time: 60, unit: 'MINUTES') }
+                        steps {
+                            script {
+                                flutterAndroid.connectedTests()
+                            }
+                        }
                     }
-                }
-            }
 
-            stage('Archive and upload to Artifactory') {
-                steps {
-                    script {
-                        env.RELEASE_AAB_SHA256 = flutterAndroid.artifactSha256()
-                        flutterAndroid.archiveAndUpload()
+                    stage('Release artifact checks') {
+                        when { expression { flutterAndroid.hasReleaseArtifactChecks() } }
+                        options { timeout(time: 20, unit: 'MINUTES') }
+                        steps {
+                            script {
+                                flutterAndroid.releaseArtifactChecks()
+                            }
+                        }
+                    }
+
+                    stage('Archive and upload to Artifactory') {
+                        steps {
+                            script {
+                                env.RELEASE_AAB_SHA256 = flutterAndroid.artifactSha256()
+                                flutterAndroid.archiveAndUpload()
+                            }
+                        }
                     }
                 }
             }
@@ -164,7 +169,8 @@ def call(Map cfg) {
             }
 
             stage('Upload to Google Play') {
-                when { expression { params.PUBLISH_TO_PLAY } }
+                agent { label 'ssh-agent-with-docker' }
+                when { beforeAgent true; expression { params.PUBLISH_TO_PLAY } }
                 options { timeout(time: 30, unit: 'MINUTES') }
                 steps {
                     script {
@@ -184,7 +190,9 @@ def call(Map cfg) {
 
         post {
             always {
-                cleanWs()
+                node('ssh-agent-with-docker') {
+                    cleanWs()
+                }
             }
         }
     }

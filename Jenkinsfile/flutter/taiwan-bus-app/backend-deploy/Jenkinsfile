@@ -5,7 +5,7 @@
 // verifies and rolls back on failure. This job runs it from a clean checkout of a commit on main, after a manual
 // approval. verify-only runs the same edge check and tests and reports what is deployed, without touching the host.
 pipeline {
-    agent { label 'ssh-agent-with-docker' }
+    agent none
 
     options {
         timestamps()
@@ -29,22 +29,25 @@ pipeline {
     }
 
     stages {
-        stage('Checkout') {
-            steps {
-                script {
-                    if (!(params.GIT_REF ==~ /main|[0-9a-f]{40}/)) {
-                        error('GIT_REF must be main or a full commit SHA')
-                    }
-                    if (!(params.MODE in ['verify-only', 'deploy-production'])) {
-                        error('Choose a supported mode')
-                    }
-                }
-                deleteDir()
-                dir('source') {
-                    git branch: 'main', credentialsId: 'vault-github-ssh',
-                            url: 'git@github.com:maksonlee/taiwan-bus-app.git'
-                    withEnv(["GIT_REF=${params.GIT_REF}"]) {
-                        sh '''#!/bin/bash
+        stage('Check') {
+            agent { label 'ssh-agent-with-docker' }
+            stages {
+                stage('Checkout') {
+                    steps {
+                        script {
+                            if (!(params.GIT_REF ==~ /main|[0-9a-f]{40}/)) {
+                                error('GIT_REF must be main or a full commit SHA')
+                            }
+                            if (!(params.MODE in ['verify-only', 'deploy-production'])) {
+                                error('Choose a supported mode')
+                            }
+                        }
+                        deleteDir()
+                        dir('source') {
+                            git branch: 'main', credentialsId: 'vault-github-ssh',
+                                    url: 'git@github.com:maksonlee/taiwan-bus-app.git'
+                            withEnv(["GIT_REF=${params.GIT_REF}"]) {
+                                sh '''#!/bin/bash
 set -euo pipefail
 if [[ "$GIT_REF" == main ]]; then
   commit=$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')
@@ -56,18 +59,18 @@ git checkout --quiet --detach "$commit"
 test -z "$(git status --porcelain)"
 printf '%s\\n' "$commit" > ../release-commit.txt
 '''
+                            }
+                        }
+                        script {
+                            env.RELEASE_COMMIT = readFile('release-commit.txt').trim()
+                        }
                     }
                 }
-                script {
-                    env.RELEASE_COMMIT = readFile('release-commit.txt').trim()
-                }
-            }
-        }
 
-        stage('Check the edge, run the tests and compare') {
-            steps {
-                timeout(time: 30, unit: 'MINUTES') {
-                    sh '''#!/bin/bash
+                stage('Check the edge, run the tests and compare') {
+                    steps {
+                        timeout(time: 30, unit: 'MINUTES') {
+                            sh '''#!/bin/bash
 set -euo pipefail
 python3 -m venv venv
 venv/bin/python -m pip install --quiet --disable-pip-version-check -r source/requirements-dev.txt -c source/constraints.txt
@@ -95,12 +98,14 @@ fi
 printf '%s\\n' "$difference" > deploy-difference.txt
 echo "Commit $RELEASE_COMMIT; deployed revision: $deployed; $difference"
 '''
-                }
-                script {
-                    env.DEPLOYED_REVISION = readFile('deployed-revision.txt').trim()
-                    env.DEPLOY_DIFFERENCE = readFile('deploy-difference.txt').trim()
-                    if (!(env.DEPLOY_DIFFERENCE ==~ /[A-Za-z0-9 ,:;]{1,200}/)) {
-                        error('Unexpected comparison text')
+                        }
+                        script {
+                            env.DEPLOYED_REVISION = readFile('deployed-revision.txt').trim()
+                            env.DEPLOY_DIFFERENCE = readFile('deploy-difference.txt').trim()
+                            if (!(env.DEPLOY_DIFFERENCE ==~ /[A-Za-z0-9 ,:;]{1,200}/)) {
+                                error('Unexpected comparison text')
+                            }
+                        }
                     }
                 }
             }
@@ -118,7 +123,8 @@ echo "Commit $RELEASE_COMMIT; deployed revision: $deployed; $difference"
         }
 
         stage('Deploy and check') {
-            when { expression { params.MODE == 'deploy-production' } }
+            agent { label 'ssh-agent-with-docker' }
+            when { beforeAgent true; expression { params.MODE == 'deploy-production' } }
             steps {
                 timeout(time: 45, unit: 'MINUTES') {
                     sh '''#!/bin/bash
@@ -142,7 +148,9 @@ echo "$status $SITE/"
 
     post {
         cleanup {
-            cleanWs(deleteDirs: true, notFailBuild: true)
+            node('ssh-agent-with-docker') {
+                cleanWs(deleteDirs: true, notFailBuild: true)
+            }
         }
     }
 }
