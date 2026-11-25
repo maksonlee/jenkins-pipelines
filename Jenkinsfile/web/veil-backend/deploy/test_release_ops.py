@@ -117,6 +117,24 @@ class ReleaseOpsTest(unittest.TestCase):
             self.origin.activate(candidate['releaseId'])
         self.assertEqual(self.commands, [])
 
+    def test_old_staged_binaries_are_pruned_but_never_the_live_one(self):
+        import os as _os
+        staged = []
+        for index in range(7):
+            candidate, binary = self.candidate(payload=f'b{index}'.encode())
+            self.stage(candidate, binary)
+            if index == 0:
+                self.origin.activate(candidate['releaseId'])   # the oldest one is live
+            _os.utime(self.home / 'releases' / candidate['releaseId'], (1_000_000 + index, 1_000_000 + index))
+            staged.append(candidate)
+        newest, binary = self.candidate(payload=b'newest')
+        receipt = self.stage(newest, binary)
+        self.assertEqual(receipt['pruned'], [staged[1]['releaseId']])
+        self.assertEqual(self.origin.status()['staged'],
+                         sorted([newest['releaseId'], staged[0]['releaseId']] + [c['releaseId'] for c in staged[2:]]))
+        # The live release still holds the binary it replaced.
+        self.assertEqual(self.origin.rollback(staged[0]['releaseId'])['state'], 'rolled-back')
+
     def test_rollback_refuses_when_another_binary_is_live(self):
         candidate, binary = self.candidate()
         self.stage(candidate, binary)

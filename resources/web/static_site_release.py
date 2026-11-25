@@ -34,6 +34,8 @@ SITES = {
     },
 }
 RELEASE_ID = re.compile(r'[0-9a-f]{12}-[0-9a-f]{12}')
+# Staged releases kept besides the one that is live and the one just staged or activated.
+KEEP_RELEASES = 5
 MAX_ARCHIVE_BYTES = 300 * 1024 * 1024
 
 
@@ -142,6 +144,19 @@ class Origin:
         require(release_id(commit, entries) == identifier, 'Release files differ from the release ID')
         return entries
 
+    def prune(self, *protected):
+        """Remove old staged releases: all but the newest KEEP_RELEASES, never the live one or a given one."""
+        live = content_id(tree_manifest(self.live))
+        keep = {Path(p) for p in protected}
+        others = sorted((p for p in self.store.iterdir() if p.is_dir() and RELEASE_ID.fullmatch(p.name)
+                         and p not in keep and not p.name.endswith('-' + live)),
+                        key=lambda p: p.stat().st_mtime, reverse=True)
+        removed = []
+        for release in others[KEEP_RELEASES:]:
+            shutil.rmtree(release)
+            removed.append(release.name)
+        return sorted(removed)
+
     def status(self):
         staged = sorted(p.name for p in self.store.iterdir() if RELEASE_ID.fullmatch(p.name)) if self.store.is_dir() else []
         return {**self.live_state(), 'staged': staged}
@@ -180,7 +195,7 @@ class Origin:
             except BaseException:
                 shutil.rmtree(staging, ignore_errors=True)
                 raise
-            return {'state': 'staged', 'releaseId': identifier, **self.live_state()}
+            return {'state': 'staged', 'releaseId': identifier, **self.live_state(), 'pruned': self.prune(destination)}
 
     def sync(self, source, destination):
         # The way the site was deployed by hand: new files appear together at the end, then removed files go.
@@ -208,7 +223,7 @@ class Origin:
                 self.sync(previous, self.live)
                 raise
             return {'state': 'activated', 'releaseId': identifier, 'previousVersion': before['liveVersion'],
-                    'previousContent': before['liveContent']}
+                    'previousContent': before['liveContent'], 'pruned': self.prune(destination)}
 
     def rollback(self, identifier, commit):
         destination = self.release(identifier)

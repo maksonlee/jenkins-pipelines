@@ -105,6 +105,24 @@ class ReleaseOpsTest(unittest.TestCase):
         self.assertEqual(ops.tree_manifest(self.live), before)
         self.assertEqual(self.origin.rollback(candidate['releaseId'], COMMIT)['state'], 'not-needed')
 
+    def test_old_staged_releases_are_pruned_but_never_the_live_one(self):
+        import os as _os
+        staged = []
+        for index in range(7):
+            candidate, archive = self.packaged(name=f'r{index}', version=f'1.{index}.0')
+            self.stage(candidate, archive)
+            if index == 0:
+                self.origin.activate(candidate['releaseId'], COMMIT)   # the oldest one is live
+            _os.utime(self.base / 'releases' / candidate['releaseId'], (1_000_000 + index, 1_000_000 + index))
+            staged.append(candidate)
+        newest, archive = self.packaged(name='newest', version='2.0.0')
+        receipt = self.stage(newest, archive)
+        # Kept: the live release, the one just staged and the newest five others; r1 is the one that goes.
+        self.assertEqual(receipt['pruned'], [staged[1]['releaseId']])
+        self.assertEqual(self.origin.status()['staged'],
+                         sorted([newest['releaseId'], staged[0]['releaseId']] + [c['releaseId'] for c in staged[2:]]))
+        self.assertEqual(self.origin.rollback(staged[0]['releaseId'], COMMIT)['state'], 'rolled-back')
+
     def test_rollback_refuses_when_something_else_is_live(self):
         candidate, archive = self.packaged()
         self.stage(candidate, archive)

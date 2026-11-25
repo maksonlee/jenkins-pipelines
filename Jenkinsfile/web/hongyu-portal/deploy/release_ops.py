@@ -27,6 +27,8 @@ WRITABLE = ('storage', 'bootstrap/cache')
 MAX_ARCHIVE_BYTES = 200 * 1024 * 1024
 ARTISAN_CACHES = ('config:cache', 'route:cache', 'view:cache')
 PHP_SERVICE = 'php8.3-fpm'
+# Releases kept besides the live one and the one that holds the environment file.
+KEEP_RELEASES = 5
 
 
 class ReleaseError(Exception):
@@ -138,6 +140,18 @@ class Origin:
         require(release_id(commit, listed) == identifier, 'Release ID differs from the manifest')
         return listed
 
+    def prune(self, *protected):
+        """Remove old releases: all but the newest KEEP_RELEASES, never the live one, the environment's or a given one."""
+        keep = {self.live_release(), self.environment_source().parent, *protected}
+        others = sorted((p for p in self.releases.iterdir() if p.is_dir() and not p.is_symlink() and p not in keep
+                         and not p.name.startswith('.')), key=lambda p: p.stat().st_mtime, reverse=True)
+        removed = []
+        for release in others[KEEP_RELEASES:]:
+            require(release.parent == self.releases, 'Refusing to remove a path outside releases')
+            shutil.rmtree(release)
+            removed.append(release.name)
+        return sorted(removed)
+
     def status(self):
         live = self.live_release()
         return {'current': live.name, 'releases': sorted(p.name for p in self.releases.iterdir() if p.is_dir()),
@@ -197,7 +211,8 @@ class Origin:
                 for leftover in (staging, destination):
                     shutil.rmtree(leftover, ignore_errors=True)
                 raise
-            return {'state': 'staged', 'releaseId': identifier, 'current': previous.name}
+            return {'state': 'staged', 'releaseId': identifier, 'current': previous.name,
+                    'pruned': self.prune(destination)}
 
     def artisan(self, directory, command):
         prefix = ['runuser', '-u', OWNER, '-g', GROUP, '--'] if self.privileged else []
@@ -230,7 +245,8 @@ class Origin:
             except BaseException:
                 self.switch(previous)
                 raise
-            return {'state': 'activated', 'releaseId': identifier, 'previousRelease': previous.name}
+            return {'state': 'activated', 'releaseId': identifier, 'previousRelease': previous.name,
+                    'pruned': self.prune(previous)}
 
     def rollback(self, identifier, previous):
         failed, restored = self.release(identifier), self.releases / previous

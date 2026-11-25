@@ -73,7 +73,7 @@ class ReleaseOpsTest(unittest.TestCase):
         candidate, archive = self.packaged()
         receipt = self.stage(candidate, archive)
         release = self.root / 'releases' / candidate['releaseId']
-        self.assertEqual(receipt, {'state': 'staged', 'releaseId': candidate['releaseId'], 'current': 'live-1'})
+        self.assertEqual(receipt, {'state': 'staged', 'releaseId': candidate['releaseId'], 'current': 'live-1', 'pruned': []})
         self.assertEqual(self.live(), 'live-1')
         self.assertEqual(os.path.realpath(release / '.env'), str(self.root / 'releases/old-env/.env'))
         self.assertEqual(json.loads((release / 'release.json').read_text())['previousRelease'], 'live-1')
@@ -129,7 +129,8 @@ class ReleaseOpsTest(unittest.TestCase):
             self.origin.activate(candidate['releaseId'], COMMIT)
         self.stage(candidate, archive)
         activated = self.origin.activate(candidate['releaseId'], COMMIT)
-        self.assertEqual(activated, {'state': 'activated', 'releaseId': candidate['releaseId'], 'previousRelease': 'live-1'})
+        self.assertEqual(activated, {'state': 'activated', 'releaseId': candidate['releaseId'], 'previousRelease': 'live-1',
+                                     'pruned': []})
         self.assertEqual(self.live(), candidate['releaseId'])
         self.assertEqual([command for command, _ in self.commands[-2:]],
                          [['systemctl', 'reload', ops.PHP_SERVICE], ['systemctl', 'is-active', '--quiet', ops.PHP_SERVICE]])
@@ -169,6 +170,27 @@ class ReleaseOpsTest(unittest.TestCase):
         with self.origin.locked():
             with self.assertRaisesRegex(ops.ReleaseError, 'holds the lock'):
                 self.stage(candidate, archive)
+
+    def test_old_releases_are_pruned_but_never_the_live_one_or_the_environment_holder(self):
+        import os as _os
+        releases = self.root / 'releases'
+        for index in range(8):  # older than everything else, oldest first
+            old = releases / f'old-{index}'
+            old.mkdir()
+            _os.utime(old, (1_000_000 + index, 1_000_000 + index))
+        _os.utime(releases / 'old-env', (1, 1))   # the oldest of all, but it holds .env
+        _os.utime(releases / 'live-1', (2, 2))    # old, but live
+        candidate, archive = self.packaged()
+        receipt = self.stage(candidate, archive)
+        # Kept: live-1, old-env, the release just staged, and the newest five of the rest.
+        self.assertEqual(receipt['pruned'], ['old-0', 'old-1', 'old-2'])
+        self.assertEqual(sorted(p.name for p in releases.iterdir()),
+                         sorted(['live-1', 'old-env', candidate['releaseId']] + [f'old-{i}' for i in range(3, 8)]))
+        activated = self.origin.activate(candidate['releaseId'], COMMIT)
+        # live-1 is now the rollback target: protected by name, so the oldest other release goes instead.
+        self.assertEqual(activated['pruned'], [])
+        self.assertTrue((releases / 'live-1').is_dir())
+        self.assertEqual(self.origin.rollback(candidate['releaseId'], 'live-1')['state'], 'rolled-back')
 
     def test_status_reports_the_live_release_and_its_environment_source(self):
         status = self.origin.status()

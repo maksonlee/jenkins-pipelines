@@ -72,6 +72,11 @@ Jobs that do not follow the layout yet:
   the backend tests in a fresh virtual environment and compares the commit with the host's `DEPLOYED_REVISION`.
   `deploy-production` then asks for approval and runs the script, which stops the backend for about a minute,
   applies migrations and rolls back by itself. There is no stage-only mode, because the script has none.
+- **Old staged releases.** `web/hongyu-portal/deploy`, `web/share-notes/deploy`, `web/readerplay/deploy` and
+  `web/veil-backend/deploy` prune after every staging and activation: besides the live release and the one just
+  staged or activated (for hongyu also the release that holds `.env` and the rollback target), the newest five
+  stay and older ones are removed. The result lists them as `pruned`. piano-practice and taiwan-bus keep their own
+  rules.
 - `backstage/homelab-backstage-main-ci`: builds the homelab-backstage image and pushes it to Harbor.
 
 These jobs are listed in `jobs/jenkins_jobs.groovy` too, so the seed can recreate them.

@@ -28,6 +28,8 @@ RELEASE_ID = re.compile(r'[0-9a-f]{12}-[0-9a-f]{12}')
 MAX_GLIBC = (2, 39)
 MAX_BINARY_BYTES = 100 * 1024 * 1024
 HEALTH_ATTEMPTS = 30
+# Staged releases kept besides the one that is live and the one just staged or activated.
+KEEP_RELEASES = 5
 
 
 class ReleaseError(Exception):
@@ -128,6 +130,19 @@ class Origin:
         return {'liveSha256': digest, 'liveRelease': record.get('releaseId'), 'liveCommit': record.get('commit'),
                 'liveMigrations': record.get('migrations')}
 
+    def prune(self, *protected):
+        """Remove old staged releases: all but the newest KEEP_RELEASES, never the live one or a given one."""
+        live = file_digest(self.binary)
+        keep = {Path(p) for p in protected}
+        others = sorted((p for p in self.releases.iterdir() if p.is_dir() and RELEASE_ID.fullmatch(p.name)
+                         and p not in keep and not p.name.endswith('-' + live[:12])),
+                        key=lambda p: p.stat().st_mtime, reverse=True)
+        removed = []
+        for release in others[KEEP_RELEASES:]:
+            shutil.rmtree(release)
+            removed.append(release.name)
+        return sorted(removed)
+
     def status(self):
         staged = sorted(p.name for p in self.releases.iterdir() if RELEASE_ID.fullmatch(p.name)) if self.releases.is_dir() else []
         return {**self.live(), 'healthy': self.health(), 'staged': staged}
@@ -169,7 +184,7 @@ class Origin:
             except BaseException:
                 shutil.rmtree(destination, ignore_errors=True)
                 raise
-            return {'state': 'staged', 'releaseId': identifier, **self.live()}
+            return {'state': 'staged', 'releaseId': identifier, **self.live(), 'pruned': self.prune(destination)}
 
     def activate(self, identifier):
         with self.locked():
@@ -187,7 +202,7 @@ class Origin:
             self.record.write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
             if self.restart_and_wait():
                 return {'state': 'activated', 'releaseId': identifier, 'previousSha256': before['liveSha256'],
-                        'previousRelease': before['liveRelease']}
+                        'previousRelease': before['liveRelease'], 'pruned': self.prune(directory)}
             self.install(previous)
             if previous_record is None:
                 self.record.unlink()
