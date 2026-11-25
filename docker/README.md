@@ -33,6 +33,9 @@ Never point a job at a mutable tag.
 - `Jenkinsfile/android/veil-android/ci/Dockerfile` (`android()` by digest plus Rust 1.98.0, four Android targets and
   a host C toolchain) is built on every run by the veil-android CI. Its cargo cache is
   `/home/administrator/jenkins/android-cache/rust/veil-android`.
+- `Jenkinsfile/android/termstay/ci/Dockerfile` (Ubuntu 26.04 by digest plus the host packages termstay documents) is
+  built on every run by the termstay CI. The repository's own toolchains are cached in
+  `/home/administrator/jenkins/termstay-cache/toolchains`.
 - The `aosp-builder` images were removed from the agent with the AOSP jobs on 2026-11-25.
 
 **Open item:** `gst-stream-wall-android-build-env` should be rebuilt on `android()` so that every Android image

@@ -19,6 +19,7 @@ def projects = [
     [folder: 'android/learn-go-board-game', roles: ['ci'], repo: 'learn-go-board-game', type: 'android'],
     [folder: 'android/cloud-cost-widgets', roles: ['ci', 'release'], repo: 'cloud-cost-widgets', type: 'android'],
     [folder: 'android/veil-android', roles: ['ci'], repo: 'veil-android', type: 'android'],
+    [folder: 'android/termstay', roles: ['ci'], repo: 'termstay', type: 'android'],
     [folder: 'flutter/taiwan-bus-app', roles: ['ci', 'release'], repo: 'taiwan-bus-app', type: 'flutter'],
     [folder: 'flutter/share-notes', roles: ['ci', 'release'], repo: 'share-notes', type: 'flutter'],
     [folder: 'flutter/classic-calculator', roles: ['ci', 'release'], repo: 'classic-calculator', type: 'flutter'],
@@ -38,6 +39,7 @@ def descriptions = [
 
 // Jobs with their own Jenkinsfile instead of androidRelease or flutterRelease.
 def jobDescriptions = [
+    'android/termstay/ci': 'CI for the Android client of maksonlee/termstay with its own Jenkinsfile: the repository\'s setup script and tool/build-android.ps1 -Abi x86_64 (native library, WebView page, debug APK and lint) with the repository\'s own toolchains. Triggered by GitHub pushes; uses no signing material.',
     'android/veil-android/ci': 'CI for maksonlee/veil-android with its own Jenkinsfile: the documented full gate (checks, debug lint, debug, unsigned release and instrumentation APKs) with the Rust toolchain its native crate requires. Triggered by GitHub pushes; uses no signing material.',
     'android/gst-stream-wall/ci': 'CI for maksonlee/gst-stream-wall with its own Jenkinsfile: unit tests, debug lint and the shell debug APK in the release job\'s image and Rust toolchain. Triggered by GitHub pushes; uses no release signing material.',
     'android/cloud-cost-widgets/release': 'Manual Google Play release for maksonlee/cloud-cost-widgets with its own Jenkinsfile: alpha-status reads the Play state, internal-preflight builds and verifies the signed phone and Wear OS bundles, and internal-submit uploads the bundles of an approved preflight build to Internal testing.',

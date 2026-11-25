@@ -1,0 +1,74 @@
+// CI for the Android client of maksonlee/termstay main. The repository builds only with its own toolchains, so
+// this job runs its documented entry points and nothing else: `tool/setup-build-environment.sh`, which installs
+// the pinned PowerShell, mise, Rust, Node and Android SDK under `.toolchains`, then `tool/build-android.ps1 -Abi
+// x86_64`, the Android step of the repository's full check (native library, WebView page, debug APK and lint).
+// `.toolchains` is a cache directory on the agent mounted into the checkout; no SDK or Gradle cache outside the
+// repository is used. The checkout is a full clone because the build number counts commits. No signing material.
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout()
+        timeout(time: 180, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10'))
+    }
+
+    triggers {
+        githubPush()
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                deleteDir()
+                dir('pipeline-source') {
+                    checkout scm
+                }
+                dir('source') {
+                    git branch: 'main', credentialsId: 'vault-github-ssh',
+                            url: 'git@github.com:maksonlee/termstay.git'
+                    sh '''#!/bin/bash
+set -euo pipefail
+test "$(git rev-parse --is-shallow-repository)" = false
+echo "termstay main: $(git rev-parse HEAD)"
+mkdir -p .toolchains /home/administrator/jenkins/termstay-cache/toolchains
+'''
+                }
+            }
+        }
+
+        stage('Set up toolchains and build the Android client') {
+            steps {
+                script {
+                    def image = sh(returnStdout: true,
+                            script: 'docker build --quiet pipeline-source/Jenkinsfile/android/termstay/ci').trim()
+                    def args = buildContainer.resourceArgs() + [
+                            "--mount type=bind,src=/home/administrator/jenkins/termstay-cache/toolchains,dst=${pwd()}/source/.toolchains",
+                            '--env HOME=/tmp'
+                    ]
+                    docker.image(image).inside(args.join(' ')) {
+                        dir('source') {
+                            sh '''#!/bin/bash
+set -euo pipefail
+tool/setup-build-environment.sh
+./.toolchains/powershell/current/pwsh -NoLogo -NoProfile -NonInteractive -File tool/build-android.ps1 -Abi x86_64
+'''
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'source/apps/termstay-android/app/build/outputs/apk/debug/*.apk,source/apps/termstay-android/app/build/reports/lint-results-debug.*',
+                    allowEmptyArchive: true, fingerprint: true
+        }
+        cleanup {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}

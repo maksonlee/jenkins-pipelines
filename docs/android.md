@@ -124,6 +124,7 @@ its own (`publishPlayListings: false`).
 | `android/headshot-maker-android/{ci,release}` | package `com.maksonlee.headshotmaker`; same as beepbeep |
 | `android/taiwandrive/{ci,release}` | engine and pack JVM tests; alpha/internal; no bundled offline pack; signer checked against Vault |
 | `android/gst-stream-wall/ci` | own Jenkinsfile: unit tests, debug lint and the shell debug APK in the gst image; one Gradle worker |
+| `android/termstay/ci` | own Jenkinsfile and image (Ubuntu 26.04 with the packages its DEVELOPMENT.md lists): the repository's setup script and `tool/build-android.ps1 -Abi x86_64`, with its own toolchains cached on the agent |
 | `android/veil-android/ci` | own Jenkinsfile and image (Android image plus Rust 1.98.0 with four Android targets): the documented full gate with one worker, strict dependency verification and in-process Kotlin |
 | `android/learn-chess/ci` | `nativeAndroidCi`, traced evidence, emulator device suite, honors `[skip ci]` |
 | `android/learn-go-board-game/ci` | core, lesson and content-validator tests, app unit tests, debug lint, debug APKs |
