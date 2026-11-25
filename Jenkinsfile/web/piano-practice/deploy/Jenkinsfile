@@ -34,7 +34,7 @@ pipeline {
     }
 
     parameters {
-        choice(name: 'CI_JOB', choices: ['web/piano-practice/ci', 'web/piano-practice-main-ci'], description: 'The CI job that built the release. Use web/piano-practice-main-ci only for a release built before the jobs moved.')
+        choice(name: 'CI_JOB', choices: ['web/piano-practice/ci'], description: 'The CI job that built the release.')
         string(name: 'CI_BUILD', defaultValue: '', trim: true, description: 'Successful build number from that CI job.')
         choice(name: 'MODE', choices: ['verify-only', 'stage-only', 'activate-production'], description: 'Verify locally, stage at the origin, or activate production.')
         string(name: 'EXPECTED_RELEASE', defaultValue: '', trim: true, description: 'Required for origin staging or activation. Enter the 20-character release ID from the selected CI artifact.')
@@ -53,7 +53,7 @@ pipeline {
                 deleteDir()
                 checkout scm
                 script {
-                    if (!(params.CI_JOB in ['web/piano-practice/ci', 'web/piano-practice-main-ci'])) {
+                    if (!(params.CI_JOB in ['web/piano-practice/ci'])) {
                         error('Choose a supported CI job.')
                     }
                     env.SELECTED_CI_JOB = params.CI_JOB

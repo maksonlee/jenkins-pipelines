@@ -22,8 +22,9 @@ Jobs that do not follow the layout yet:
 
 - `unity/math-runner-*`: dedicated and recently qualified; its job names are part of its evidence.
 - `web/piano-practice/{ci,deploy}`: their own Jenkinsfiles; the deploy job takes the CI job and build to deploy and
-  checks the release at the origin. The former `web/piano-practice-main-ci` and `web/piano-practice-deploy` remain
-  until they are retired, and releases built by the former CI job stay deployable.
+  checks the release at the origin. The former `web/piano-practice-main-ci` and `web/piano-practice-deploy` were
+  deleted on 2026-11-25. Releases the former CI job built stay on the origin and the origin helper still accepts
+  them, but they can no longer be staged again from Jenkins.
 - `android/gst-stream-wall/release`: has the new path but keeps its own Jenkinsfile, with promotion, listing-only and
   qualification gates.
 - `android/cloud-cost-widgets/release`: has the new path but keeps its own Jenkinsfile and Play tools, with

@@ -40,7 +40,7 @@ contracts. Update them in the same change as the behavior they describe.
   - `web/piano-practice/{ci,deploy}`: their own Jenkinsfiles. `release_ops.py`, which also runs installed as root on
     the origin, and `package-release.mjs` accept the CI job names `web/piano-practice/ci` and the former
     `web/piano-practice-main-ci`, because the releases on the origin were built under the former name. The former
-    jobs `web/piano-practice-main-ci` and `web/piano-practice-deploy` stay until the owner retires them. After a
+    jobs `web/piano-practice-main-ci` and `web/piano-practice-deploy` were deleted on 2026-11-25 (owner's request). After a
     change to `release_ops.py`, reinstall it on the origin (see the deploy README).
   - `android/gst-stream-wall/release`: its own qualified Jenkinsfile.
   - `android/cloud-cost-widgets/release`: its own Jenkinsfile with alpha-status, internal-preflight and
