@@ -58,20 +58,27 @@ set -euo pipefail
 cargo fetch --locked --manifest-path native/message-crypto/Cargo.toml
 '''
                         }
-                        gradleRelease(':app:assembleDebug', [
-                                requiresSigning: false,
-                                image: image,
-                                insideArgs: insideArgs,
-                                mountAndroidCache: false,
-                                publishPlayListings: false,
-                                maxWorkers: 1,
-                                extraArgs: [
-                                        ':app:check', ':app:lintDebug', ':app:assembleRelease',
-                                        ':app:assembleDebugAndroidTest',
-                                        '--dependency-verification', 'strict',
-                                        '-Pkotlin.compiler.execution.strategy=in-process'
-                                ]
-                        ])
+                        // One JVM per step: on a cold cache the whole gate in one Gradle process exhausts the
+                        // project's 512 MB Metaspace limit during lint, which is also why its own release
+                        // procedure runs its steps in separate JVMs.
+                        def common = ['--dependency-verification', 'strict',
+                                      '-Pkotlin.compiler.execution.strategy=in-process']
+                        [
+                            [':app:assembleDebug', [':app:assembleDebugAndroidTest']],
+                            [':app:lintDebug', []],
+                            [':app:check', []],
+                            [':app:assembleRelease', []]
+                        ].each { step ->
+                            gradleRelease(step[0], [
+                                    requiresSigning: false,
+                                    image: image,
+                                    insideArgs: insideArgs,
+                                    mountAndroidCache: false,
+                                    publishPlayListings: false,
+                                    maxWorkers: 1,
+                                    extraArgs: step[1] + common
+                            ])
+                        }
                     }
                 }
             }
