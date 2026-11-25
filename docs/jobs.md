@@ -27,8 +27,9 @@ Jobs that do not follow the layout yet:
 - `android/gst-stream-wall/release`: has the new path but keeps its own Jenkinsfile, with promotion, listing-only and
   qualification gates.
 - `android/cloud-cost-widgets/release`: has the new path but keeps its own Jenkinsfile and Play tools, with
-  `alpha-status`, `internal-preflight` and `internal-submit` modes. `internal-submit` accepts only a preflight build
-  that ran at the same jenkins-pipelines commit, so rerun the preflight if `main` moved in between. Both bundles
+  `alpha-status`, `internal-preflight` and `internal-submit` modes. `internal-submit` takes the number of a preflight build that ran at the same
+  jenkins-pipelines commit (rerun the preflight if `main` moved in between), reads that build's AAB SHA-256 from its
+  archive and asks for approval before any Play access. Both bundles
   must be signed by the Vault upload key used for the build; no fingerprint is kept in this repository. The old
   `android/cloud-cost-widgets-release`, which loaded a pinned commit of an unmerged branch, was deleted on
   2026-11-25.

@@ -25,9 +25,7 @@ pipeline {
         string(name: 'MODE', defaultValue: 'alpha-status', trim: true,
                 description: 'alpha-status, internal-preflight, or internal-submit')
         string(name: 'SIGNED_BUILD', defaultValue: '', trim: true,
-                description: 'Approved internal-preflight build number for submission')
-        string(name: 'SIGNED_WEAR_SHA256', defaultValue: '', trim: true,
-                description: 'Approved Wear OS bundle archive SHA-256 for submission')
+                description: 'internal-preflight build number to submit; the approval step shows its AAB SHA-256')
     }
 
     environment {
@@ -46,10 +44,8 @@ pipeline {
                     if (!(params.MODE in ['alpha-status', 'internal-preflight', 'internal-submit'])) {
                         error('Select alpha-status, internal-preflight, or internal-submit')
                     }
-                    if (params.MODE == 'internal-submit' &&
-                            (!(params.SIGNED_BUILD ==~ /[1-9][0-9]{0,7}/) ||
-                             !(params.SIGNED_WEAR_SHA256 ==~ /[a-f0-9]{64}/))) {
-                        error('Provide the approved signing build number and the Wear OS bundle SHA-256')
+                    if (params.MODE == 'internal-submit' && !(params.SIGNED_BUILD ==~ /[1-9][0-9]{0,7}/)) {
+                        error('Provide the internal-preflight build number to submit')
                     }
                 }
                 deleteDir()
@@ -157,10 +153,37 @@ python3 "$RELEASE_TOOLS/verify_bundles.py" source release-evidence
                                 'release-evidence/upload-certificate-sha256.txt,release-evidence/signed-bundles.json,' +
                                 'release-evidence/alpha-status.json,release-evidence/bundles/*',
                         target: 'signed-input', fingerprintArtifacts: true)
+                script {
+                    // The digest the preflight build recorded for its one archived bundle. The verifier below checks
+                    // the archived bytes, report and commits against it, and the approval step shows it.
+                    env.SIGNED_WEAR_SHA256 = sh(returnStdout: true, script: '''#!/bin/bash
+set -euo pipefail
+sums=signed-input/release-evidence/bundles/SHA256SUMS
+test -f "$sums" && test ! -L "$sums"
+test "$(wc -l < "$sums")" = 1
+grep -Ex '[a-f0-9]{64}  wear-[0-9.]+-[0-9]+[.]aab' "$sums" | cut -c1-64
+''').trim()
+                    if (!(env.SIGNED_WEAR_SHA256 ==~ /[a-f0-9]{64}/)) {
+                        error('The preflight build did not archive exactly one Wear OS bundle digest')
+                    }
+                }
                 sh '''#!/bin/bash
 set -euo pipefail
 python3 "$RELEASE_TOOLS/verify_submission_artifacts.py" signed-input/release-evidence release-evidence/verified-input.json
 '''
+            }
+        }
+
+        stage('Approve the Wear OS submission') {
+            when { expression { params.MODE == 'internal-submit' } }
+            steps {
+                // Shorter than the publisher's 30-minute limit on the age of the preflight's Play status read.
+                timeout(time: 25, unit: 'MINUTES') {
+                    input message: "Submit Wear OS ${env.WEAR_VERSION_NAME} (${env.WEAR_VERSION_CODE}) of " +
+                            "com.maksonlee.cloudcost.aws to Internal testing (Wear OS), replacing 200008? Source " +
+                            "${env.PRODUCT_SHA}, preflight build #${params.SIGNED_BUILD}, AAB SHA-256 " +
+                            "${env.SIGNED_WEAR_SHA256}. Every phone track stays unchanged."
+                }
             }
         }
 
