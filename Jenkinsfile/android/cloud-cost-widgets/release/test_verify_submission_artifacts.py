@@ -8,7 +8,7 @@ from unittest.mock import patch
 import verify_submission_artifacts as verifier
 
 
-PHONE_FILE = 'phone-1.0.11-100012.aab'
+PHONE_FILE = 'phone-1.0.12-100013.aab'
 
 
 class SubmissionArtifactTest(unittest.TestCase):
@@ -37,7 +37,7 @@ class SubmissionArtifactTest(unittest.TestCase):
             'bundletool_sha256': verifier.BUNDLETOOL_SHA,
             'bundles': [
                 {
-                    'package': 'com.maksonlee.cloudcost.aws', 'version_name': '1.0.11', 'version_code': '100012',
+                    'package': 'com.maksonlee.cloudcost.aws', 'version_name': '1.0.12', 'version_code': '100013',
                     'min_sdk': '26', 'target_sdk': '36', 'form_factor': 'phone', 'sha256': self.digests['phone'],
                     'upload_certificate_sha256': self.upload_certificate, 'file': PHONE_FILE,
                 },
@@ -94,7 +94,7 @@ class SubmissionArtifactTest(unittest.TestCase):
         for index in (0,):
             bundle = self.report['bundles'][index]
             for field, wrong_value in (
-                ('form_factor', 'wear'), ('version_name', '1.0.9'), ('version_code', '100011'), ('target_sdk', '35'),
+                ('form_factor', 'wear'), ('version_name', '1.0.9'), ('version_code', '100012'), ('target_sdk', '35'),
                 ('upload_certificate_sha256', '0' * 64),
             ):
                 original = bundle[field]
@@ -161,5 +161,5 @@ class SubmissionArtifactTest(unittest.TestCase):
         self.assertEqual(report['source_commit'], self.source_commit)
         self.assertEqual(report['source_pipeline_commit'], self.pipeline_commit)
         self.assertEqual(report['source_build'], 19)
-        self.assertEqual(report['version_names'], {'phone': '1.0.11'})
-        self.assertEqual(report['bundle_sha256'], {'100012': self.digests['phone']})
+        self.assertEqual(report['version_names'], {'phone': '1.0.12'})
+        self.assertEqual(report['bundle_sha256'], {'100013': self.digests['phone']})

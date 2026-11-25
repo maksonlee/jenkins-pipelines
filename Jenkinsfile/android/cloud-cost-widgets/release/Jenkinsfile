@@ -29,11 +29,11 @@ pipeline {
     }
 
     environment {
-        // Phone 1.0.11 ships alone: only the phone bundle is built, verified and submitted. Every Wear OS track
+        // Phone 1.0.12 ships alone: only the phone bundle is built, verified and submitted. Every Wear OS track
         // stays unchanged, with Wear OS 1.0.10 (200011) on Internal testing (Wear OS).
-        PRODUCT_SHA = 'ceba9f8e1074e7227e91954aa6a58db00103e57c'
-        PHONE_VERSION_NAME = '1.0.11'
-        PHONE_VERSION_CODE = '100012'
+        PRODUCT_SHA = '3b563cc10500d16c2175941d9eb8edfc5fc3b56a'
+        PHONE_VERSION_NAME = '1.0.12'
+        PHONE_VERSION_CODE = '100013'
         RELEASE_TOOLS = 'Jenkinsfile/android/cloud-cost-widgets/release'
     }
 
@@ -185,7 +185,7 @@ python3 "$RELEASE_TOOLS/verify_submission_artifacts.py" signed-input/release-evi
                 // Shorter than the publisher's 30-minute limit on the age of the preflight's Play status read.
                 timeout(time: 25, unit: 'MINUTES') {
                     input message: "Submit phone ${env.PHONE_VERSION_NAME} (${env.PHONE_VERSION_CODE}) of " +
-                            "com.maksonlee.cloudcost.aws to Internal testing, replacing 100011? Source " +
+                            "com.maksonlee.cloudcost.aws to Internal testing, replacing 100012? Source " +
                             "${env.PRODUCT_SHA}, preflight build #${params.SIGNED_BUILD}, AAB SHA-256 " +
                             "${env.SIGNED_PHONE_SHA256}. Phone Alpha and every Wear OS track stay unchanged."
                 }
@@ -198,7 +198,7 @@ python3 "$RELEASE_TOOLS/verify_submission_artifacts.py" signed-input/release-evi
             steps {
                 script {
                     writeFile file: 'release-evidence/release-sequencing.txt', text:
-                            'The requested release target is Internal testing for the phone app, version 100011 to 100012.\n' +
+                            'The requested release target is Internal testing for the phone app, version 100012 to 100013.\n' +
                             'Phone Closed testing Alpha 100009, Internal testing (Wear OS) 200011 and both production tracks stay unchanged.\n' +
                             'Open evidence includes intended review access, live AWS, physical devices, Play-installed pairing, and final listing and privacy declarations.\n'
                     writeFile file: 'release-evidence/internal-submit.json', text:

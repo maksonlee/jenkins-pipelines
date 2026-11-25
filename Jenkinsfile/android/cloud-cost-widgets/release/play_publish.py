@@ -1,4 +1,4 @@
-"""Advance phone Internal testing to 100012 in one guarded edit; phone Alpha and every Wear OS track stay unchanged."""
+"""Advance phone Internal testing to 100013 in one guarded edit; phone Alpha and every Wear OS track stay unchanged."""
 
 import hashlib
 import json
@@ -24,24 +24,27 @@ from verify_submission_artifacts import ArtifactVerificationError, load_release_
 
 PHONE_NOTES = [
     {"language": "en-US", "text": (
-        "The exact amount in a budget's details shows six decimals; tap it to see every digit."
+        "In budget details, filters read as plain text, such as SERVICE = Amazon Simple Storage Service, and "
+        "budgets without filters no longer show raw AWS data."
     )},
     {"language": "zh-TW", "text": (
-        "預算詳細資料中的精確金額顯示到小數點後 6 位，點一下可看完整數字。"
+        "預算詳細資料中的篩選條件改用看得懂的文字顯示，例如 SERVICE = Amazon Simple Storage Service；"
+        "沒有篩選條件的預算不再顯示 AWS 的原始資料。"
     )},
 ]
 PHONE_ALPHA = "alpha"
 PHONE_INTERNAL = "internal"
 WEAR_INTERNAL = "wear:internal"
-PHONE_VERSION_NAME = "1.0.11"
-# Phone 1.0.11 changes the exact amount in a budget's details, so it ships alone beside Wear OS 1.0.10.
-TRACKS = {PHONE_INTERNAL: 100012}
+PHONE_VERSION_NAME = "1.0.12"
+# Phone 1.0.12 shows budget filters as readable lines, so it ships alone beside Wear OS 1.0.10. Wear OS 1.0.11,
+# with the same change, ships in a separate run.
+TRACKS = {PHONE_INTERNAL: 100013}
 FORM_FACTORS = {PHONE_INTERNAL: "phone"}
 SIGNED_DIGEST_PARAMETERS = {PHONE_INTERNAL: "SIGNED_PHONE_SHA256"}
-# The alpha-status run of android/cloud-cost-widgets/release #2 (2026-11-24) read phone Internal 100011 and phone
-# Alpha 100009 as published, and release build #11 (2026-11-25) committed Wear OS Internal 200011 (1.0.10).
+# The alpha-status run of android/cloud-cost-widgets/release #2 (2026-11-24) read phone Alpha 100009 as published,
+# release build #11 (2026-11-25) committed Wear OS Internal 200011 (1.0.10) and #13 phone Internal 100012 (1.0.11).
 # Phone Alpha and Wear OS Internal are guarded and left unchanged.
-PREDECESSORS = {PHONE_INTERNAL: 100011}
+PREDECESSORS = {PHONE_INTERNAL: 100012}
 UNCHANGED_TRACKS = {PHONE_ALPHA: 100009, WEAR_INTERNAL: 200011}
 RELEASE_NOTES = {PHONE_INTERNAL: PHONE_NOTES}
 # Build #22's edit inventory also listed 1.0.4 on both Open testing tracks. Play Console shows the phone track

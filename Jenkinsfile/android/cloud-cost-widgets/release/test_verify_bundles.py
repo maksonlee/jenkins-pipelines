@@ -10,7 +10,7 @@ import verify_bundles as verifier
 from verify_bundles import VerificationError, require_signature, signer_fingerprint, verify_manifest
 
 
-def manifest(version_code, minimum, target, feature='', metadata='', version='1.0.11'):
+def manifest(version_code, minimum, target, feature='', metadata='', version='1.0.12'):
     return f'''<manifest xmlns:android="http://schemas.android.com/apk/res/android"
         package="com.maksonlee.cloudcost.aws" android:versionName="{version}" android:versionCode="{version_code}">
         <uses-sdk android:minSdkVersion="{minimum}" android:targetSdkVersion="{target}"/>
@@ -24,20 +24,20 @@ STANDALONE = '<meta-data android:name="com.google.android.wearable.standalone" a
 
 class ManifestTest(unittest.TestCase):
     def test_phone_and_standalone_watch(self):
-        phone = verify_manifest(manifest('100012', '26', '36'), '1.0.11', '100012', 'phone')
+        phone = verify_manifest(manifest('100013', '26', '36'), '1.0.12', '100013', 'phone')
         wear = verify_manifest(manifest('200006', '30', '35', WATCH, STANDALONE, version='1.0.5'), '1.0.5', '200006', 'wear')
         self.assertEqual((phone['form_factor'], wear['form_factor']), ('phone', 'wear'))
 
     def test_rejects_wrong_version_wrong_target_or_swapped_form_factor(self):
         for xml in (
-            manifest('100012', '26', '36', version='1.0.7'),
-            manifest('100011', '26', '36'),
+            manifest('100013', '26', '36', version='1.0.7'),
+            manifest('100012', '26', '36'),
             manifest('200006', '26', '36'),
-            manifest('100012', '26', '35'),
-            manifest('100012', '26', '36', WATCH),
+            manifest('100013', '26', '35'),
+            manifest('100013', '26', '36', WATCH),
         ):
             with self.subTest(manifest=xml), self.assertRaises(VerificationError):
-                verify_manifest(xml, '1.0.11', '100012', 'phone')
+                verify_manifest(xml, '1.0.12', '100013', 'phone')
 
     def test_rejects_optional_watch_hardware_or_missing_standalone_declaration(self):
         for xml in (
@@ -80,7 +80,7 @@ This jar contains entries whose signer certificate is self-signed.
             with patch.object(verifier.subprocess, 'run', return_value=jarsigner), \
                     patch.object(verifier, 'capture', return_value=keytool) as capture:
                 with self.assertRaisesRegex(VerificationError, 'phone AAB signer does not match'):
-                    verifier.verify_bundle(bundle, 'phone', '1.0.11', '100012', 'cd' * 32)
+                    verifier.verify_bundle(bundle, 'phone', '1.0.12', '100013', 'cd' * 32)
             # Only keytool ran; bundletool is never reached for a bundle signed by another key.
             self.assertEqual(capture.call_count, 1)
 
@@ -107,12 +107,12 @@ class ReleaseArchiveTest(unittest.TestCase):
         tool.write_bytes(b'bundletool fixture')
         self.enterContext(patch.multiple(verifier, BUNDLETOOL=tool, BUNDLETOOL_SHA=verifier.sha256(tool)))
         self.enterContext(patch.dict('os.environ', {
-            'PRODUCT_SHA': self.source_commit, 'PHONE_VERSION_NAME': '1.0.11', 'PHONE_VERSION_CODE': '100012',
+            'PRODUCT_SHA': self.source_commit, 'PHONE_VERSION_NAME': '1.0.12', 'PHONE_VERSION_CODE': '100013',
         }))
 
     def verified(self, form_factor):
         self.assertEqual(form_factor, 'phone')
-        fields = verify_manifest(manifest('100012', '26', '36', version='1.0.11'), '1.0.11', '100012', 'phone')
+        fields = verify_manifest(manifest('100013', '26', '36', version='1.0.12'), '1.0.12', '100013', 'phone')
         return fields | {
             'sha256': verifier.sha256(self.bundles[form_factor]),
             'upload_certificate_sha256': self.upload_certificate,
@@ -122,17 +122,17 @@ class ReleaseArchiveTest(unittest.TestCase):
         self.assertEqual([entry[:2] for entry in verifier.RELEASE_BUNDLES], [
             ('phone', 'apps/aws/build/outputs/bundle/release/aws-release.aab'),
         ])
-        self.assertEqual((verifier.PHONE_VERSION_NAME, verifier.PHONE_VERSION_CODE), ('1.0.11', '100012'))
+        self.assertEqual((verifier.PHONE_VERSION_NAME, verifier.PHONE_VERSION_CODE), ('1.0.12', '100013'))
 
     def test_the_phone_bundle_is_verified_and_archived(self):
         results = {form_factor: self.verified(form_factor) for form_factor in ('phone',)}
         with patch.object(verifier, 'verify_bundle', side_effect=lambda bundle, form_factor, *_: results[form_factor]) as verify:
             verifier.archive_release_bundles(self.root, self.evidence)
         self.assertEqual([call.args for call in verify.call_args_list], [
-            (self.bundles['phone'], 'phone', '1.0.11', '100012', self.upload_certificate),
+            (self.bundles['phone'], 'phone', '1.0.12', '100013', self.upload_certificate),
         ])
         archive = self.evidence / 'bundles'
-        names = {'phone': 'phone-1.0.11-100012.aab'}
+        names = {'phone': 'phone-1.0.12-100013.aab'}
         self.assertEqual({path.name for path in archive.iterdir()}, {*names.values(), 'SHA256SUMS'})
         for form_factor, name in names.items():
             self.assertEqual((archive / name).read_bytes(), self.bundles[form_factor].read_bytes())
@@ -144,7 +144,7 @@ class ReleaseArchiveTest(unittest.TestCase):
         self.assertEqual(report['bundles'], [results[form_factor] | {'file': names[form_factor]} for form_factor in names])
 
     def test_rejects_a_configured_version_that_differs_from_the_pinned_release(self):
-        with patch.dict('os.environ', {'PHONE_VERSION_CODE': '100011'}), patch.object(verifier, 'verify_bundle') as verify:
+        with patch.dict('os.environ', {'PHONE_VERSION_CODE': '100012'}), patch.object(verifier, 'verify_bundle') as verify:
             with self.assertRaisesRegex(VerificationError, 'pinned release'):
                 verifier.archive_release_bundles(self.root, self.evidence)
         verify.assert_not_called()
