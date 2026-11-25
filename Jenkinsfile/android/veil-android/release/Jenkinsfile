@@ -219,11 +219,11 @@ cat "$SIGNED_AAB.sha256"
             steps {
                 script {
                     ['play_api.py', 'play_version_preflight.py', 'play_upload.py'].each { name ->
-                        writeFile file: ".ci/flutter/${name}", text: libraryResource("flutter/${name}")
+                        writeFile file: ".ci/play/${name}", text: libraryResource("play/${name}")
                     }
                     withEnv([
-                        "FLUTTER_CI_TOOLS=${pwd()}/.ci/flutter",
-                        "FLUTTER_ARTIFACTS=${env.RELEASE_DIR}/*.aab",
+                        "PLAY_TOOLS=${pwd()}/.ci/play",
+                        "PLAY_AAB_GLOB=${env.RELEASE_DIR}/*.aab",
                         "PLAY_PACKAGE_NAME=${env.PACKAGE}",
                         "PLAY_VERSION_NAME=${env.RELEASE_VERSION_NAME}",
                         "PLAY_VERSION_CODE=${params.VERSION_CODE}",
@@ -235,8 +235,8 @@ cat "$SIGNED_AAB.sha256"
                             path: env.PLAY_SERVICE_VAULT_PATH, engineVersion: 2,
                             secretValues: [[envVar: 'PLAY_SERVICE_JSON_B64', vaultKey: 'json_b64']]
                         ]]]) {
-                            sh libraryResource('flutter/play-preflight.sh')
-                            sh libraryResource('flutter/play-upload.sh')
+                            sh libraryResource('play/play-preflight.sh')
+                            sh libraryResource('play/play-upload.sh')
                         }
                     }
                 }

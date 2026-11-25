@@ -1,4 +1,4 @@
-"""Offline tests for the Flutter Play tools: fake Play API, fake signing, synthetic bundles; no network."""
+"""Offline tests for the shared Play tools: fake Play API, fake signing, synthetic bundles; no network."""
 
 import hashlib
 import importlib
@@ -14,11 +14,13 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
-TOOLS = ROOT / "resources/flutter"
+TOOLS = ROOT / "resources/play"
+FLUTTER = ROOT / "resources/flutter"
 sys.path.insert(0, str(TOOLS))
 play_api = importlib.import_module("play_api")
 preflight = importlib.import_module("play_version_preflight")
 upload = importlib.import_module("play_upload")
+release_notes = importlib.import_module("release_notes")
 APP = "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/com.example.app"
 UPLOAD = "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/com.example.app"
 
@@ -169,18 +171,67 @@ class PlayToolsTest(unittest.TestCase):
             self.run_upload(metadata_root=str(root))
         self.assertNotIn(("POST", "APP/edits/edit-1:commit"), self.methods())
 
+    def test_app_details_are_sent_only_when_the_project_keeps_them(self):
+        root = self.dir / "play"
+        (root / "listings/en-US/graphics/icon").mkdir(parents=True)
+        (root / "listings/en-US/graphics/icon/1.png").write_bytes(b"png")
+        self.run_upload(metadata_root=str(root))
+        self.assertNotIn(("PATCH", "APP/edits/edit-1/details"), self.methods())
+        (root / "contact-email.txt").write_text("support@example.invalid\n", encoding="utf-8")
+        (root / "default-language.txt").write_text("en-US\n", encoding="utf-8")
+        self.fake.calls.clear()
+        self.run_upload(metadata_root=str(root))
+        details = [call for call in self.fake.calls if call[:2] == ("PATCH", "APP/edits/edit-1/details")]
+        self.assertEqual([call[2] for call in details], [{"contactEmail": "support@example.invalid", "defaultLanguage": "en-US"}])
+        self.assertLess(self.methods().index(("PATCH", "APP/edits/edit-1/details")),
+                        self.methods().index(("POST", "APP/edits/edit-1:commit")))
+        # Without a metadata root, as for a bundle-only release, nothing but the bundle and the track is sent.
+        self.fake.calls.clear()
+        self.run_upload()
+        self.assertFalse([m for m in self.methods() if "listings" in m[1] or "details" in m[1]])
+
+    def test_native_release_notes_use_the_track_file_then_the_default(self):
+        notes = self.dir / "release-notes"
+        (notes / "en-US").mkdir(parents=True)
+        (notes / "zh-TW").mkdir()
+        (notes / "en-US/default.txt").write_text("Default notes\n", encoding="utf-8")
+        (notes / "en-US/alpha.txt").write_text("Alpha notes\n", encoding="utf-8")
+        (notes / "zh-TW/default.txt").write_text("預設說明\n", encoding="utf-8")
+        (notes / "zh-TW/alpha.txt").write_text("  \n", encoding="utf-8")
+        self.assertEqual(release_notes.collect(notes, "alpha"), {"en-US": "Alpha notes", "zh-TW": "預設說明"})
+        self.assertEqual(release_notes.collect(notes, "internal"), {"en-US": "Default notes", "zh-TW": "預設說明"})
+        # What it writes is what the upload tool reads.
+        path = self.dir / "notes.json"
+        path.write_text(json.dumps(release_notes.collect(notes, "alpha"), ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(upload.load_release_notes(str(path)),
+                         [{"language": "en-US", "text": "Alpha notes"}, {"language": "zh-TW", "text": "預設說明"}])
+        (notes / "zh-TW/default.txt").write_text("", encoding="utf-8")
+        with self.assertRaisesRegex(SystemExit, "Missing non-empty alpha.txt or default.txt"):
+            release_notes.collect(notes, "alpha")
+        (notes / "zh-TW/default.txt").write_text("長" * 501, encoding="utf-8")
+        with self.assertRaisesRegex(SystemExit, "exceeds 500"):
+            release_notes.collect(notes, "alpha")
+        for bad in (self.dir / "missing", ):
+            with self.assertRaisesRegex(SystemExit, "Missing Google Play release notes"):
+                release_notes.collect(bad, "alpha")
+        with self.assertRaisesRegex(SystemExit, "Unexpected track"):
+            release_notes.collect(notes, "../alpha")
+
 
 class FlutterStepContractTest(unittest.TestCase):
     STEPS = {name: (ROOT / f"vars/{name}.groovy").read_text(encoding="utf-8")
              for name in ("flutterAndroid", "flutterCi", "flutterRelease")}
 
     def test_scripts_exist_and_parse(self):
-        loaded = set()
-        for text in self.STEPS.values():
-            loaded |= set(re.findall(r"libraryResource\(['\"]flutter/([^'\"$]+)['\"]\)", text))
-        loaded |= {"play_api.py", "play_version_preflight.py", "play_upload.py"}
-        self.assertEqual(loaded, {p.name for p in TOOLS.iterdir() if p.suffix in (".sh", ".py")})
-        for script in TOOLS.glob("*.sh"):
+        steps = dict(self.STEPS, androidRelease=(ROOT / "vars/androidRelease.groovy").read_text(encoding="utf-8"))
+        for folder, directory, always in (("flutter", FLUTTER, set()),
+                                          ("play", TOOLS, {"play_api.py", "play_version_preflight.py", "play_upload.py",
+                                                           "release_notes.py"})):
+            loaded = set(always)
+            for text in steps.values():
+                loaded |= set(re.findall(r"libraryResource\(['\"]%s/([^'\"$]+)['\"]\)" % folder, text))
+            self.assertEqual(loaded, {p.name for p in directory.iterdir() if p.suffix in (".sh", ".py")}, folder)
+        for script in list(TOOLS.glob("*.sh")) + list(FLUTTER.glob("*.sh")):
             result = subprocess.run(["bash", "-n", str(script)], capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr.decode())
 

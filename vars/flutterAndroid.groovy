@@ -54,7 +54,6 @@ def setEnvironment(Map config) {
     env.ARTIFACTORY_ORG_PATH = 'com/maksonlee'
     env.ARTIFACTORY_MODULE = config.repo
     env.PLAY_SERVICE_VAULT_PATH = 'secret/jenkins/mobile/shared/play-service'
-    env.FLUTTER_CI_TOOLS = "${pwd()}/.ci/flutter"
 }
 
 def fetchImage() {
@@ -305,7 +304,7 @@ sha256sum -- "${aab_files[0]}" | cut -d' ' -f1
 
 def writePlayTools() {
     ['play_api.py', 'play_version_preflight.py', 'play_upload.py'].each { name ->
-        writeFile file: ".ci/flutter/${name}", text: libraryResource("flutter/${name}")
+        writeFile file: ".ci/play/${name}", text: libraryResource("play/${name}")
     }
 }
 
@@ -322,8 +321,10 @@ def withPlayService(Closure body) {
 // Version preflight and upload, both after the approval input.
 def playPublish() {
     writePlayTools()
-    withPlayService {
-        sh libraryResource('flutter/play-preflight.sh')
-        sh libraryResource('flutter/play-upload.sh')
+    withEnv(["PLAY_TOOLS=${pwd()}/.ci/play", "PLAY_AAB_GLOB=${env.FLUTTER_ARTIFACTS}"]) {
+        withPlayService {
+            sh libraryResource('play/play-preflight.sh')
+            sh libraryResource('play/play-upload.sh')
+        }
     }
 }

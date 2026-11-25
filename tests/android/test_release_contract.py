@@ -65,8 +65,8 @@ class AndroidReleaseContractTest(unittest.TestCase):
     def test_parameters_reach_scripts_explicitly(self):
         # A job's first build exports no parameter environment variables, so scripts get them through withEnv.
         self.assertIn('"PLAY_TRACK=${params.PLAY_TRACK}"', STEP)
-        self.assertIn("--track=${params.PLAY_TRACK}", STEP)
-        self.assertIn("--release-status=${params.PLAY_RELEASE_STATUS}", STEP)
+        self.assertIn('"PLAY_RELEASE_STATUS=${params.PLAY_RELEASE_STATUS}"', STEP)
+        self.assertIn('"EXPECTED_AAB_SHA256=${env.RELEASE_AAB_SHA256}"', STEP)
 
     def test_vault_certificate_is_read_only_when_the_project_enables_it(self):
         lookup = STEP.index("vaultKey: 'certificate_sha256'")
@@ -91,10 +91,15 @@ class AndroidReleaseContractTest(unittest.TestCase):
     def test_play_credentials_are_read_only_after_the_approval_input(self):
         approval = STEP.index("input message:")
         self.assertGreater(STEP.index("secret/jenkins/mobile/shared/play-service"), approval)
-        self.assertEqual(STEP.count("playServiceVaultPath"), 1)
+        self.assertEqual(STEP.count("secret/jenkins/mobile/shared/play-service"), 1)
         self.assertIn("publishPlayListings: false", STEP)
-        for option in ("--artifact-dir=", "--track=", "--release-status="):
-            self.assertGreater(STEP.index(option), approval)
+        for step in ("play/play-preflight.sh", "play/play-upload.sh", "release_notes.py"):
+            self.assertGreater(STEP.index(step), approval)
+        # Gradle only builds; no Gradle Play Publisher task or option is left in the step.
+        for gone in ("publishRelease", "--artifact-dir", "playServiceVaultPath"):
+            self.assertNotIn(gone, STEP)
+        # The store listing goes only for projects that opt in.
+        self.assertIn('"PLAY_METADATA_ROOT=${config.publishListingsWithRelease ? playRoot : \'\'}"', STEP)
         self.assertNotIn("githubPush", STEP)
 
     def test_resolve_commit_requires_branch_history_clean_tree_and_no_forbidden_paths(self):

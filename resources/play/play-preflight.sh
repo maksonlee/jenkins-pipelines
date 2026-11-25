@@ -6,5 +6,5 @@ umask 077
 play_json=$(mktemp "$PWD/play-preflight-service.XXXXXX")
 trap 'rm -f -- "$play_json"' EXIT
 printf %s "${PLAY_SERVICE_JSON_B64}" | sed 's/^data:[^,]*,//' | tr -d '\r\n ' | base64 -d > "$play_json"
-python3 "${FLUTTER_CI_TOOLS:?FLUTTER_CI_TOOLS is required}/play_version_preflight.py" \
+python3 "${PLAY_TOOLS:?PLAY_TOOLS is required}/play_version_preflight.py" \
   "$play_json" "$PLAY_PACKAGE_NAME" "$PLAY_VERSION_NAME" "$PLAY_VERSION_CODE"

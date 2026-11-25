@@ -8,7 +8,8 @@
 // verifyUploadCertificate the signer must also equal Vault certificate_sha256; otherwise Google Play checks the
 // upload key at upload time, as before. Only with PUBLISH_TO_PLAY and after a manual input naming the exact commit,
 // version, SHA-256, signer, track and status does it read the Play service account and upload that same verified
-// AAB through GPP (--artifact-dir, --track, --release-status). See docs/android.md.
+// AAB with the shared Play tools in resources/play (one edit: bundle, release notes and, when the project opts in,
+// its store listing). Gradle Play Publisher is not used. See docs/android.md.
 
 def call(Map cfg) {
     def config = androidReleaseConfig(cfg)
@@ -158,16 +159,37 @@ def call(Map cfg) {
                         withEnv(["RELEASE_AAB=${config.aab}", "PUBLICATION_DIR=${config.publicationDir}"]) {
                             sh libraryResource('android/release/stage-verified-aab.sh')
                         }
-                        def publishTask = config.publishListingsWithRelease ? 'publishReleaseApps' : 'publishReleaseBundle'
-                        gradleRelease(":${config.module}:${publishTask}", androidReleaseGradleConfig(config, [
-                            playServiceVaultPath: 'secret/jenkins/mobile/shared/play-service',
-                            playJsonPath: "/tmp/${config.repo}-play-service.json",
-                            extraArgs: [
-                                "--artifact-dir=${config.publicationDir}",
-                                "--track=${params.PLAY_TRACK}",
-                                "--release-status=${params.PLAY_RELEASE_STATUS}"
-                            ]
-                        ]))
+                        // The same Play tools as the Flutter releases: a version preflight, then one edit with the
+                        // verified bundle, the release notes and, when the project opts in, its store listing.
+                        ['play_api.py', 'play_version_preflight.py', 'play_upload.py', 'release_notes.py'].each { name ->
+                            writeFile file: ".ci/play/${name}", text: libraryResource("play/${name}")
+                        }
+                        def playRoot = "${config.module}/src/main/play"
+                        withEnv([
+                            "PLAY_TOOLS=${pwd()}/.ci/play",
+                            "PLAY_AAB_GLOB=${config.publicationDir}/*.aab",
+                            "PLAY_PACKAGE_NAME=${config.packageName}",
+                            "PLAY_VERSION_NAME=${env.RELEASE_VERSION_NAME}",
+                            "PLAY_VERSION_CODE=${env.RELEASE_VERSION_CODE}",
+                            "PLAY_TRACK=${params.PLAY_TRACK}",
+                            "PLAY_RELEASE_STATUS=${params.PLAY_RELEASE_STATUS}",
+                            "EXPECTED_AAB_SHA256=${env.RELEASE_AAB_SHA256}",
+                            "RELEASE_NOTES_DIR=${playRoot}/release-notes",
+                            "PLAY_METADATA_ROOT=${config.publishListingsWithRelease ? playRoot : ''}"
+                        ]) {
+                            sh '''#!/bin/bash
+set -euo pipefail
+python3 -I "$PLAY_TOOLS/release_notes.py" "$RELEASE_NOTES_DIR" "$PLAY_TRACK" > .play-release-notes.json
+'''
+                            withVault([vaultSecrets: [[
+                                path: 'secret/jenkins/mobile/shared/play-service',
+                                engineVersion: 2,
+                                secretValues: [[envVar: 'PLAY_SERVICE_JSON_B64', vaultKey: 'json_b64']]
+                            ]]]) {
+                                sh libraryResource('play/play-preflight.sh')
+                                sh libraryResource('play/play-upload.sh')
+                            }
+                        }
                     }
                 }
             }
@@ -252,8 +274,7 @@ def androidReleaseConfig(Map cfg) {
 
 def androidReleaseGradleConfig(Map config, Map overrides) {
     return [
-        // Store listings are published only when the project opts in with publishListingsWithRelease, which
-        // selects publishReleaseApps explicitly; the shared helper must never upgrade the task on its own.
+        // Gradle only builds: the upload runs outside it, and the shared helper must never pick a publish task.
         publishPlayListings: false,
         keystoreVaultPath: config.keystoreVaultPath,
         jksPath: "/tmp/${config.repo}-upload.jks",

@@ -106,16 +106,25 @@ this order:
 5. **Approve** (only with `PUBLISH_TO_PLAY`). The input names the package, version, commit, AAB SHA-256, signer, track and
    status. It times out after 60 minutes.
 6. **Publish.** The verified AAB is checked against its recorded SHA-256 and staged alone in
-   `<module>/build/outputs/play-publication`. Then the job reads `secret/jenkins/mobile/shared/play-service` and runs
-   GPP `publishReleaseBundle --artifact-dir=<that dir> --track=<track> --release-status=<status>`. The command-line
-   options override the project's `play {}` block. GPP 4.0.0's default release status is `completed`.
+   `<module>/build/outputs/play-publication`. Then the job reads `secret/jenkins/mobile/shared/play-service` and
+   runs the shared Play tools in `resources/play`, the same ones the Flutter releases use:
+   - `play_version_preflight.py` refuses a version code that is not above every bundle already uploaded;
+   - `release_notes.py` takes each language's `<track>.txt`, or `default.txt`, from
+     `<module>/src/main/play/release-notes`;
+   - `play_upload.py` checks the bundle against the approved SHA-256 and, in one edit, uploads it, sets the track
+     release with those notes and the chosen status, and commits.
+
+   Gradle Play Publisher is no longer used for the upload (2026-11-25), so a project's `play {}` block does not
+   affect what the job sends. A project may keep the plugin for its own local use.
 
 `approvalNote` appends one fixed sentence to the approval message. `learn-go-board-game` uses it to warn that an
-upload replaces a release that is still in review, which GPP cannot detect.
+upload replaces a release that is still in review, which the job cannot detect.
 
-With `publishListingsWithRelease: true` the job runs `publishReleaseApps` instead, which also publishes the store
-listing from the same commit. Only the four apps that always did this keep it. The library never switches tasks on
-its own (`publishPlayListings: false`).
+With `publishListingsWithRelease: true` the same edit also carries the store listing from that commit: for every
+language under `<module>/src/main/play/listings`, the title and descriptions when the three text files exist and
+the images under `graphics/`, and the app details in `contact-email.txt`, `contact-phone.txt`,
+`contact-website.txt` and `default-language.txt` when present. Only the four apps that always published their
+listing keep it. Images of a type are replaced as a set on every release.
 
 ## Projects
 

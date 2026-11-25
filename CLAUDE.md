@@ -71,7 +71,7 @@ Groovy cannot run locally. These checks are offline unless noted:
 
 ```bash
 tools/run_checks.sh                                                 # all offline checks below + Groovy syntax; CI runs it
-python3 -B -m unittest discover -s tests -t .                       # library scripts, Play tools, job list
+python3 -B -m unittest discover -s tests -t .                       # library scripts, Play tools (tests/play), job list
 python3 -B -m unittest discover -s tests -t . -k release            # a subset by name
 python3 -B -m unittest Jenkinsfile/android/gst-stream-wall/release/test_publication_artifact_selection.py
 python3 -B -m unittest discover -s Jenkinsfile/android/cloud-cost-widgets/release -p 'test_*.py'
@@ -102,8 +102,13 @@ git diff --check
   - it exports `SIGNING_*` and also passes `-Psigning.*` unless `passSigningProperties: false`;
   - it switches `publish<Variant>Bundle` to `publish<Variant>Apps` when Play listings exist, unless
     `publishPlayListings: false`. `androidRelease` always sets false and picks the task explicitly.
-- **`androidRelease`** uploads only the verified AAB through GPP `--artifact-dir`, `--track` and `--release-status`.
-  GPP 4.0.0 supports these options on publish tasks; its default release status is `completed`. The signer is
+- **Play uploads.** `resources/play` (`play_api.py`, `play_version_preflight.py`, `play_upload.py`,
+  `release_notes.py`; tests in `tests/play/`) is the one upload path for `flutterRelease`, `androidRelease` and
+  `android/veil-android/release`. Gradle Play Publisher is not used by `androidRelease` since 2026-11-25. Three
+  jobs keep their own publisher on purpose: Unity math-runner (sealed), `android/cloud-cost-widgets/release` (two
+  bundles and guarded modes) and `android/gst-stream-wall/release` (promotion and listing-only modes through GPP);
+  termstay's release script uses GPP inside the repository.
+- **`androidRelease`** uploads only the verified AAB. The signer is
   recorded, and compared with Vault `certificate_sha256` only when `verifyUploadCertificate: true`. Never put
   fingerprints or other operational secrets in this public repository.
 - **`androidCi`** never reads signing material. It mounts the SDK read-only and the worker `debug.keystore`.

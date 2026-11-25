@@ -1,4 +1,4 @@
-"""Upload the approved Flutter release AAB to one Google Play track and commit the edit.
+"""Upload the approved release AAB to one Google Play track and commit the edit.
 
 Usage: play_upload.py SERVICE_JSON AAB PACKAGE TRACK STATUS ROLLOUT_FRACTION RELEASE_NOTES_JSON
 
@@ -7,9 +7,11 @@ Environment:
   RELEASE_ARTIFACT_REPORT  Optional report from scripts/check_android_release_artifact.py; it must have passed for
                            this commit, bundle, package and version.
   PLAY_VERSION_NAME/CODE   The pubspec version the report is compared with.
-  PLAY_METADATA_ROOT       android/app/src/main/play; its listings/ are synced into the same edit when present.
+  PLAY_METADATA_ROOT       <module>/src/main/play; its listings/ and app details (contact-*.txt,
+                           default-language.txt) are synced into the same edit when present.
 
-One edit uploads the bundle, syncs listing text and graphics, sets the track release and is committed.
+One edit uploads the bundle, syncs listing text, graphics and app details, sets the track release and is
+committed. Flutter, native Android and veil-android releases all upload through this tool.
 """
 
 import hashlib
@@ -27,7 +29,15 @@ IMAGE_TYPES = {
     'phone-screenshots': 'phoneScreenshots',
     'seven-inch-screenshots': 'sevenInchScreenshots',
     'ten-inch-screenshots': 'tenInchScreenshots',
+    # The directory names Gradle Play Publisher uses for the same image types.
+    'tablet-screenshots': 'sevenInchScreenshots',
+    'large-tablet-screenshots': 'tenInchScreenshots',
+    'tv-banner': 'tvBanner',
+    'tv-screenshots': 'tvScreenshots',
+    'wear-screenshots': 'wearScreenshots',
 }
+DETAIL_FILES = (('contact-email.txt', 'contactEmail'), ('contact-phone.txt', 'contactPhone'),
+                ('contact-website.txt', 'contactWebsite'), ('default-language.txt', 'defaultLanguage'))
 LISTING_LIMITS = (('title', 50), ('short description', 80), ('full description', 4000))
 
 
@@ -148,6 +158,21 @@ def sync_listing_metadata(token: str, package_name: str, edit_id: str, metadata_
     print(f'Play listing metadata sync complete: {language_count} language(s), {image_count} image(s).')
 
 
+def sync_app_details(token: str, package_name: str, edit_id: str, metadata_root: str) -> None:
+    """Send the contact details and default language kept beside the listings, when the project keeps any."""
+    if not metadata_root:
+        return
+    details = {}
+    for name, field in DETAIL_FILES:
+        path = pathlib.Path(metadata_root) / name
+        if path.is_file():
+            details[field] = read_required_text(path)
+    if not details:
+        return
+    play_api.request_json('PATCH', play_api.app_url(package_name) + f'/edits/{edit_id}/details', token=token, data=details)
+    print(f'Updated Play app details: {", ".join(sorted(details))}.')
+
+
 def main(argv, environ=os.environ) -> None:
     service_json, aab_path, package_name, track, status, rollout_fraction, notes_path = argv
     bundle = pathlib.Path(aab_path).read_bytes()
@@ -162,6 +187,7 @@ def main(argv, environ=os.environ) -> None:
     version_code = str(uploaded['versionCode'])
     print(f'Uploaded bundle versionCode: {version_code}')
     sync_listing_metadata(token, package_name, edit_id, environ.get('PLAY_METADATA_ROOT', ''))
+    sync_app_details(token, package_name, edit_id, environ.get('PLAY_METADATA_ROOT', ''))
     release = track_release(version_code, status, rollout_fraction, notes)
     play_api.request_json('PUT', base + f'/edits/{edit_id}/tracks/{play_api.quote(track)}', token=token,
                           data={'track': track, 'releases': [release]})
