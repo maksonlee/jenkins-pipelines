@@ -1,0 +1,147 @@
+// Manual deployment of the maksonlee/taiwan-bus-app backend to its home host.
+//
+// The repository's deploy/home-osm/deploy.sh is the only installer: it checks the HAProxy edge contract, runs the
+// backend tests, uploads a stage, snapshots the live release, stops the services, applies migrations, restarts,
+// verifies and rolls back on failure. This job runs it from a clean checkout of a commit on main, after a manual
+// approval. verify-only runs the same edge check and tests and reports what is deployed, without touching the host.
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout()
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+    }
+
+    parameters {
+        string(name: 'GIT_REF', defaultValue: 'main', trim: true,
+                description: 'main, or a full commit SHA already on main')
+        choice(name: 'MODE', choices: ['verify-only', 'deploy-production'],
+                description: 'Check and compare only, or run the deploy script after an approval')
+    }
+
+    environment {
+        DEPLOY_HOST = 'administrator@osm.maksonlee.com'
+        PROXY_HOST = 'administrator@proxy.maksonlee.com'
+        SITE = 'https://taipeiareabus.maksonlee.com'
+        DEPLOYED_PATHS = 'backend scripts migrations deploy/home-osm site requirements.txt constraints.txt data/taipei_new_taipei_boundary.geojson'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    if (!(params.GIT_REF ==~ /main|[0-9a-f]{40}/)) {
+                        error('GIT_REF must be main or a full commit SHA')
+                    }
+                    if (!(params.MODE in ['verify-only', 'deploy-production'])) {
+                        error('Choose a supported mode')
+                    }
+                }
+                deleteDir()
+                dir('source') {
+                    git branch: 'main', credentialsId: 'vault-github-ssh',
+                            url: 'git@github.com:maksonlee/taiwan-bus-app.git'
+                    withEnv(["GIT_REF=${params.GIT_REF}"]) {
+                        sh '''#!/bin/bash
+set -euo pipefail
+if [[ "$GIT_REF" == main ]]; then
+  commit=$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')
+else
+  commit=$(git rev-parse --verify "$GIT_REF^{commit}")
+  git merge-base --is-ancestor "$commit" refs/remotes/origin/main
+fi
+git checkout --quiet --detach "$commit"
+test -z "$(git status --porcelain)"
+printf '%s\\n' "$commit" > ../release-commit.txt
+'''
+                    }
+                }
+                script {
+                    env.RELEASE_COMMIT = readFile('release-commit.txt').trim()
+                }
+            }
+        }
+
+        stage('Check the edge, run the tests and compare') {
+            steps {
+                timeout(time: 30, unit: 'MINUTES') {
+                    sh '''#!/bin/bash
+set -euo pipefail
+python3 -m venv venv
+venv/bin/python -m pip install --quiet --disable-pip-version-check -r source/requirements-dev.txt -c source/constraints.txt
+export PATH="$WORKSPACE/venv/bin:$PATH"
+ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$PROXY_HOST" \\
+  'sudo -n /usr/bin/systemctl is-active --quiet haproxy && sudo -n /usr/sbin/haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null && sudo -n /usr/bin/cat /etc/haproxy/haproxy.cfg' |
+  source/deploy/home-proxy/verify-active-config.sh - > /dev/null
+echo 'HAProxy edge contract: OK'
+(cd source && python -m unittest discover -s tests 2>&1 | tail -4)
+deployed=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$DEPLOY_HOST" \\
+  'cat /opt/taiwan-bus-app/DEPLOYED_REVISION')
+[[ "$deployed" =~ ^[A-Za-z0-9._+-]{1,80}$ ]] || { echo 'Unexpected DEPLOYED_REVISION' >&2; exit 1; }
+printf '%s\\n' "$deployed" > deployed-revision.txt
+if [[ "$deployed" =~ ^[0-9a-f]{12}$ ]] && git -C source cat-file -e "$deployed^{commit}" 2>/dev/null; then
+  # shellcheck disable=SC2086
+  if git -C source diff --quiet "$deployed" "$RELEASE_COMMIT" -- $DEPLOYED_PATHS; then
+    difference='the deployed files are identical to this commit'
+  else
+    difference="deployed files changed: $(git -C source diff --name-only "$deployed" "$RELEASE_COMMIT" -- $DEPLOYED_PATHS | wc -l); new migrations: $(git -C source diff --name-only --diff-filter=A "$deployed" "$RELEASE_COMMIT" -- migrations | wc -l)"
+  fi
+else
+  difference='the deployed revision is not a commit of this repository, so the difference is unknown'
+fi
+printf '%s\\n' "$difference" > deploy-difference.txt
+echo "Commit $RELEASE_COMMIT; deployed revision: $deployed; $difference"
+'''
+                }
+                script {
+                    env.DEPLOYED_REVISION = readFile('deployed-revision.txt').trim()
+                    env.DEPLOY_DIFFERENCE = readFile('deploy-difference.txt').trim()
+                    if (!(env.DEPLOY_DIFFERENCE ==~ /[A-Za-z0-9 ,:;]{1,200}/)) {
+                        error('Unexpected comparison text')
+                    }
+                }
+            }
+        }
+
+        stage('Approve the production deployment') {
+            when { expression { params.MODE == 'deploy-production' } }
+            steps {
+                timeout(time: 30, unit: 'MINUTES') {
+                    input message: "Deploy the taiwan-bus-app backend from commit ${env.RELEASE_COMMIT} to ${env.DEPLOY_HOST} " +
+                            "(now ${env.DEPLOYED_REVISION}; ${env.DEPLOY_DIFFERENCE})? The deploy script stops the backend for " +
+                            'about a minute, applies new migrations and rolls back by itself on a failed check.'
+                }
+            }
+        }
+
+        stage('Deploy and check') {
+            when { expression { params.MODE == 'deploy-production' } }
+            steps {
+                timeout(time: 45, unit: 'MINUTES') {
+                    sh '''#!/bin/bash
+set -euo pipefail
+export PATH="$WORKSPACE/venv/bin:$PATH"
+export TAIWAN_BUS_DEPLOY_HOST="$DEPLOY_HOST" TAIWAN_BUS_PROXY_HOST="$PROXY_HOST"
+test -z "$(git -C source status --porcelain)"
+source/deploy/home-osm/deploy.sh < /dev/null
+deployed=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$DEPLOY_HOST" \\
+  'cat /opt/taiwan-bus-app/DEPLOYED_REVISION')
+echo "Deployed revision: $deployed"
+[[ "$deployed" == "${RELEASE_COMMIT:0:12}" ]]
+status=$(curl --silent --show-error --max-time 20 --output /dev/null --write-out '%{http_code}' "$SITE/")
+echo "$status $SITE/"
+[[ "$status" == 200 ]]
+'''
+                }
+            }
+        }
+    }
+
+    post {
+        cleanup {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}

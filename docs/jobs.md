@@ -66,6 +66,11 @@ Jobs that do not follow the layout yet:
 - `web/readerplay/deploy`: the same flow and helper as share-notes, without a build: it packages `public/` from a
   commit on `main` (the tests run in `web/readerplay/ci`). Staged releases are kept in
   `/var/www/html/readerplay-releases`, and the deployed files become `root:root`.
+- `flutter/taiwan-bus-app/backend-deploy`: runs the repository's own `deploy/home-osm/deploy.sh` from a clean
+  checkout of a commit on `main`, with the agent's SSH key. `verify-only` checks the HAProxy edge contract, runs
+  the backend tests in a fresh virtual environment and compares the commit with the host's `DEPLOYED_REVISION`.
+  `deploy-production` then asks for approval and runs the script, which stops the backend for about a minute,
+  applies migrations and rolls back by itself. There is no stage-only mode, because the script has none.
 - `backstage/homelab-backstage-main-ci`: builds the homelab-backstage image and pushes it to Harbor.
 
 These jobs are listed in `jobs/jenkins_jobs.groovy` too, so the seed can recreate them.
