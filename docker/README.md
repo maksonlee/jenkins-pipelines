@@ -46,6 +46,6 @@ byte-identical to the one `release` #4 built on the old image. `1.98.0-2` stays 
 **Agent disk.** Old tags that no job referenced (`flutter-android-build-env:3.44.0`, `:3.44.0-fvm` and
 `gst-stream-wall-android-build-env:1.98.0-1`) and unused dangling images were removed on 2026-11-24. Before removing
 an image, check `docker system df` and `docker ps -a`: other projects share this Docker daemon, and
-`docker image prune` keeps a dangling image that a stopped container still uses. No job uses the legacy
-`cdlee/android-build-env` / `android-build-env:latest` or `gst-stream-wall-android-build-env:1.98.0-2` any more;
-they are still on the agent (about 5.6 GB together) until the owner approves removing them.
+`docker image prune` keeps a dangling image that a stopped container still uses. The legacy
+`cdlee/android-build-env` / `android-build-env:latest` and `gst-stream-wall-android-build-env:1.98.0-2` were removed
+from the agent on 2026-11-25, after the gst image moved; `1.98.0-2` is still in Harbor.
