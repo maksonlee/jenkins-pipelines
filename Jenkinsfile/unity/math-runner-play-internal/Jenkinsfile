@@ -1,7 +1,7 @@
 @Library('jenkins-shared-lib') _
 
 pipeline {
-    agent { label 'ssh-agent-with-docker' }
+    agent none
 
     options {
         disableConcurrentBuilds()
@@ -25,87 +25,90 @@ pipeline {
     }
 
     stages {
-        stage('Validate request') {
-            steps {
-                script {
-                    if (!(params.SOURCE_BUILD_NUMBER ==~ /^[1-9][0-9]{0,7}$/)) {
-                        error 'SOURCE_BUILD_NUMBER must be a positive exact build number'
-                    }
-                    if (!(params.EXPECTED_AAB_SHA256 ==~ /^[0-9a-f]{64}$/)) {
-                        error 'EXPECTED_AAB_SHA256 must be 64 lowercase hex characters'
-                    }
-                    if (!(params.RELEASE_STATUS in ['draft', 'completed'])) {
-                        error 'RELEASE_STATUS must be draft or completed'
-                    }
-                    def oldCode = params.REPLACE_DRAFT_VERSION_CODE ?: ''
-                    def oldSha = params.EXPECTED_REPLACED_DRAFT_SHA256 ?: ''
-                    if (!!oldCode != !!oldSha) {
-                        error 'Previous draft versionCode and SHA-256 must be supplied together'
-                    }
-                    if (oldCode && !(oldCode ==~ /^[1-9][0-9]{0,7}$/)) {
-                        error 'REPLACE_DRAFT_VERSION_CODE must be a positive versionCode'
-                    }
-                    if (oldSha && !(oldSha ==~ /^[0-9a-f]{64}$/)) {
-                        error 'EXPECTED_REPLACED_DRAFT_SHA256 must be 64 lowercase hex characters'
-                    }
-                    if (oldCode && params.RELEASE_STATUS != 'draft') {
-                        error 'Replacing an internal draft requires RELEASE_STATUS=draft'
+        stage('Verify the bundle') {
+            agent { label 'ssh-agent-with-docker' }
+            stages {
+                stage('Validate request') {
+                    steps {
+                        script {
+                            if (!(params.SOURCE_BUILD_NUMBER ==~ /^[1-9][0-9]{0,7}$/)) {
+                                error 'SOURCE_BUILD_NUMBER must be a positive exact build number'
+                            }
+                            if (!(params.EXPECTED_AAB_SHA256 ==~ /^[0-9a-f]{64}$/)) {
+                                error 'EXPECTED_AAB_SHA256 must be 64 lowercase hex characters'
+                            }
+                            if (!(params.RELEASE_STATUS in ['draft', 'completed'])) {
+                                error 'RELEASE_STATUS must be draft or completed'
+                            }
+                            def oldCode = params.REPLACE_DRAFT_VERSION_CODE ?: ''
+                            def oldSha = params.EXPECTED_REPLACED_DRAFT_SHA256 ?: ''
+                            if (!!oldCode != !!oldSha) {
+                                error 'Previous draft versionCode and SHA-256 must be supplied together'
+                            }
+                            if (oldCode && !(oldCode ==~ /^[1-9][0-9]{0,7}$/)) {
+                                error 'REPLACE_DRAFT_VERSION_CODE must be a positive versionCode'
+                            }
+                            if (oldSha && !(oldSha ==~ /^[0-9a-f]{64}$/)) {
+                                error 'EXPECTED_REPLACED_DRAFT_SHA256 must be 64 lowercase hex characters'
+                            }
+                            if (oldCode && params.RELEASE_STATUS != 'draft') {
+                                error 'Replacing an internal draft requires RELEASE_STATUS=draft'
+                            }
+                        }
                     }
                 }
-            }
-        }
 
-        stage('Fetch publisher source') {
-            steps {
-                deleteDir()
-                dir('pipeline-source') {
-                    checkout scm
-                }
-                sh '''#!/bin/bash
+                stage('Fetch publisher source') {
+                    steps {
+                        deleteDir()
+                        dir('pipeline-source') {
+                            checkout scm
+                        }
+                        sh '''#!/bin/bash
 set -euo pipefail
 printf '%s  %s\n' "$PUBLISHER_SHA256" "$PUBLISHER_SCRIPT" | sha256sum --check --status
 python3 -c 'import cryptography'
 git -C pipeline-source rev-parse HEAD
 '''
-                // The approved upload certificate is kept in Vault, never in this public repository. The publisher
-                // compares the archived signer, the release report and the AAB itself with it.
-                withVault([vaultSecrets: [[
-                    path: 'secret/jenkins/mobile/shared/upload-key',
-                    engineVersion: 2,
-                    secretValues: [[envVar: 'UPLOAD_CERTIFICATE_SHA256', vaultKey: 'certificate_sha256']]
-                ]]]) {
-                    script {
-                        env.EXPECTED_SIGNER_SHA256 = sh(
-                            script: '''#!/bin/bash
+                        // The approved upload certificate is kept in Vault, never in this public repository. The publisher
+                        // compares the archived signer, the release report and the AAB itself with it.
+                        withVault([vaultSecrets: [[
+                            path: 'secret/jenkins/mobile/shared/upload-key',
+                            engineVersion: 2,
+                            secretValues: [[envVar: 'UPLOAD_CERTIFICATE_SHA256', vaultKey: 'certificate_sha256']]
+                        ]]]) {
+                            script {
+                                env.EXPECTED_SIGNER_SHA256 = sh(
+                                    script: '''#!/bin/bash
 set +x
 set -euo pipefail
 printf '%s' "$UPLOAD_CERTIFICATE_SHA256"
 ''',
-                            returnStdout: true
-                        ).trim()
+                                    returnStdout: true
+                                ).trim()
+                            }
+                        }
                     }
                 }
-            }
-        }
 
-        stage('Download and verify Artifactory AAB') {
-            steps {
-                sh '''#!/bin/bash
+                stage('Download and verify Artifactory AAB') {
+                    steps {
+                        sh '''#!/bin/bash
 set -euo pipefail
 test ! -e artifact
 test ! -L artifact
 '''
-                script {
-                    env.ARTIFACTORY_TARGET = "android-snapshots/com/maksonlee/math-runner/jenkins-build-${params.SOURCE_BUILD_NUMBER}-sha256-${params.EXPECTED_AAB_SHA256}-SNAPSHOT/"
-                    echo "Downloading exact Artifactory AAB proof from ${env.ARTIFACTORY_TARGET}"
-                    def spec = groovy.json.JsonOutput.toJson([files: [[
-                        pattern: env.ARTIFACTORY_TARGET + '*',
-                        target: 'artifactory-raw/',
-                        flat: true
-                    ]]])
-                    rtDownload(serverId: 'artifactory', spec: spec, failNoOp: true)
-                }
-                sh '''#!/bin/bash
+                        script {
+                            env.ARTIFACTORY_TARGET = "android-snapshots/com/maksonlee/math-runner/jenkins-build-${params.SOURCE_BUILD_NUMBER}-sha256-${params.EXPECTED_AAB_SHA256}-SNAPSHOT/"
+                            echo "Downloading exact Artifactory AAB proof from ${env.ARTIFACTORY_TARGET}"
+                            def spec = groovy.json.JsonOutput.toJson([files: [[
+                                pattern: env.ARTIFACTORY_TARGET + '*',
+                                target: 'artifactory-raw/',
+                                flat: true
+                            ]]])
+                            rtDownload(serverId: 'artifactory', spec: spec, failNoOp: true)
+                        }
+                        sh '''#!/bin/bash
 set -euo pipefail
 python3 - <<'PY'
 import pathlib
@@ -133,23 +136,25 @@ for stored, canonical in stored_to_canonical.items():
     (destination / canonical).write_bytes((source / stored).read_bytes())
 PY
 '''
-                sh '''#!/bin/bash
+                        sh '''#!/bin/bash
 set -euo pipefail
 python3 "$PUBLISHER_SCRIPT" verify "$SOURCE_BUILD_NUMBER" "$EXPECTED_AAB_SHA256" artifact
 '''
-                archiveArtifacts artifacts: 'artifact/verified.json', fingerprint: true
-                script {
-                    env.APPROVAL_SUMMARY = sh(
-                        script: '''#!/bin/bash
+                        archiveArtifacts artifacts: 'artifact/verified.json', fingerprint: true
+                        script {
+                            env.APPROVAL_SUMMARY = sh(
+                                script: '''#!/bin/bash
 set -euo pipefail
 python3 "$PUBLISHER_SCRIPT" describe artifact/verified.json "$EXPECTED_AAB_SHA256" "$RELEASE_STATUS" "${REPLACE_DRAFT_VERSION_CODE:-}" "${EXPECTED_REPLACED_DRAFT_SHA256:-}"
 ''',
-                        returnStdout: true
-                    ).trim()
-                    env.APPROVED_REPORT_SHA256 = sh(
-                        script: "sha256sum artifact/verified.json | cut -d' ' -f1",
-                        returnStdout: true
-                    ).trim()
+                                returnStdout: true
+                            ).trim()
+                            env.APPROVED_REPORT_SHA256 = sh(
+                                script: "sha256sum artifact/verified.json | cut -d' ' -f1",
+                                returnStdout: true
+                            ).trim()
+                        }
+                    }
                 }
             }
         }
@@ -162,7 +167,8 @@ python3 "$PUBLISHER_SCRIPT" describe artifact/verified.json "$EXPECTED_AAB_SHA25
         }
 
         stage('Publish to Play internal') {
-            when { expression { params.PUBLISH_TO_PLAY } }
+            agent { label 'ssh-agent-with-docker' }
+            when { beforeAgent true; expression { params.PUBLISH_TO_PLAY } }
             steps {
                 sh '''#!/bin/bash
 set -euo pipefail
@@ -189,12 +195,14 @@ python3 "$PUBLISHER_SCRIPT" publish artifact/verified.json "$EXPECTED_AAB_SHA256
 
     post {
         always {
-            script {
-                if (fileExists('artifact/publish-attempt.json')) {
-                    archiveArtifacts artifacts: 'artifact/publish-attempt.json', fingerprint: true
+            node('ssh-agent-with-docker') {
+                script {
+                    if (fileExists('artifact/publish-attempt.json')) {
+                        archiveArtifacts artifacts: 'artifact/publish-attempt.json', fingerprint: true
+                    }
                 }
+                cleanWs(deleteDirs: true, notFailBuild: false)
             }
-            cleanWs(deleteDirs: true, notFailBuild: false)
         }
     }
 }
