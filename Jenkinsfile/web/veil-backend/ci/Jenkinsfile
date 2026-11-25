@@ -1,0 +1,84 @@
+// CI for maksonlee/veil-backend main: the repository's documented gate for the server crate. Only `cargo fetch`
+// has network access; the build, Clippy with warnings denied, and the tests (which start a real MariaDB and a
+// Vault dev server per test binary) run with `--locked --offline` in a container without network. The pinned
+// MariaDB tarball and Vault binary are kept on the agent and checked by SHA-256. The emulator and FCM tests are
+// `#[ignore]` and stay local.
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout()
+        timeout(time: 45, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+    }
+
+    triggers {
+        githubPush()
+    }
+
+    environment {
+        TEST_INPUTS = '/home/administrator/jenkins/veil-test-inputs'
+        MARIADB_ARCHIVE = 'mariadb-11.8.9-linux-systemd-x86_64.tar.gz'
+        MARIADB_SHA256 = '32f8871a2aa38b36aa418b7f4abc6fc0c6ef1ba5a45798cacb2afa52c8a6113b'
+        VAULT_BINARY = 'vault-2.1.0'
+        VAULT_SHA256 = '256d79454d1e0620d479cb167348bcb689e29a0658816a6fe606e03d5533ea25'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                deleteDir()
+                dir('pipeline-source') {
+                    checkout scm
+                }
+                dir('source') {
+                    git branch: 'main', credentialsId: 'vault-github-ssh',
+                            url: 'git@github.com:maksonlee/veil-backend.git'
+                    sh '''#!/bin/bash
+set -euo pipefail
+echo "veil-backend main: $(git rev-parse HEAD)"
+'''
+                }
+                sh '''#!/bin/bash
+set -euo pipefail
+printf '%s  %s\\n' "$MARIADB_SHA256" "$TEST_INPUTS/$MARIADB_ARCHIVE" "$VAULT_SHA256" "$TEST_INPUTS/$VAULT_BINARY" \\
+  | sha256sum --check --quiet
+'''
+            }
+        }
+
+        stage('Build, lint and test') {
+            steps {
+                sh '''#!/bin/bash
+set -euo pipefail
+image=$(docker build --quiet pipeline-source/Jenkinsfile/web/veil-backend/ci)
+cargo_home=/home/administrator/jenkins/rust-cache/veil-backend/cargo
+mkdir -p "$cargo_home"
+run=(docker run --rm --init --cpus=4 --memory=6g --user "$(id -u):$(id -g)"
+     --mount "type=bind,src=$WORKSPACE/source,dst=/app" --workdir /app/server
+     --mount "type=bind,src=$cargo_home,dst=/cargo" --env CARGO_HOME=/cargo --env HOME=/tmp
+     --mount "type=bind,src=$TEST_INPUTS,dst=/inputs,readonly"
+     --env "VEIL_TEST_MARIADB_ARCHIVE=/inputs/$MARIADB_ARCHIVE" --env "VEIL_TEST_VAULT_BINARY=/inputs/$VAULT_BINARY")
+
+# Dependencies: the only step with network access.
+"${run[@]}" "$image" cargo fetch --locked
+
+# The documented gate: no network.
+"${run[@]}" --network none "$image" bash -euo pipefail -c '
+  cargo build --locked --offline --jobs 4
+  cargo clippy --locked --offline --jobs 4 --all-targets -- -D warnings
+  cargo test --locked --offline --jobs 4
+'
+'''
+            }
+        }
+    }
+
+    post {
+        cleanup {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}

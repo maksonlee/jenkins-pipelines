@@ -24,6 +24,7 @@ def projects = [
     [folder: 'flutter/kids-calculator', roles: ['ci', 'release'], repo: 'kids-calculator', type: 'flutter'],
     [folder: 'web/readerplay', roles: ['ci'], repo: 'readerplay', type: 'web'],
     [folder: 'web/hongyu-portal', roles: ['ci'], repo: 'hongyu-portal', type: 'web'],
+    [folder: 'web/veil-backend', roles: ['ci'], repo: 'veil-backend', type: 'web'],
 ]
 
 def descriptions = [

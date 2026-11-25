@@ -26,6 +26,10 @@ Never point a job at a mutable tag.
 - `Jenkinsfile/web/hongyu-portal/ci/Dockerfile` (the Playwright base plus PHP 8.3 and Composer, bases by digest) is
   built on every run by the hongyu-portal CI. Its Playwright browsers are cached in
   `/home/administrator/jenkins/web-cache/ms-playwright`.
+- `Jenkinsfile/web/veil-backend/ci/Dockerfile` (Rust 1.98.0 by digest plus Clippy and the libraries MariaDB needs)
+  is built on every run by the veil-backend CI. Its cargo registry is cached in
+  `/home/administrator/jenkins/rust-cache/veil-backend`, and its pinned MariaDB and Vault test inputs are in
+  `/home/administrator/jenkins/veil-test-inputs`.
 - The `aosp-builder` images were removed from the agent with the AOSP jobs on 2026-11-25.
 
 **Open item:** `gst-stream-wall-android-build-env` should be rebuilt on `android()` so that every Android image
