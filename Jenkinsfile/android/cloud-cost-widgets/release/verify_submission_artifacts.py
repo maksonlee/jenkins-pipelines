@@ -1,4 +1,4 @@
-"""Load only the reviewed signed phone and Wear OS bundles archived by Jenkins."""
+"""Load only the reviewed signed Wear OS bundle archived by Jenkins."""
 
 import hashlib
 import json
@@ -7,15 +7,11 @@ import re
 import sys
 from pathlib import Path
 
-from verify_bundles import (
-    BUNDLETOOL_SHA, PACKAGE, PHONE_BUNDLE_FILENAME, PHONE_VERSION_CODE,
-    VERSION_NAME, WEAR_BUNDLE_FILENAME, WEAR_VERSION_CODE, WEAR_VERSION_NAME,
-)
+from verify_bundles import BUNDLETOOL_SHA, PACKAGE, WEAR_BUNDLE_FILENAME, WEAR_VERSION_CODE, WEAR_VERSION_NAME
 
 
 # Form factor, operator digest parameter, version name, version code, SDK levels and archived name.
 RELEASE_BUNDLES = (
-    ('phone', 'SIGNED_SHA256', VERSION_NAME, PHONE_VERSION_CODE, '26', '36', PHONE_BUNDLE_FILENAME),
     ('wear', 'SIGNED_WEAR_SHA256', WEAR_VERSION_NAME, WEAR_VERSION_CODE, '30', '35', WEAR_BUNDLE_FILENAME),
 )
 
@@ -39,9 +35,9 @@ def read_archive(root, relative, limit=16_384):
 
 
 def load_release_bundles(input_directory, source_commit, pipeline_commit, digests):
-    """Return {'phone': bytes, 'wear': bytes} after checking the archive against the operator digests."""
-    if not isinstance(digests, dict) or set(digests) != {'phone', 'wear'}:
-        raise ArtifactVerificationError('Provide the phone and Wear OS digests for signed archive verification')
+    """Return {'wear': bytes} after checking the archive against the operator digest."""
+    if not isinstance(digests, dict) or set(digests) != {entry[0] for entry in RELEASE_BUNDLES}:
+        raise ArtifactVerificationError('Provide the Wear OS digest for signed archive verification')
     identifiers = [('PRODUCT_SHA', source_commit, 40), ('PIPELINE_SHA', pipeline_commit, 40)]
     identifiers += [(parameter, digests[form_factor], 64) for form_factor, parameter, *_ in RELEASE_BUNDLES]
     for name, value, length in identifiers:
@@ -55,7 +51,7 @@ def load_release_bundles(input_directory, source_commit, pipeline_commit, digest
         root = input_directory.resolve(strict=True)
         directory = root / 'bundles'
         if directory.is_symlink() or {path.name for path in directory.iterdir()} != expected_files:
-            raise ArtifactVerificationError('Signed archive must contain exactly one phone AAB, one Wear OS AAB and SHA256SUMS')
+            raise ArtifactVerificationError('Signed archive must contain exactly the Wear OS AAB and SHA256SUMS')
     except OSError:
         raise ArtifactVerificationError('Could not read signed archive bundle directory') from None
 
@@ -131,7 +127,7 @@ def main(argv):
         'source_build': int(build),
         'source_pipeline_commit': pipeline_commit,
         'package_name': PACKAGE,
-        'version_names': {'phone': VERSION_NAME, 'wear': WEAR_VERSION_NAME},
+        'version_names': {'wear': WEAR_VERSION_NAME},
         'bundle_sha256': {
             code: digests[form_factor] for form_factor, _, _, code, *_ in RELEASE_BUNDLES
         },

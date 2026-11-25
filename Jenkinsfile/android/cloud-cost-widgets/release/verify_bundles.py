@@ -1,4 +1,4 @@
-"""Verify and archive the Cloud Spend for AWS phone and Wear OS upload bundles."""
+"""Verify and archive the Cloud Spend for AWS Wear OS upload bundle."""
 
 import hashlib
 import json
@@ -14,16 +14,12 @@ from pathlib import Path
 
 
 PACKAGE = 'com.maksonlee.cloudcost.aws'
-VERSION_NAME = '1.0.10'
-PHONE_VERSION_CODE = '100011'
-WEAR_VERSION_NAME = '1.0.7'
-WEAR_VERSION_CODE = '200008'
-PHONE_BUNDLE_FILENAME = f'phone-{VERSION_NAME}-{PHONE_VERSION_CODE}.aab'
+WEAR_VERSION_NAME = '1.0.8'
+WEAR_VERSION_CODE = '200009'
 WEAR_BUNDLE_FILENAME = f'wear-{WEAR_VERSION_NAME}-{WEAR_VERSION_CODE}.aab'
-# Form factor, Gradle output, version name, version code and archived name, in archive order.
+# Form factor, Gradle output, version name, version code and archived name, in archive order. This release ships
+# the Wear OS bundle alone; the phone app stays at 1.0.10 (100011).
 RELEASE_BUNDLES = (
-    ('phone', 'apps/aws/build/outputs/bundle/release/aws-release.aab',
-     VERSION_NAME, PHONE_VERSION_CODE, PHONE_BUNDLE_FILENAME),
     ('wear', 'apps/aws-wear/build/outputs/bundle/release/aws-wear-release.aab',
      WEAR_VERSION_NAME, WEAR_VERSION_CODE, WEAR_BUNDLE_FILENAME),
 )
@@ -136,11 +132,9 @@ def archive_release_bundles(source, evidence):
     if len(certificate) != 1 or re.fullmatch(rb'[a-f0-9]{64}', certificate[0]) is None:
         raise VerificationError('Could not read the certificate SHA-256 of the Vault upload key')
     upload_certificate = certificate[0].decode('ascii')
-    configured = tuple(os.environ[name] for name in (
-        'VERSION_NAME', 'PHONE_VERSION_CODE', 'WEAR_VERSION_NAME', 'WEAR_VERSION_CODE',
-    ))
-    if configured != (VERSION_NAME, PHONE_VERSION_CODE, WEAR_VERSION_NAME, WEAR_VERSION_CODE):
-        raise VerificationError('The configured phone or Wear OS version differs from the pinned release')
+    configured = tuple(os.environ[name] for name in ('WEAR_VERSION_NAME', 'WEAR_VERSION_CODE'))
+    if configured != (WEAR_VERSION_NAME, WEAR_VERSION_CODE):
+        raise VerificationError('The configured Wear OS version differs from the pinned release')
     source_commit = os.environ['PRODUCT_SHA']
     results = []
     for form_factor, output, version, code, filename in RELEASE_BUNDLES:
@@ -168,8 +162,7 @@ def archive_release_bundles(source, evidence):
         'bundles': [result for _, result in results],
     }
     (evidence / 'signed-bundles.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
-    print(f'Verified and archived the signed phone {VERSION_NAME} and Wear OS {WEAR_VERSION_NAME} AABs '
-          f'for {PACKAGE} ({source_commit})')
+    print(f'Verified and archived the signed Wear OS {WEAR_VERSION_NAME} AAB for {PACKAGE} ({source_commit})')
 
 
 if __name__ == '__main__':

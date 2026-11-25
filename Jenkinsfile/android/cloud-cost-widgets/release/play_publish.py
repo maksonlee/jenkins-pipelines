@@ -1,4 +1,4 @@
-"""Advance phone Internal testing to 100011 and Wear OS Internal testing to 200008 in one guarded edit."""
+"""Advance Wear OS Internal testing to 200009 in one guarded edit; every phone track stays unchanged."""
 
 import hashlib
 import json
@@ -22,48 +22,35 @@ from play_submission_preflight import (
 from verify_submission_artifacts import ArtifactVerificationError, load_release_bundles, read_archive
 
 
-PHONE_NOTES = [
-    {"language": "en-US", "text": (
-        "Release builds of the phone and watch apps find each other again. Widgets mark old amounts as "
-        "saved data and change month even when the app isn’t running. A zero reported right after a budget "
-        "edit keeps the previous amount, marked as recalculating. Saving a budget reports a failed connection "
-        "test right away and saves nothing. Watches show up to 50 budgets. Update the phone and watch apps together."
-    )},
-    {"language": "zh-TW", "text": (
-        "正式版的手機和手錶 App 又能互相找到。即使 App 沒有執行，小工具也會把舊金額標示為已儲存的資料，"
-        "並在月底切換月份。預算修改後 AWS 暫時回報的 0，會保留原本的金額並標示「重新計算中」。"
-        "儲存預算時若連線測試失敗，會立即顯示原因，且不會儲存。手錶最多顯示 50 筆預算。手機和手錶的 App 請一起更新。"
-    )},
-]
 WEAR_NOTES = [
     {"language": "en-US", "text": (
-        "The watch links to the phone app automatically, including release builds. The Tile and watch faces "
-        "mark old amounts as saved data even when the app isn’t running. Without watch keys, a watch that "
-        "can’t reach the phone says so and keeps the phone’s last data. To remove a phone budget from the "
-        "watch, turn off Show on watch on the phone. Update the phone and watch apps together."
+        "The Tile shows the budget on a card: its name, the amount and where the amount came from. Its button "
+        "now reads Open and fits. The Tile picker shows a preview and the app icon, and the watch-face "
+        "complication list uses the app icon too."
     )},
     {"language": "zh-TW", "text": (
-        "手錶會自動連結手機 App，正式版也一樣。即使 App 沒有執行，資訊方塊和錶面也會把舊金額標示為已儲存的資料。"
-        "沒有手錶金鑰時，手錶連不上手機會直接說明，並保留手機上次的資料。"
-        "要從手錶移除手機的預算，請在手機上關閉「在手錶上顯示」。手機和手錶的 App 請一起更新。"
+        "資訊方塊改用卡片顯示預算名稱、金額和資料來源，按鈕改成「開啟」，不會再被截斷。"
+        "新增資訊方塊時會看到預覽圖和 App 圖示，錶面資料欄位清單也改用 App 圖示。"
     )},
 ]
 PHONE_ALPHA = "alpha"
 PHONE_INTERNAL = "internal"
 WEAR_INTERNAL = "wear:internal"
-VERSION_NAME = "1.0.10"
-WEAR_VERSION_NAME = "1.0.7"
-TRACKS = {PHONE_INTERNAL: 100011, WEAR_INTERNAL: 200008}
-FORM_FACTORS = {PHONE_INTERNAL: "phone", WEAR_INTERNAL: "wear"}
-# Builds #13 and #16 read these predecessors as published; build #16 read phone Alpha 100008 as published
-# before #17 advanced it to 100009, which is published to testers.
-PREDECESSORS = {PHONE_INTERNAL: 100005, WEAR_INTERNAL: 200005}
-RELEASE_NOTES = {PHONE_INTERNAL: PHONE_NOTES, WEAR_INTERNAL: WEAR_NOTES}
+WEAR_VERSION_NAME = "1.0.8"
+# Wear OS 1.0.8 changes only the Tile and its picker entry, so it ships alone beside phone 1.0.10.
+TRACKS = {WEAR_INTERNAL: 200009}
+FORM_FACTORS = {WEAR_INTERNAL: "wear"}
+SIGNED_DIGEST_PARAMETERS = {WEAR_INTERNAL: "SIGNED_WEAR_SHA256"}
+# The alpha-status run of android/cloud-cost-widgets/release #2 (2026-11-24) read phone Alpha 100009, phone
+# Internal 100011 and Wear OS Internal 200008 as published. The phone tracks are guarded and left unchanged.
+PREDECESSORS = {WEAR_INTERNAL: 200008}
+UNCHANGED_PHONE = {PHONE_ALPHA: 100009, PHONE_INTERNAL: 100011}
+RELEASE_NOTES = {WEAR_INTERNAL: WEAR_NOTES}
 # Build #22's edit inventory also listed 1.0.4 on both Open testing tracks. Play Console shows the phone track
 # paused with that release superseded and the Wear OS track inactive. This release leaves both unchanged.
 INACTIVE_OPEN_TESTING = {"beta": 100005, "wear:beta": 200005}
-EXPECTED_ACTIVE = {PHONE_ALPHA: 100009, **INACTIVE_OPEN_TESTING, **PREDECESSORS}
-GUARDED_TRACKS = (PHONE_ALPHA, *TRACKS, *PRODUCTION_TRACKS)
+EXPECTED_ACTIVE = {**UNCHANGED_PHONE, **INACTIVE_OPEN_TESTING, **PREDECESSORS}
+GUARDED_TRACKS = (*UNCHANGED_PHONE, *TRACKS, *PRODUCTION_TRACKS)
 REPORTED_TRACKS = {
     f"{prefix}{name}" for prefix in ("", "wear:") for name in ("production", "beta", "alpha", "internal")
 }
@@ -451,7 +438,7 @@ def run_publish(input_directory, encoded, release_inputs):
         "package_name": PACKAGE_NAME,
         "source_sha": None,
         "source_pipeline_sha": None,
-        "version_names": {"phone": VERSION_NAME, "wear": WEAR_VERSION_NAME},
+        "version_names": {"wear": WEAR_VERSION_NAME},
         "build_number": None,
         "candidates": {track: {"version_code": code, "sha256": None} for track, code in TRACKS.items()},
         "predecessor_version_codes": dict(PREDECESSORS),
@@ -473,8 +460,7 @@ def run_publish(input_directory, encoded, release_inputs):
     pipeline_commit = release_inputs.get("PIPELINE_SHA", "")
     signed_build = release_inputs.get("SIGNED_BUILD", "")
     signed_digests = {
-        PHONE_INTERNAL: release_inputs.get("SIGNED_SHA256", ""),
-        WEAR_INTERNAL: release_inputs.get("SIGNED_WEAR_SHA256", ""),
+        track: release_inputs.get(parameter, "") for track, parameter in SIGNED_DIGEST_PARAMETERS.items()
     }
     if not (
         re.fullmatch(r"[0-9a-f]{40}", source_commit)

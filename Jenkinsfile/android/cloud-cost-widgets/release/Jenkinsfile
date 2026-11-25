@@ -26,18 +26,16 @@ pipeline {
                 description: 'alpha-status, internal-preflight, or internal-submit')
         string(name: 'SIGNED_BUILD', defaultValue: '', trim: true,
                 description: 'Approved internal-preflight build number for submission')
-        string(name: 'SIGNED_SHA256', defaultValue: '', trim: true,
-                description: 'Approved phone bundle archive SHA-256 for submission')
         string(name: 'SIGNED_WEAR_SHA256', defaultValue: '', trim: true,
                 description: 'Approved Wear OS bundle archive SHA-256 for submission')
     }
 
     environment {
-        PRODUCT_SHA = '0e21106babd974b10133488e56407cced670d63a'
-        VERSION_NAME = '1.0.10'
-        PHONE_VERSION_CODE = '100011'
-        WEAR_VERSION_NAME = '1.0.7'
-        WEAR_VERSION_CODE = '200008'
+        // Wear OS 1.0.8 ships alone: only the Wear OS bundle is built, verified and submitted. The phone app stays
+        // at 1.0.10 (100011) on every track.
+        PRODUCT_SHA = 'c565271a50dd44ff5a91d0a96552e992b31b60a0'
+        WEAR_VERSION_NAME = '1.0.8'
+        WEAR_VERSION_CODE = '200009'
         RELEASE_TOOLS = 'Jenkinsfile/android/cloud-cost-widgets/release'
     }
 
@@ -49,9 +47,9 @@ pipeline {
                         error('Select alpha-status, internal-preflight, or internal-submit')
                     }
                     if (params.MODE == 'internal-submit' &&
-                            (!(params.SIGNED_BUILD ==~ /[1-9][0-9]{0,7}/) || !(params.SIGNED_SHA256 ==~ /[a-f0-9]{64}/) ||
+                            (!(params.SIGNED_BUILD ==~ /[1-9][0-9]{0,7}/) ||
                              !(params.SIGNED_WEAR_SHA256 ==~ /[a-f0-9]{64}/))) {
-                        error('Provide the approved signing build number and both bundle SHA-256 values')
+                        error('Provide the approved signing build number and the Wear OS bundle SHA-256')
                     }
                 }
                 deleteDir()
@@ -87,7 +85,7 @@ python3 "$RELEASE_TOOLS/play_alpha_status.py" release-evidence/alpha-status.json
             }
         }
 
-        stage('Build and verify the signed phone and Wear OS bundles') {
+        stage('Build and verify the signed Wear OS bundle') {
             when { expression { params.MODE == 'internal-preflight' } }
             steps {
                 script {
@@ -135,7 +133,7 @@ printf '%s\\n' '{"result":"failed","reason":"gradle-release-build-failed"}' > re
   export CLOUD_COST_RELEASE_KEY_ALIAS="${KEY_ALIAS:?}"
   export CLOUD_COST_RELEASE_KEY_PASSWORD="${KEY_PASSWORD:?}"
   cd source
-  ./gradlew :apps:aws:bundleRelease :apps:aws-wear:bundleRelease --console=plain --no-daemon --max-workers=2
+  ./gradlew :apps:aws-wear:bundleRelease --console=plain --no-daemon --max-workers=2
   test "$(git rev-parse --verify 'HEAD^{commit}')" = "$PRODUCT_SHA"
   test -z "$(git status --porcelain=v1)"
 )
@@ -166,14 +164,13 @@ python3 "$RELEASE_TOOLS/verify_submission_artifacts.py" signed-input/release-evi
             }
         }
 
-        stage('Submit both releases to Internal testing') {
+        stage('Submit the Wear OS release to Internal testing') {
             when { expression { params.MODE == 'internal-submit' } }
             steps {
                 script {
                     writeFile file: 'release-evidence/release-sequencing.txt', text:
-                            'Requested release targets are Internal testing for the phone app, version 100005 to 100011, ' +
-                            'and Internal testing (Wear OS) for the watch app, version 200005 to 200008, in one edit.\n' +
-                            'Phone Closed testing Alpha 100009 and both production tracks stay unchanged.\n' +
+                            'The requested release target is Internal testing (Wear OS) for the watch app, version 200008 to 200009.\n' +
+                            'Phone Internal testing 100011, phone Closed testing Alpha 100009 and both production tracks stay unchanged.\n' +
                             'Open evidence includes intended review access, live AWS, physical devices, Play-installed pairing, and final listing and privacy declarations.\n'
                     writeFile file: 'release-evidence/internal-submit.json', text:
                             '{"result":"outcome-unavailable","reason":"verify-live-state-before-any-other-submission"}\n'

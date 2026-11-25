@@ -21,20 +21,19 @@ UPLOAD_URL = (
 COMMIT_URL = f"{EDIT_URL}:commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW"
 PHONE_TRACK = "internal"
 WEAR_TRACK = "wear:internal"
+# This release ships Wear OS 1.0.8 alone. The phone stays at 100011 on Internal testing and 100009 on Alpha.
 PHONE = 100011
-WEAR = 200008
-PHONE_PREDECESSOR = 100005
-WEAR_PREDECESSOR = 200005
+WEAR = 200009
+WEAR_PREDECESSOR = 200008
 ALPHA = 100009
-PHONE_BUNDLE = b"verified test phone bytes for 1.0.10"
-WEAR_BUNDLE = b"verified test wear bytes for 1.0.7"
-PHONE_DIGEST = hashlib.sha256(PHONE_BUNDLE).hexdigest()
+PHONE_BETA = 100005
+WEAR_BETA = 200005
+WEAR_BUNDLE = b"verified test wear bytes for 1.0.8"
 WEAR_DIGEST = hashlib.sha256(WEAR_BUNDLE).hexdigest()
 RELEASE_INPUTS = {
     "PRODUCT_SHA": "a" * 40,
     "PIPELINE_SHA": "b" * 40,
     "SIGNED_BUILD": "19",
-    "SIGNED_SHA256": PHONE_DIGEST,
     "SIGNED_WEAR_SHA256": WEAR_DIGEST,
 }
 NOW = datetime(2026, 11, 24, 10, 0, tzinfo=timezone.utc)
@@ -73,7 +72,7 @@ def bundle(code, digest="c" * 64):
 
 
 def catalog():
-    return [bundle(ALPHA), bundle(PHONE_PREDECESSOR), bundle(WEAR_PREDECESSOR)]
+    return [bundle(ALPHA), bundle(PHONE), bundle(WEAR_PREDECESSOR)]
 
 
 def track(name, code, **details):
@@ -99,7 +98,7 @@ def live(name, code, state=PUBLISHED):
 def preflight(override=None, quota_tracks=(), age_minutes=5):
     tracks = {
         "alpha": verified_track(ALPHA),
-        "internal": verified_track(PHONE_PREDECESSOR),
+        "internal": verified_track(PHONE),
         "production": NO_CONTENT,
         "wear:internal": verified_track(WEAR_PREDECESSOR),
         "wear:production": NO_CONTENT,
@@ -119,8 +118,8 @@ def preflight(override=None, quota_tracks=(), age_minutes=5):
 
 def expected_inventory():
     return [
-        track("alpha", ALPHA), track(PHONE_TRACK, PHONE_PREDECESSOR), track(WEAR_TRACK, WEAR_PREDECESSOR),
-        track("beta", PHONE_PREDECESSOR), track("wear:beta", WEAR_PREDECESSOR),
+        track("alpha", ALPHA), track(PHONE_TRACK, PHONE), track(WEAR_TRACK, WEAR_PREDECESSOR),
+        track("beta", PHONE_BETA), track("wear:beta", WEAR_BETA),
     ]
 
 
@@ -138,9 +137,7 @@ def staged(name, code):
 
 def completed_precommit():
     return [
-        *edit_snapshot(),
-        response(bundle(PHONE, PHONE_DIGEST)), response(bundle(WEAR, WEAR_DIGEST)),
-        staged(PHONE_TRACK, PHONE), staged(WEAR_TRACK, WEAR),
+        *edit_snapshot(), response(bundle(WEAR, WEAR_DIGEST)), staged(WEAR_TRACK, WEAR),
     ]
 
 
@@ -148,9 +145,7 @@ class PlayPublishTest(unittest.TestCase):
     def setUp(self):
         self.opener = Mock(spec=urllib.request.OpenerDirector)
         opener_patch = patch.object(urllib.request, "build_opener", return_value=self.opener)
-        loader_patch = patch.object(
-            publish, "load_release_bundles", return_value={"phone": PHONE_BUNDLE, "wear": WEAR_BUNDLE},
-        )
+        loader_patch = patch.object(publish, "load_release_bundles", return_value={"wear": WEAR_BUNDLE})
         oauth_patch = patch.object(publish, "get_access_token", return_value=("PRIVATE_TOKEN", 200))
         archive_patch = patch.object(publish, "read_archive", return_value=json.dumps(preflight()).encode())
         clock_patch = patch.object(publish, "datetime", wraps=datetime)
@@ -179,21 +174,26 @@ class PlayPublishTest(unittest.TestCase):
     def mutations(self):
         return [operation for operation in self.operations() if operation[0] != "GET"]
 
-    def test_both_internal_tracks_advance_in_one_edit_with_the_approved_bytes(self):
-        report = self.run_with(
-            *completed_precommit(), response({"id": EDIT_ID}), live(PHONE_TRACK, PHONE), live(WEAR_TRACK, WEAR),
-        )
+    def test_only_wear_internal_is_a_target_and_the_phone_tracks_are_guarded(self):
+        self.assertEqual(publish.TRACKS, {WEAR_TRACK: WEAR})
+        self.assertEqual(publish.PREDECESSORS, {WEAR_TRACK: WEAR_PREDECESSOR})
+        self.assertEqual(publish.EXPECTED_ACTIVE, {
+            "alpha": ALPHA, PHONE_TRACK: PHONE, "beta": PHONE_BETA, "wear:beta": WEAR_BETA, WEAR_TRACK: WEAR_PREDECESSOR,
+        })
+        # The archived status read must cover exactly the guarded tracks.
+        self.assertEqual(set(publish.GUARDED_TRACKS), set(TRACK_NAMES))
+        self.assertFalse(hasattr(publish, "PHONE_NOTES"))
+
+    def test_wear_internal_advances_in_one_edit_with_the_approved_bytes(self):
+        report = self.run_with(*completed_precommit(), response({"id": EDIT_ID}), live(WEAR_TRACK, WEAR))
 
         self.assertEqual(report["result"], "committed")
-        self.assertEqual(report["version_names"], {"phone": "1.0.10", "wear": "1.0.7"})
+        self.assertEqual(report["version_names"], {"wear": "1.0.8"})
         self.assertEqual(report["build_number"], 19)
-        self.assertEqual(report["candidates"], {
-            PHONE_TRACK: {"version_code": PHONE, "sha256": PHONE_DIGEST},
-            WEAR_TRACK: {"version_code": WEAR, "sha256": WEAR_DIGEST},
-        })
+        self.assertEqual(report["candidates"], {WEAR_TRACK: {"version_code": WEAR, "sha256": WEAR_DIGEST}})
         self.loader.assert_called_once_with(
             Path("synthetic-archive"), RELEASE_INPUTS["PRODUCT_SHA"], RELEASE_INPUTS["PIPELINE_SHA"],
-            {"phone": PHONE_DIGEST, "wear": WEAR_DIGEST},
+            {"wear": WEAR_DIGEST},
         )
         self.archive.assert_called_once_with(Path("synthetic-archive").resolve(), "alpha-status.json")
         self.assertEqual(report["lifecycle_validation"], {
@@ -202,12 +202,11 @@ class PlayPublishTest(unittest.TestCase):
             "observed_at": preflight()["observed_at"], "fresh_inventory": "verified",
         })
         self.assertEqual(report["bundle_catalog"]["predecessors"], {
-            PHONE_TRACK: {"version_code": PHONE_PREDECESSOR, "result": "present"},
             WEAR_TRACK: {"version_code": WEAR_PREDECESSOR, "result": "present"},
         })
-        for name in (PHONE_TRACK, WEAR_TRACK):
-            self.assertEqual(report["uploads"][name]["result"], "uploaded")
-            self.assertEqual(report["track_updates"][name]["matched_note_locales"], ["en-US", "zh-TW"])
+        self.assertEqual(report["uploads"], {WEAR_TRACK: report["uploads"][WEAR_TRACK]})
+        self.assertEqual(report["uploads"][WEAR_TRACK]["result"], "uploaded")
+        self.assertEqual(report["track_updates"][WEAR_TRACK]["matched_note_locales"], ["en-US", "zh-TW"])
         self.assertEqual(report["review_observation"]["result"], "observed_submitted")
         self.assertEqual(report["cleanup"]["result"], "not_attempted")
         self.assertEqual(self.operations(), [
@@ -215,32 +214,28 @@ class PlayPublishTest(unittest.TestCase):
             ("GET", f"{EDIT_URL}/bundles"),
             ("GET", f"{EDIT_URL}/tracks"),
             ("POST", UPLOAD_URL),
-            ("POST", UPLOAD_URL),
-            ("PUT", f"{EDIT_URL}/tracks/internal"),
             ("PUT", f"{EDIT_URL}/tracks/wear:internal"),
             ("POST", COMMIT_URL),
-            ("GET", f"{APP_URL}/tracks/internal/releases"),
             ("GET", f"{APP_URL}/tracks/wear:internal/releases"),
         ])
         requests = self.requests()
-        self.assertEqual([requests[3].data, requests[4].data], [PHONE_BUNDLE, WEAR_BUNDLE])
+        self.assertEqual(requests[3].data, WEAR_BUNDLE)
         self.assertEqual(requests[3].get_header("Content-type"), "application/octet-stream")
-        self.assertEqual(json.loads(requests[5].data), {
-            "track": "internal",
-            "releases": [{"versionCodes": ["100011"], "status": "completed", "releaseNotes": publish.PHONE_NOTES}],
-        })
-        self.assertEqual(json.loads(requests[6].data), {
+        self.assertEqual(json.loads(requests[4].data), {
             "track": "wear:internal",
-            "releases": [{"versionCodes": ["200008"], "status": "completed", "releaseNotes": publish.WEAR_NOTES}],
+            "releases": [{"versionCodes": ["200009"], "status": "completed", "releaseNotes": publish.WEAR_NOTES}],
         })
-        self.assertIsNone(requests[7].data)
-        self.assertNotIn(("PUT", f"{EDIT_URL}/tracks/alpha"), self.operations())
+        self.assertIsNone(requests[5].data)
+        # No phone track is ever written.
+        for name in ("internal", "alpha", "beta", "production"):
+            self.assertNotIn(("PUT", f"{EDIT_URL}/tracks/{name}"), self.operations())
 
     def test_release_notes_fit_play_limits(self):
-        for notes in (publish.PHONE_NOTES, publish.WEAR_NOTES):
-            self.assertEqual([note["language"] for note in notes], ["en-US", "zh-TW"])
-            for note in notes:
-                self.assertLessEqual(len(note["text"]), 500)
+        self.assertEqual(publish.RELEASE_NOTES, {WEAR_TRACK: publish.WEAR_NOTES})
+        self.assertEqual([note["language"] for note in publish.WEAR_NOTES], ["en-US", "zh-TW"])
+        for note in publish.WEAR_NOTES:
+            self.assertLessEqual(len(note["text"]), 500)
+            self.assertNotIn("*", note["text"])
 
     def test_quota_limited_reads_fall_back_to_the_exact_fresh_edit_inventory(self):
         quota = {"result": "forbidden", "http_status": 403, "quota": QUOTA_REASON}
@@ -249,7 +244,7 @@ class PlayPublishTest(unittest.TestCase):
                 self.opener.open.reset_mock()
                 report = self.run_with(
                     *completed_precommit(), response({"id": EDIT_ID}),
-                    http_error(403, "Listing releases quota exceeded"), http_error(403, "Listing releases quota exceeded"),
+                    http_error(403, "Listing releases quota exceeded"),
                     archive=preflight(quota_tracks=quota_tracks),
                 )
                 self.assertEqual(report["result"], "committed")
@@ -264,7 +259,7 @@ class PlayPublishTest(unittest.TestCase):
 
     def test_quota_fallback_still_requires_the_exact_fresh_edit_inventory(self):
         good = expected_inventory()
-        for tracks in (good[:-1], [good[0], track(PHONE_TRACK, 100006), *good[2:]]):
+        for tracks in (good[:-1], [good[0], track(PHONE_TRACK, 100010), *good[2:]]):
             with self.subTest(tracks=tracks):
                 self.opener.open.reset_mock()
                 report = self.run_with(
@@ -291,9 +286,11 @@ class PlayPublishTest(unittest.TestCase):
             ("alpha", verified_track(100008)),
             ("alpha", {"result": "pending_release", "http_status": 200, "releases": [observed(ALPHA, IN_REVIEW)]}),
             ("alpha", NO_CONTENT),
-            ("internal", verified_track(PHONE)),
-            ("internal", {"result": "pending_release", "http_status": 200, "releases": [observed(100006, NOT_SENT)]}),
-            ("wear:internal", verified_track(200006)),
+            ("internal", verified_track(100010)),
+            ("internal", {"result": "pending_release", "http_status": 200, "releases": [observed(100012, NOT_SENT)]}),
+            ("internal", NO_CONTENT),
+            ("wear:internal", verified_track(WEAR)),
+            ("wear:internal", verified_track(200007)),
             ("wear:internal", {"result": "forbidden", "http_status": 403}),
             ("production", verified_track(100003)),
             ("wear:production", verified_track(200003)),
@@ -327,15 +324,17 @@ class PlayPublishTest(unittest.TestCase):
         cases = [
             (good[1:], "fresh_inventory_mismatch"),
             ([track("alpha", 100010), *good[1:]], "fresh_inventory_mismatch"),
-            ([good[0], track(PHONE_TRACK, PHONE), *good[2:]], "fresh_inventory_mismatch"),
+            ([good[0], track(PHONE_TRACK, 100012), *good[2:]], "fresh_inventory_mismatch"),
+            ([good[0], *good[2:]], "fresh_inventory_mismatch"),
+            ([*good[:2], track(WEAR_TRACK, WEAR), *good[3:]], "fresh_inventory_mismatch"),
             ([*good[:2], track(WEAR_TRACK, WEAR_PREDECESSOR, userFraction=0.5), *good[3:]], "fresh_inventory_mismatch"),
             (good[:-1], "fresh_inventory_mismatch"),
             ([*good[:3], track("beta", 100006), good[4]], "fresh_inventory_mismatch"),
             ([*good, track("production", 100009)], "fresh_inventory_mismatch"),
             ([*good, track("PRIVATE_UNRELATED", 100004, status="draft")], "unrelated_pending_release"),
         ]
-        for tracks, failure in cases:
-            with self.subTest(failure=failure):
+        for index, (tracks, failure) in enumerate(cases):
+            with self.subTest(case=index, failure=failure):
                 self.opener.open.reset_mock()
                 report = self.run_with(*edit_snapshot(tracks=tracks), response(status=204))
                 self.assertEqual(report["failure"], failure)
@@ -350,22 +349,20 @@ class PlayPublishTest(unittest.TestCase):
         self.assertEqual(report["failure"], "fresh_inventory_mismatch")
         self.assertEqual(report["track_inventory"]["observed_active"], {
             "alpha": {"releases": [{"status": "completed", "version_codes": [ALPHA]}], "custom_targeting": True},
-            "beta": {"releases": [{"status": "completed", "version_codes": [PHONE_PREDECESSOR]}], "custom_targeting": False},
-            "internal": {"releases": [{"status": "completed", "version_codes": [PHONE_PREDECESSOR]}], "custom_targeting": False},
+            "beta": {"releases": [{"status": "completed", "version_codes": [PHONE_BETA]}], "custom_targeting": False},
+            "internal": {"releases": [{"status": "completed", "version_codes": [PHONE]}], "custom_targeting": False},
             "wear:alpha": {"releases": [{"status": "completed", "version_codes": [200006]}], "custom_targeting": False},
-            "wear:beta": {"releases": [{"status": "completed", "version_codes": [WEAR_PREDECESSOR]}], "custom_targeting": False},
+            "wear:beta": {"releases": [{"status": "completed", "version_codes": [WEAR_BETA]}], "custom_targeting": False},
             "wear:internal": {"releases": [{"status": "completed", "version_codes": [WEAR_PREDECESSOR]}], "custom_targeting": False},
         })
         self.assertEqual(report["track_inventory"]["other_active_track_count"], 1)
 
     def test_missing_predecessor_or_newer_code_never_uploads(self):
         cases = [
-            ([bundle(ALPHA), bundle(WEAR_PREDECESSOR)], "predecessor_missing", PHONE_TRACK),
-            ([bundle(ALPHA), bundle(PHONE_PREDECESSOR)], "predecessor_missing", WEAR_TRACK),
-            ([*catalog(), bundle(PHONE + 1)], "candidate_conflict", None),
+            ([bundle(ALPHA), bundle(PHONE)], "predecessor_missing", WEAR_TRACK),
             ([*catalog(), bundle(WEAR + 1)], "candidate_conflict", None),
             ([*catalog(), bundle(300001)], "candidate_conflict", None),
-            ([*catalog(), bundle(PHONE, "a" * 64)], "candidate_conflict", None),
+            ([*catalog(), bundle(WEAR, "a" * 64)], "candidate_conflict", None),
         ]
         for bundles, failure, blocking in cases:
             with self.subTest(failure=failure, bundles=bundles):
@@ -377,13 +374,15 @@ class PlayPublishTest(unittest.TestCase):
                 self.assertEqual(self.mutations(), [("POST", f"{APP_URL}/edits"), ("DELETE", EDIT_URL)])
 
     def test_archive_verification_happens_before_oauth(self):
-        for field in ("SIGNED_SHA256", "SIGNED_WEAR_SHA256", "SIGNED_BUILD"):
+        for field in ("SIGNED_WEAR_SHA256", "SIGNED_BUILD"):
             with self.subTest(field=field):
                 report = self.run_with(release_inputs={**RELEASE_INPUTS, field: "PRIVATE_VALUE"})
                 self.assertEqual(report["artifact_verification"]["result"], "invalid_release_parameters")
+        report = self.run_with(release_inputs={k: v for k, v in RELEASE_INPUTS.items() if k != "SIGNED_WEAR_SHA256"})
+        self.assertEqual(report["artifact_verification"]["result"], "invalid_release_parameters")
         self.loader.assert_not_called()
 
-        self.loader.return_value = {"phone": PHONE_BUNDLE, "wear": b"wrong signed bytes"}
+        self.loader.return_value = {"wear": b"wrong signed bytes"}
         report = self.run_with()
         self.assertEqual(report["artifact_verification"]["result"], "hash_mismatch")
         self.archive.assert_not_called()
@@ -394,7 +393,7 @@ class PlayPublishTest(unittest.TestCase):
         self.archive.assert_not_called()
 
         self.loader.side_effect = None
-        self.loader.return_value = {"phone": PHONE_BUNDLE, "wear": WEAR_BUNDLE}
+        self.loader.return_value = {"wear": WEAR_BUNDLE}
         self.archive.side_effect = publish.ArtifactVerificationError("PRIVATE_PATH")
         report = self.run_with()
         self.assertEqual(report["failure"], "preflight_archive_unverified")
@@ -403,36 +402,32 @@ class PlayPublishTest(unittest.TestCase):
 
     def test_existing_matching_candidate_upload_is_reused(self):
         report = self.run_with(
-            *edit_snapshot(bundles=[*catalog(), bundle(PHONE, PHONE_DIGEST)]),
-            response(bundle(WEAR, WEAR_DIGEST)), staged(PHONE_TRACK, PHONE), staged(WEAR_TRACK, WEAR),
-            response({"id": EDIT_ID}), live(PHONE_TRACK, PHONE), live(WEAR_TRACK, WEAR),
+            *edit_snapshot(bundles=[*catalog(), bundle(WEAR, WEAR_DIGEST)]),
+            staged(WEAR_TRACK, WEAR), response({"id": EDIT_ID}), live(WEAR_TRACK, WEAR),
         )
         self.assertEqual(report["result"], "committed")
-        self.assertEqual(report["uploads"][PHONE_TRACK]["result"], "reused")
-        self.assertEqual(report["uploads"][WEAR_TRACK]["result"], "uploaded")
-        self.assertEqual(self.operations().count(("POST", UPLOAD_URL)), 1)
-        self.assertEqual(self.requests()[3].data, WEAR_BUNDLE)
+        self.assertEqual(report["uploads"][WEAR_TRACK]["result"], "reused")
+        self.assertEqual(self.operations().count(("POST", UPLOAD_URL)), 0)
 
     def test_wrong_upload_receipt_stops_before_any_track_update(self):
         cases = [
-            [response(bundle(PHONE, "a" * 64))],
-            [response(bundle(PHONE, PHONE_DIGEST)), response(bundle(WEAR, PHONE_DIGEST))],
-            [response(bundle(PHONE, PHONE_DIGEST)), response(bundle(WEAR_PREDECESSOR, WEAR_DIGEST))],
+            response(bundle(WEAR, "a" * 64)),
+            response(bundle(WEAR_PREDECESSOR, WEAR_DIGEST)),
+            response(bundle(PHONE, WEAR_DIGEST)),
         ]
-        for receipts in cases:
-            with self.subTest(receipts=len(receipts)):
+        for index, receipt in enumerate(cases):
+            with self.subTest(case=index):
                 self.opener.open.reset_mock()
-                report = self.run_with(*edit_snapshot(), *receipts, response(status=204))
-                failed = PHONE_TRACK if len(receipts) == 1 else WEAR_TRACK
-                self.assertEqual(report["uploads"][failed]["result"], "bundle_receipt_mismatch")
+                report = self.run_with(*edit_snapshot(), receipt, response(status=204))
+                self.assertEqual(report["uploads"][WEAR_TRACK]["result"], "bundle_receipt_mismatch")
                 self.assertNotIn("PUT", [method for method, _ in self.operations()])
                 self.assertEqual(self.mutations()[-2:], [("POST", UPLOAD_URL), ("DELETE", EDIT_URL)])
 
     def test_staged_wrong_notes_do_not_commit(self):
+        other_notes = [{"language": note["language"], "text": "Other notes."} for note in publish.WEAR_NOTES]
         report = self.run_with(
-            *edit_snapshot(), response(bundle(PHONE, PHONE_DIGEST)), response(bundle(WEAR, WEAR_DIGEST)),
-            staged(PHONE_TRACK, PHONE),
-            response(track(WEAR_TRACK, WEAR, releaseNotes=publish.PHONE_NOTES)),
+            *edit_snapshot(), response(bundle(WEAR, WEAR_DIGEST)),
+            response(track(WEAR_TRACK, WEAR, releaseNotes=other_notes)),
             response(status=204),
         )
         self.assertEqual(report["track_updates"][WEAR_TRACK]["result"], "track_receipt_notes_mismatch")
@@ -458,34 +453,27 @@ class PlayPublishTest(unittest.TestCase):
                 self.assertEqual(self.operations()[-2:], [("POST", COMMIT_URL), ("DELETE", EDIT_URL)])
                 self.assertEqual(self.operations().count(("POST", COMMIT_URL)), 1)
 
-    def test_ambiguous_commit_only_reconciles_both_exact_codes(self):
+    def test_ambiguous_commit_only_reconciles_the_exact_code(self):
         cases = [
-            (TimeoutError("PRIVATE_TIMEOUT"), [live(PHONE_TRACK, PHONE), live(WEAR_TRACK, WEAR)], "submission_observed"),
-            (TimeoutError("PRIVATE_TIMEOUT"), [live(PHONE_TRACK, PHONE), live(WEAR_TRACK, WEAR_PREDECESSOR)],
-             "commit_indeterminate"),
-            (response({"id": "PRIVATE_WRONG_EDIT"}), [live(PHONE_TRACK, PHONE, NOT_SENT), live(WEAR_TRACK, WEAR)],
-             "commit_indeterminate"),
-            (http_error(503), [http_error(403, "Listing releases quota exceeded"), live(WEAR_TRACK, WEAR)],
-             "commit_indeterminate"),
+            (TimeoutError("PRIVATE_TIMEOUT"), live(WEAR_TRACK, WEAR), "submission_observed"),
+            (TimeoutError("PRIVATE_TIMEOUT"), live(WEAR_TRACK, WEAR_PREDECESSOR), "commit_indeterminate"),
+            (response({"id": "PRIVATE_WRONG_EDIT"}), live(WEAR_TRACK, WEAR, NOT_SENT), "commit_indeterminate"),
+            (http_error(503), http_error(403, "Listing releases quota exceeded"), "commit_indeterminate"),
         ]
-        for problem, observations, result in cases:
-            with self.subTest(result=result):
+        for index, (problem, observation, result) in enumerate(cases):
+            with self.subTest(case=index, result=result):
                 self.opener.open.reset_mock()
-                report = self.run_with(*completed_precommit(), problem, *observations)
+                report = self.run_with(*completed_precommit(), problem, observation)
                 self.assertEqual(report["result"], result)
                 self.assertEqual(report["cleanup"]["result"], "not_attempted")
-                self.assertEqual(self.operations()[-3:], [
+                self.assertEqual(self.operations()[-2:], [
                     ("POST", COMMIT_URL),
-                    ("GET", f"{APP_URL}/tracks/internal/releases"),
                     ("GET", f"{APP_URL}/tracks/wear:internal/releases"),
                 ])
                 self.assertEqual(self.operations().count(("POST", COMMIT_URL)), 1)
 
     def test_an_unsent_target_is_reported_after_an_acknowledged_commit(self):
-        report = self.run_with(
-            *completed_precommit(), response({"id": EDIT_ID}),
-            live(PHONE_TRACK, PHONE, NOT_SENT), live(WEAR_TRACK, WEAR),
-        )
+        report = self.run_with(*completed_precommit(), response({"id": EDIT_ID}), live(WEAR_TRACK, WEAR, NOT_SENT))
         self.assertEqual(report["result"], "committed")
         self.assertEqual(report["review_observation"]["result"], "observed_not_sent_for_review")
 

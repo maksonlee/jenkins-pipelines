@@ -107,37 +107,36 @@ class ReleaseArchiveTest(unittest.TestCase):
         tool.write_bytes(b'bundletool fixture')
         self.enterContext(patch.multiple(verifier, BUNDLETOOL=tool, BUNDLETOOL_SHA=verifier.sha256(tool)))
         self.enterContext(patch.dict('os.environ', {
-            'PRODUCT_SHA': self.source_commit, 'VERSION_NAME': '1.0.10', 'PHONE_VERSION_CODE': '100011',
-            'WEAR_VERSION_NAME': '1.0.7', 'WEAR_VERSION_CODE': '200008',
+            'PRODUCT_SHA': self.source_commit, 'WEAR_VERSION_NAME': '1.0.8', 'WEAR_VERSION_CODE': '200009',
         }))
 
     def verified(self, form_factor):
-        if form_factor == 'phone':
-            fields = verify_manifest(manifest('100011', '26', '36', version='1.0.10'), '1.0.10', '100011', 'phone')
-        else:
-            fields = verify_manifest(
-                manifest('200008', '30', '35', WATCH, STANDALONE, version='1.0.7'), '1.0.7', '200008', 'wear',
-            )
+        self.assertEqual(form_factor, 'wear')
+        fields = verify_manifest(
+            manifest('200009', '30', '35', WATCH, STANDALONE, version='1.0.8'), '1.0.8', '200009', 'wear',
+        )
         return fields | {
             'sha256': verifier.sha256(self.bundles[form_factor]),
             'upload_certificate_sha256': self.upload_certificate,
         }
 
-    def test_phone_and_wear_bundles_are_verified_and_archived_together(self):
-        results = {form_factor: self.verified(form_factor) for form_factor in ('phone', 'wear')}
+    def test_only_the_wear_bundle_is_released(self):
+        self.assertEqual([entry[0] for entry in verifier.RELEASE_BUNDLES], ['wear'])
+        self.assertEqual((verifier.WEAR_VERSION_NAME, verifier.WEAR_VERSION_CODE), ('1.0.8', '200009'))
+
+    def test_the_wear_bundle_is_verified_and_archived(self):
+        results = {form_factor: self.verified(form_factor) for form_factor in ('wear',)}
         with patch.object(verifier, 'verify_bundle', side_effect=lambda bundle, form_factor, *_: results[form_factor]) as verify:
             verifier.archive_release_bundles(self.root, self.evidence)
         self.assertEqual([call.args for call in verify.call_args_list], [
-            (self.bundles['phone'], 'phone', '1.0.10', '100011', self.upload_certificate),
-            (self.bundles['wear'], 'wear', '1.0.7', '200008', self.upload_certificate),
+            (self.bundles['wear'], 'wear', '1.0.8', '200009', self.upload_certificate),
         ])
         archive = self.evidence / 'bundles'
-        names = {'phone': 'phone-1.0.10-100011.aab', 'wear': 'wear-1.0.7-200008.aab'}
+        names = {'wear': 'wear-1.0.8-200009.aab'}
         self.assertEqual({path.name for path in archive.iterdir()}, {*names.values(), 'SHA256SUMS'})
         for form_factor, name in names.items():
             self.assertEqual((archive / name).read_bytes(), self.bundles[form_factor].read_bytes())
         self.assertEqual((archive / 'SHA256SUMS').read_text(encoding='ascii').splitlines(), [
-            f"{results['phone']['sha256']}  {names['phone']}",
             f"{results['wear']['sha256']}  {names['wear']}",
         ])
         report = json.loads((self.evidence / 'signed-bundles.json').read_text(encoding='utf-8'))
@@ -145,7 +144,7 @@ class ReleaseArchiveTest(unittest.TestCase):
         self.assertEqual(report['bundles'], [results[form_factor] | {'file': names[form_factor]} for form_factor in names])
 
     def test_rejects_a_configured_version_that_differs_from_the_pinned_release(self):
-        with patch.dict('os.environ', {'WEAR_VERSION_CODE': '200007'}), patch.object(verifier, 'verify_bundle') as verify:
+        with patch.dict('os.environ', {'WEAR_VERSION_CODE': '200008'}), patch.object(verifier, 'verify_bundle') as verify:
             with self.assertRaisesRegex(VerificationError, 'pinned release'):
                 verifier.archive_release_bundles(self.root, self.evidence)
         verify.assert_not_called()
@@ -163,9 +162,7 @@ class ReleaseArchiveTest(unittest.TestCase):
 
     def test_nothing_is_archived_when_the_wear_bundle_fails(self):
         def verify(bundle, form_factor, *_):
-            if form_factor == 'wear':
-                raise VerificationError('Wear AAB must require watch hardware')
-            return self.verified('phone')
+            raise VerificationError('Wear AAB must require watch hardware')
         with patch.object(verifier, 'verify_bundle', side_effect=verify), self.assertRaises(VerificationError):
             verifier.archive_release_bundles(self.root, self.evidence)
         self.assertFalse((self.evidence / 'bundles').exists())
