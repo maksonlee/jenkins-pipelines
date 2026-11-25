@@ -13,7 +13,7 @@ Never point a job at a mutable tag.
 | --- | --- | --- | --- | --- |
 | `android()` | `android-build-env:jdk25-20261029` | `android-build-env/` | `ubuntu:24.04` by digest; Temurin 25 and 21, cmdline-tools by checksum | `androidCi`, `androidRelease` (through `gradleRelease`) |
 | `flutter()` | `flutter-android-build-env:jdk25-20261029` | `flutter-android-build-env/` | `android()` digest + Dart, FVM | `flutterCi`, `flutterRelease` |
-| `gstStreamWall()` | `gst-stream-wall-android-build-env:1.98.0-2` | `gst-stream-wall-android-build-env/` | **legacy** `cdlee/android-build-env@sha256:aa44…` (2025-07, SDKMAN JDKs; see `android-build-env/legacy-2025-07-21/`) | `android/gst-stream-wall/release` |
+| `gstStreamWall()` | `gst-stream-wall-android-build-env:1.98.0-3` | `gst-stream-wall-android-build-env/` | `android()` digest + Rust 1.98.0 with the Android target, native build tools, bundletool by checksum | `android/gst-stream-wall/{ci,release}` |
 | `unityAndroid()` | `unity-android-build-env:6000.6.7f1-android-1` | `unity-android-build-env/` | GameCI editor by digest | `unity/math-runner-*` (the digest is also bound into the Unity worker seal) |
 | `playwright()` | `mcr.microsoft.com/playwright:v1.65.1-noble` by digest | Microsoft | — | `web/readerplay/ci` |
 | `python()` | `python:3.13-bookworm` by digest | Docker Hub | — | Flutter backend tests and Play metadata validators |
@@ -38,9 +38,8 @@ Never point a job at a mutable tag.
   `/home/administrator/jenkins/termstay-cache/toolchains`.
 - The `aosp-builder` images were removed from the agent with the AOSP jobs on 2026-11-25.
 
-**Open item:** `gst-stream-wall-android-build-env` should be rebuilt on `android()` so that every Android image
-shares one reproducible base. That changes its JDK and toolchain paths, so the gst-stream-wall release must be
-qualified again before `gstStreamWall()` moves.
+The gst image moved from the legacy 2025 base (SDKMAN JDKs, Gradle on Java 21) to `android()` on 2026-11-25, so
+every Android image now shares one base and Gradle runs on Temurin 25. `1.98.0-2` stays in Harbor for a rollback.
 
 **Agent disk.** Old tags that no job referenced (`flutter-android-build-env:3.44.0`, `:3.44.0-fvm` and
 `gst-stream-wall-android-build-env:1.98.0-1`) and unused dangling images were removed on 2026-11-24. Before removing

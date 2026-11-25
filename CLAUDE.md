@@ -116,7 +116,7 @@ git diff --check
 - **Release jobs** use stage timeouts plus a 60-minute approval timeout, not one build timeout, because the input
   holds the only executor.
 - **`buildImages.groovy`** pins every image by digest; never use a mutable tag. `flutter-android-build-env` is built
-  `FROM` the `android-build-env` digest, and the gst image still uses the legacy 2025 base.
+  `FROM` the `android-build-env` digest, and so is the gst image since 2026-11-25.
 - **Vault layout:**
   - `secret/jenkins/mobile/shared/upload-key` holds the upload key the native Android apps share: `upload_jks_b64`,
     `store_password`, `key_password`, `key_alias` and `certificate_sha256`. `androidRelease` and the gst and

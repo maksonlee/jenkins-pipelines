@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 
-FROM cdlee/android-build-env@sha256:aa44de3756d5850330663fc920b50011da481d3e7e3b3aab2366d3360dce24ab
+# android-build-env:jdk25-20261029, the base of every other Android image (Temurin 25 default, 21 beside it).
+FROM harbor.maksonlee.com/library/android-build-env@sha256:b88ae3849ada50e9943fb7cab8b1073063e1be23189c132395f9a853bb6154d7
 
 ARG RUST_TOOLCHAIN_VERSION=1.98.0
 ARG RUST_ANDROID_TARGET=aarch64-linux-android

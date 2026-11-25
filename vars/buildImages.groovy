@@ -12,8 +12,9 @@ def flutter() {
 }
 
 def gstStreamWall() {
-    // gst-stream-wall-android-build-env:1.98.0-2, built 2026-08-30; Dockerfile in docker/gst-stream-wall-android-build-env
-    return 'harbor.maksonlee.com/library/gst-stream-wall-android-build-env@sha256:11e2a4f7a262afd5a28c2280b7b0114db541d24e7eff498dee79e4a55a10dad1'
+    // gst-stream-wall-android-build-env:1.98.0-3, built 2026-11-25 on android() (Temurin 25); Dockerfile in
+    // docker/gst-stream-wall-android-build-env
+    return 'harbor.maksonlee.com/library/gst-stream-wall-android-build-env@sha256:61c769c622d5eeb807f2eba063508694df35cc8d132ffbb9c7e015a72c047670'
 }
 
 def python() {

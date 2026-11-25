@@ -356,11 +356,12 @@ def androidReleaseConfig(Map overrides = [:]) {
             '-e RUSTUP_HOME=/opt/rust/rustup',
             '-e RUSTUP_BIN_DIR=/opt/rust/cargo/bin',
             '-e RUST_TOOLCHAIN_VERSION=1.98.0',
+            '-e JAVA_HOME=/opt/java/temurin-25',
             '-e ANDROID_HOME=/home/ubuntu/Android',
             '-e ANDROID_SDK_ROOT=/home/ubuntu/Android',
             '-e GSTREAMER_ROOT_ANDROID=/opt/gstreamer',
             '-e BUNDLETOOL_JAR=/opt/bundletool/bundletool-all-1.18.3.jar',
-            '-e PATH=/opt/rust/cargo/bin:/home/ubuntu/Android/cmake/3.22.1/bin:/home/ubuntu/Android/cmdline-tools/latest/bin:/home/ubuntu/Android/platform-tools:/home/ubuntu/.sdkman/candidates/java/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+            '-e PATH=/opt/rust/cargo/bin:/home/ubuntu/Android/cmake/3.22.1/bin:/home/ubuntu/Android/cmdline-tools/latest/bin:/home/ubuntu/Android/platform-tools:/opt/java/temurin-25/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
     ].join(' ')
 
     return [
