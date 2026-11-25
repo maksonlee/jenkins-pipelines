@@ -123,6 +123,7 @@ its own (`publishPlayListings: false`).
 | `android/float-level/{ci,release}` | package `com.maksonlee.floatinglevel`; same as beepbeep |
 | `android/headshot-maker-android/{ci,release}` | package `com.maksonlee.headshotmaker`; same as beepbeep |
 | `android/taiwandrive/{ci,release}` | engine and pack JVM tests; alpha/internal; no bundled offline pack; signer checked against Vault |
+| `android/gst-stream-wall/ci` | own Jenkinsfile: unit tests, debug lint and the shell debug APK in the gst image; one Gradle worker |
 | `android/learn-chess/ci` | `nativeAndroidCi`, traced evidence, emulator device suite, honors `[skip ci]` |
 | `android/learn-go-board-game/ci` | core, lesson and content-validator tests, app unit tests, debug lint, debug APKs |
 | `android/cloud-cost-widgets/ci` | `nativeAndroidCi` for the phone and Wear OS apps; Kotlin compiled in-process |

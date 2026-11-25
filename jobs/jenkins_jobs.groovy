@@ -14,7 +14,7 @@ def projects = [
     [folder: 'android/float-level', roles: ['ci', 'release'], repo: 'float-level', type: 'android'],
     [folder: 'android/headshot-maker-android', roles: ['ci', 'release'], repo: 'headshot-maker-android', type: 'android'],
     [folder: 'android/taiwandrive', roles: ['ci', 'release'], repo: 'taiwandrive', type: 'android'],
-    [folder: 'android/gst-stream-wall', roles: ['release'], repo: 'gst-stream-wall', type: 'android'],
+    [folder: 'android/gst-stream-wall', roles: ['ci', 'release'], repo: 'gst-stream-wall', type: 'android'],
     [folder: 'android/learn-chess', roles: ['ci'], repo: 'learn-chess', type: 'android'],
     [folder: 'android/learn-go-board-game', roles: ['ci'], repo: 'learn-go-board-game', type: 'android'],
     [folder: 'android/cloud-cost-widgets', roles: ['ci', 'release'], repo: 'cloud-cost-widgets', type: 'android'],
@@ -36,6 +36,7 @@ def descriptions = [
 
 // Jobs with their own Jenkinsfile instead of androidRelease or flutterRelease.
 def jobDescriptions = [
+    'android/gst-stream-wall/ci': 'CI for maksonlee/gst-stream-wall with its own Jenkinsfile: unit tests, debug lint and the shell debug APK in the release job\'s image and Rust toolchain. Triggered by GitHub pushes; uses no release signing material.',
     'android/cloud-cost-widgets/release': 'Manual Google Play release for maksonlee/cloud-cost-widgets with its own Jenkinsfile: alpha-status reads the Play state, internal-preflight builds and verifies the signed phone and Wear OS bundles, and internal-submit uploads the bundles of an approved preflight build to Internal testing.',
 ]
 
