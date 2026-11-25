@@ -1,12 +1,16 @@
-"""Offline tests of the Share Notes web release helper: temporary directories and the local rsync, no SSH or sudo."""
+"""Offline tests of the static-site release helper: temporary directories and the local rsync, no SSH or sudo."""
 
 import json
 import tarfile
 import tempfile
 import unittest
+import importlib.util
 from pathlib import Path
 
-import release_ops as ops
+_SPEC = importlib.util.spec_from_file_location(
+    'static_site_release', Path(__file__).resolve().parents[2] / 'resources/web/static_site_release.py')
+ops = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(ops)
 
 COMMIT = 'a' * 40
 
@@ -19,11 +23,11 @@ class ReleaseOpsTest(unittest.TestCase):
         self.live = self.base / 'share-notes'
         self.site(self.live, '1.0.0', 'old')
         (self.live / 'removed-in-new.js').write_text('old only\n')
-        self.origin = ops.Origin(self.live, self.base / 'releases', self.base / 'lock', privileged=False)
+        self.origin = ops.Origin('share-notes', self.live, self.base / 'releases', self.base / 'lock', privileged=False)
 
     def site(self, tree, version, marker):
         (tree / 'assets').mkdir(parents=True)
-        for name in ops.REQUIRED:
+        for name in ops.SITES['share-notes']['required']:
             (tree / name).write_text(f'{name} {marker}\n')
         (tree / 'version.json').write_text(json.dumps({'version': version, 'build_number': '7'}))
         (tree / 'assets/font.otf').write_text(f'font {marker}\n')
@@ -31,8 +35,8 @@ class ReleaseOpsTest(unittest.TestCase):
 
     def packaged(self, name='new', version='1.1.0'):
         output = self.base / f'out-{name}'
-        candidate = ops.package(self.site(self.base / f'tree-{name}', version, name), COMMIT, output)
-        return candidate, output / 'share-notes-web.tar.gz'
+        candidate = ops.package('share-notes', self.site(self.base / f'tree-{name}', version, name), COMMIT, output)
+        return candidate, output / 'site-release.tar.gz'
 
     def stage(self, candidate, archive):
         return self.origin.stage(candidate['releaseId'], COMMIT, archive, candidate['archiveSha256'])
@@ -47,7 +51,17 @@ class ReleaseOpsTest(unittest.TestCase):
         tree = self.site(self.base / 'tree-short', '1.1.0', 'x')
         (tree / 'main.dart.js').unlink()
         with self.assertRaisesRegex(ops.ReleaseError, 'no main.dart.js'):
-            ops.package(tree, COMMIT, self.base / 'out-short')
+            ops.package('share-notes', tree, COMMIT, self.base / 'out-short')
+
+    def test_a_site_without_a_version_file_is_named_by_its_content(self):
+        tree = self.base / 'reader'
+        tree.mkdir()
+        for name in ops.SITES['readerplay']['required']:
+            (tree / name).write_text(name)
+        candidate = ops.package('readerplay', tree, COMMIT, self.base / 'out-reader')
+        self.assertEqual(candidate['version'], 'content-' + candidate['releaseId'].split('-')[1])
+        with self.assertRaisesRegex(ops.ReleaseError, 'Unknown site'):
+            ops.package('elsewhere', tree, COMMIT, self.base / 'out-reader')
 
     def test_stage_leaves_the_live_site_alone(self):
         before = ops.tree_manifest(self.live)

@@ -62,6 +62,7 @@ def standaloneJobs = [
     [job: 'web/hongyu-portal/deploy', description: 'Manual deployment of maksonlee/hongyu-portal to its origin: verify-only, stage-only or activate-production.'],
     [job: 'web/share-notes/deploy', description: 'Manual deployment of the maksonlee/share-notes web app to its origin: verify-only, stage-only or activate-production.'],
     [job: 'web/veil-backend/deploy', description: 'Manual deployment of the maksonlee/veil-backend server binary to its origin: verify-only, stage-only or activate-production.'],
+    [job: 'web/readerplay/deploy', description: 'Manual deployment of maksonlee/readerplay to its origin: verify-only, stage-only or activate-production.'],
     [job: 'artifactory/artifactory-cleanup', description: 'Weekly cleanup of the Artifactory android-snapshots repository: every app keeps its newest version folders.'],
 ]
 

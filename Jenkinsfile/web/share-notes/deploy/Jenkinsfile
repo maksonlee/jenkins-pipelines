@@ -35,7 +35,7 @@ pipeline {
     }
 
     environment {
-        TOOLS = 'pipeline-source/Jenkinsfile/web/share-notes/deploy'
+        HELPER = 'pipeline-source/resources/web/static_site_release.py'
         ORIGIN = 'ubuntu@app.maksonlee.com'
         SITE = 'https://share-notes.maksonlee.com'
         EVIDENCE = 'deploy-evidence'
@@ -128,10 +128,10 @@ docker run --rm $BUILD_CONTAINER_RESOURCE_ARGS -u "$(id -u):$(id -g)" \\
     "$flutter" test --no-pub
     xargs -0 "$flutter" < /flutter-build-arguments
   '
-python3 "$TOOLS/release_ops.py" package source/build/web "$RELEASE_COMMIT" "$EVIDENCE" > /dev/null
+python3 "$HELPER" share-notes package source/build/web "$RELEASE_COMMIT" "$EVIDENCE" > /dev/null
 cat "$EVIDENCE/candidate.json"
 ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN" \\
-  'sudo -n python3 - status' < "$TOOLS/release_ops.py" > "$EVIDENCE/origin-status.json"
+  'sudo -n python3 - share-notes status' < "$HELPER" > "$EVIDENCE/origin-status.json"
 python3 - "$EVIDENCE" "$DEPLOY_MODE" "${EXPECTED_RELEASE:-}" <<'PY'
 import json, sys
 evidence, mode, expected = sys.argv[1:]
@@ -167,10 +167,10 @@ PY
 set -euo pipefail
 ssh_origin=(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN")
 remote="/tmp/share-notes-web-$RELEASE_ID.tar.gz"
-scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes "$EVIDENCE/share-notes-web.tar.gz" "$ORIGIN:$remote"
+scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes "$EVIDENCE/site-release.tar.gz" "$ORIGIN:$remote"
 trap '"${ssh_origin[@]}" "rm -f $remote"' EXIT
-"${ssh_origin[@]}" "sudo -n python3 - stage $RELEASE_ID $RELEASE_COMMIT $remote $ARCHIVE_SHA256" \\
-  < "$TOOLS/release_ops.py" > "$EVIDENCE/staged.json"
+"${ssh_origin[@]}" "sudo -n python3 - share-notes stage $RELEASE_ID $RELEASE_COMMIT $remote $ARCHIVE_SHA256" \\
+  < "$HELPER" > "$EVIDENCE/staged.json"
 cat "$EVIDENCE/staged.json"
 '''
                 }
@@ -194,7 +194,7 @@ cat "$EVIDENCE/staged.json"
                     sh '''#!/bin/bash
 set -euo pipefail
 ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN" \\
-  "sudo -n python3 - activate $RELEASE_ID $RELEASE_COMMIT" < "$TOOLS/release_ops.py" > "$EVIDENCE/activation.json"
+  "sudo -n python3 - share-notes activate $RELEASE_ID $RELEASE_COMMIT" < "$HELPER" > "$EVIDENCE/activation.json"
 cat "$EVIDENCE/activation.json"
 
 : > "$EVIDENCE/public-checks.txt"
@@ -232,7 +232,7 @@ cat "$EVIDENCE/public-checks.txt"
                     sh '''#!/bin/bash
 set -euo pipefail
 ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN" \\
-  "sudo -n python3 - rollback $RELEASE_ID $RELEASE_COMMIT" < "$TOOLS/release_ops.py" > "$EVIDENCE/rollback.json"
+  "sudo -n python3 - share-notes rollback $RELEASE_ID $RELEASE_COMMIT" < "$HELPER" > "$EVIDENCE/rollback.json"
 cat "$EVIDENCE/rollback.json"
 '''
                 }

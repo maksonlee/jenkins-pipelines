@@ -48,8 +48,8 @@ Jobs that do not follow the layout yet:
   stops there and reports what is live; `stage-only` also unpacks the release beside the live one, builds
   Laravel's caches and runs `nginx -t`; `activate-production` asks for approval, renames the `current` link, reloads
   PHP-FPM, checks the public site and renames the link back if a check fails. It logs in with the agent's own SSH key.
-- `web/share-notes/deploy`: its own Jenkinsfile and origin helper for the Share Notes web app, which is static
-  files in one directory. It runs the Flutter tests and builds the web app from a commit on `master` in the Flutter
+- `web/share-notes/deploy`: its own Jenkinsfile for the Share Notes web app, which is static files in one
+  directory; the origin helper is `resources/web/static_site_release.py`, shared with readerplay. It runs the Flutter tests and builds the web app from a commit on `master` in the Flutter
   image, with the build identity from the repository's `tool/build_flutter.py`. `verify-only` stops there and
   reports what is live; `stage-only` also unpacks the build beside the site; `activate-production` asks for
   approval, copies the live files aside, syncs the release in by content, compares the public files with the built
@@ -63,6 +63,9 @@ Jobs that do not follow the layout yet:
   migrations it adds), then runs the database backup unit, installs the binary, restarts the service and checks
   health on loopback and in public. An unhealthy start puts the previous binary back; migrations are not undone.
   nginx, the public pages, the configuration and Vault are not managed.
+- `web/readerplay/deploy`: the same flow and helper as share-notes, without a build: it packages `public/` from a
+  commit on `main` (the tests run in `web/readerplay/ci`). Staged releases are kept in
+  `/var/www/html/readerplay-releases`, and the deployed files become `root:root`.
 - `backstage/homelab-backstage-main-ci`: builds the homelab-backstage image and pushes it to Harbor.
 
 These jobs are listed in `jobs/jenkins_jobs.groovy` too, so the seed can recreate them.
