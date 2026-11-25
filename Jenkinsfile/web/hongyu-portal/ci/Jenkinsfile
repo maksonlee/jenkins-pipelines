@@ -1,0 +1,81 @@
+// CI for maksonlee/hongyu-portal main: Pint, the PHPUnit suite, the Composer platform check and the responsive
+// Playwright tests against a local `php artisan serve`. Dependencies and the Chromium build that belongs to the
+// project's Playwright version are installed with network access; every check then runs in a container without
+// it, so the browser tests can never reach the production site. The browsers are cached on the agent.
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout()
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10'))
+    }
+
+    triggers {
+        githubPush()
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                deleteDir()
+                dir('pipeline-source') {
+                    checkout scm
+                }
+                dir('source') {
+                    git branch: 'main', credentialsId: 'vault-github-ssh',
+                            url: 'git@github.com:maksonlee/hongyu-portal.git'
+                    sh '''#!/bin/bash
+set -euo pipefail
+echo "hongyu-portal main: $(git rev-parse HEAD)"
+'''
+                }
+            }
+        }
+
+        stage('Install and test') {
+            steps {
+                sh '''#!/bin/bash
+set -euo pipefail
+image=$(docker build --quiet pipeline-source/Jenkinsfile/web/hongyu-portal/ci)
+browsers=/home/administrator/jenkins/web-cache/ms-playwright
+mkdir -p "$browsers"
+run=(docker run --rm --init --shm-size=1g --cpus=4 --memory=6g --user "$(id -u):$(id -g)"
+     --mount "type=bind,src=$WORKSPACE/source,dst=/app" --workdir /app
+     --mount "type=bind,src=$browsers,dst=/browsers" --env PLAYWRIGHT_BROWSERS_PATH=/browsers
+     --env HOME=/tmp --env CI=true --env COMPOSER_HOME=/tmp/composer --env npm_config_cache=/tmp/npm)
+
+# Dependencies: the only step with network access.
+"${run[@]}" "$image" bash -euo pipefail -c '
+  composer install --no-interaction --no-progress --prefer-dist
+  npm ci --no-audit --no-fund
+  npx --no-install playwright install chromium
+'
+
+# Checks: no network.
+"${run[@]}" --network none "$image" bash -euo pipefail -c '
+  cp .env.example .env
+  # Asset URLs are built from APP_URL; point it at the server the browser tests start.
+  sed -i "s|^APP_URL=.*|APP_URL=http://127.0.0.1:18100|" .env
+  php artisan key:generate --ansi
+  vendor/bin/pint --test
+  php artisan test
+  composer check-platform-reqs
+  npm run test:responsive
+'
+'''
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'source/test-results/**', allowEmptyArchive: true
+        }
+        cleanup {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}
