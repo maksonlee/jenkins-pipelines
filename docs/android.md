@@ -130,6 +130,7 @@ its own (`publishPlayListings: false`).
 | `android/termstay/ci` | own Jenkinsfile and image (Ubuntu 26.04 with the packages its DEVELOPMENT.md lists): the repository's setup script and `tool/build-android.ps1 -Abi x86_64`, with its own toolchains cached on the agent |
 | `android/veil-android/ci` | own Jenkinsfile and image (Android image plus Rust 1.98.0 with four Android targets): the documented full gate with one worker, strict dependency verification and in-process Kotlin |
 | `android/learn-chess/ci` | `nativeAndroidCi`, traced evidence, emulator device suite, honors `[skip ci]` |
+| `android/learn-chess/release` | core, lesson and content-validator tests, app unit tests, debug lint; internal only, draft by default. No Play app exists yet, so only runs without `PUBLISH_TO_PLAY` can succeed |
 | `android/learn-go-board-game/{ci,release}` | core, lesson and content-validator tests, app unit tests, debug lint, debug APKs; release adds release lint, alpha only, bundle and release notes only (the listing is not published), approval warns about a release in review |
 | `android/cloud-cost-widgets/ci` | `nativeAndroidCi` for the phone and Wear OS apps; Kotlin compiled in-process |
 | `android/gst-stream-wall/release` | own Jenkinsfile (Rust/GStreamer image, upload, promotion and listing modes) |
