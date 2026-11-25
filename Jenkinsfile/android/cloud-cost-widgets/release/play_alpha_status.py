@@ -11,7 +11,11 @@ from play_preflight import PACKAGE_NAME, NoRedirect, PreflightError, get_access_
 from play_submission_preflight import error_outcome, filter_google_error, outcome, read_google_error, read_live_track
 
 
-TRACK_NAMES = ('alpha', 'internal', 'production', 'wear:internal', 'wear:production')
+# The tracks that hold a release. Play limits this lifecycle read far below the documented API quota: about a
+# dozen reads of one app within a few minutes are answered with 403 "Listing releases quota exceeded." for up to
+# half an hour (observed 2026-11-24 and 25; the limit is not documented). Reading only these three keeps a release
+# to a handful of reads. The empty production tracks are covered by the publisher's exact edit inventory instead.
+TRACK_NAMES = ('alpha', 'internal', 'wear:internal')
 QUOTA_REASONS = {
     'dailyLimitExceeded', 'quotaExceeded', 'rateLimitExceeded', 'userRateLimitExceeded',
     'QUOTA_EXCEEDED', 'RATE_LIMIT_EXCEEDED',

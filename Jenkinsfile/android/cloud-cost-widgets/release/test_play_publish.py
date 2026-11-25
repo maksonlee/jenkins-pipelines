@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import play_alpha_status as alpha_status
 import play_publish as publish
 
 
@@ -42,7 +43,7 @@ NOT_SENT = "RELEASE_LIFECYCLE_STATE_NOT_SENT_FOR_REVIEW"
 PUBLISHED = "RELEASE_LIFECYCLE_STATE_PUBLISHED"
 QUOTA_REASON = "listing_releases_quota_exceeded"
 NO_CONTENT = {"result": "no_content", "http_status": 204}
-TRACK_NAMES = ("alpha", "internal", "production", "wear:internal", "wear:production")
+TRACK_NAMES = ("alpha", "internal", "wear:internal")
 
 
 def response(value=None, status=200):
@@ -99,9 +100,7 @@ def preflight(override=None, quota_tracks=(), age_minutes=5):
     tracks = {
         "alpha": verified_track(ALPHA),
         "internal": verified_track(PHONE),
-        "production": NO_CONTENT,
         "wear:internal": verified_track(WEAR_PREDECESSOR),
-        "wear:production": NO_CONTENT,
     }
     for name in quota_tracks:
         tracks[name] = {"result": "forbidden", "http_status": 403, "google_status": "PERMISSION_DENIED", "quota": QUOTA_REASON}
@@ -182,6 +181,9 @@ class PlayPublishTest(unittest.TestCase):
         })
         # The archived status read must cover exactly the guarded tracks.
         self.assertEqual(set(publish.GUARDED_TRACKS), set(TRACK_NAMES))
+        self.assertEqual(set(publish.GUARDED_TRACKS), set(alpha_status.TRACK_NAMES))
+        # Every guarded track holds a release; an empty one is proven by the exact edit inventory instead.
+        self.assertTrue(set(publish.GUARDED_TRACKS) <= set(publish.EXPECTED_ACTIVE))
         self.assertFalse(hasattr(publish, "PHONE_NOTES"))
 
     def test_wear_internal_advances_in_one_edit_with_the_approved_bytes(self):
@@ -292,8 +294,7 @@ class PlayPublishTest(unittest.TestCase):
             ("wear:internal", verified_track(WEAR)),
             ("wear:internal", verified_track(200007)),
             ("wear:internal", {"result": "forbidden", "http_status": 403}),
-            ("production", verified_track(100003)),
-            ("wear:production", verified_track(200003)),
+            ("wear:internal", NO_CONTENT),
         ]
         for name, observation in cases:
             with self.subTest(track=name, observation=observation):
@@ -311,6 +312,10 @@ class PlayPublishTest(unittest.TestCase):
             ({**preflight(), "package_name": "PRIVATE_PACKAGE"}, "preflight_archive_unverified"),
             ({**preflight(), "result": "quota_limited"}, "preflight_archive_unverified"),
             ({**preflight(quota_tracks=("internal",)), "result": "checked"}, "preflight_archive_unverified"),
+            # The archive must cover exactly the guarded tracks: no more, no fewer.
+            ({**preflight(), "tracks": {**preflight()["tracks"], "production": NO_CONTENT}}, "preflight_archive_unverified"),
+            ({**preflight(), "tracks": {k: v for k, v in preflight()["tracks"].items() if k != "alpha"}},
+             "preflight_archive_unverified"),
         ]
         for archive, failure in cases:
             with self.subTest(failure=failure):

@@ -29,7 +29,12 @@ Jobs that do not follow the layout yet:
 - `android/cloud-cost-widgets/release`: has the new path but keeps its own Jenkinsfile and Play tools, with
   `alpha-status`, `internal-preflight` and `internal-submit` modes. `internal-submit` takes the number of a preflight build that ran at the same
   jenkins-pipelines commit (rerun the preflight if `main` moved in between), reads that build's AAB SHA-256 from its
-  archive and asks for approval before any Play access. Both bundles
+  archive and asks for approval before any Play access. The status read uses Play's release
+  lifecycle method, which Play limits far below the documented API quota: after about a dozen reads of the app
+  within a few minutes it answers 403 "Listing releases quota exceeded." for up to half an hour. A run therefore
+  reads only the three tracks that hold a release, and a limited read does not block a submission: before any
+  write the publisher compares the exact track inventory of a fresh Play edit, and the commit fails if changes
+  are in review. Do not rerun the preflight repeatedly. Both bundles
   must be signed by the Vault upload key used for the build; no fingerprint is kept in this repository. The old
   `android/cloud-cost-widgets-release`, which loaded a pinned commit of an unmerged branch, was deleted on
   2026-11-25.

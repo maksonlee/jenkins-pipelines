@@ -11,7 +11,7 @@ from pathlib import Path
 
 from play_alpha_status import lifecycle_error
 from play_preflight import (
-    APPLICATION_URL, HTTP_TIMEOUT_SECONDS, PACKAGE_NAME, TRACKS as PRODUCTION_TRACKS, NoRedirect,
+    APPLICATION_URL, HTTP_TIMEOUT_SECONDS, PACKAGE_NAME, NoRedirect,
     PreflightError, get_access_token, request_json,
 )
 from play_submission_preflight import (
@@ -50,7 +50,9 @@ RELEASE_NOTES = {WEAR_INTERNAL: WEAR_NOTES}
 # paused with that release superseded and the Wear OS track inactive. This release leaves both unchanged.
 INACTIVE_OPEN_TESTING = {"beta": 100005, "wear:beta": 200005}
 EXPECTED_ACTIVE = {**UNCHANGED_PHONE, **INACTIVE_OPEN_TESTING, **PREDECESSORS}
-GUARDED_TRACKS = (*UNCHANGED_PHONE, *TRACKS, *PRODUCTION_TRACKS)
+# The tracks whose lifecycle the archived status read covers; all of them hold a release. A track without one,
+# such as production, must be absent from the fresh edit inventory, which is compared exactly before any write.
+GUARDED_TRACKS = (*UNCHANGED_PHONE, *TRACKS)
 REPORTED_TRACKS = {
     f"{prefix}{name}" for prefix in ("", "wear:") for name in ("production", "beta", "alpha", "internal")
 }
@@ -229,10 +231,7 @@ def check_preflight_archive(input_directory, report):
             quota_tracks.append(track)
             proven_tracks[track] = outcome("forbidden", 403, quota=QUOTA_REASON)
             continue
-        if track in EXPECTED_ACTIVE:
-            allowed = outcome("ok", 200, releases=[published_release(EXPECTED_ACTIVE[track])])
-        else:
-            allowed = outcome("no_content", 204)
+        allowed = outcome("ok", 200, releases=[published_release(EXPECTED_ACTIVE[track])])
         if snapshot != allowed:
             report.update(result="blocked", failure="preflight_track_unverified", blocking_track=track)
             return False
