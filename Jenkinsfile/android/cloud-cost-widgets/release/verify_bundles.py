@@ -14,8 +14,8 @@ from pathlib import Path
 
 
 PACKAGE = 'com.maksonlee.cloudcost.aws'
-WEAR_VERSION_NAME = '1.0.9'
-WEAR_VERSION_CODE = '200010'
+WEAR_VERSION_NAME = '1.0.10'
+WEAR_VERSION_CODE = '200011'
 WEAR_BUNDLE_FILENAME = f'wear-{WEAR_VERSION_NAME}-{WEAR_VERSION_CODE}.aab'
 # Form factor, Gradle output, version name, version code and archived name, in archive order. This release ships
 # the Wear OS bundle alone; the phone app stays at 1.0.10 (100011).

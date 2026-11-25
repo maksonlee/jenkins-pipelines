@@ -1,4 +1,4 @@
-"""Advance Wear OS Internal testing to 200010 in one guarded edit; every phone track stays unchanged."""
+"""Advance Wear OS Internal testing to 200011 in one guarded edit; every phone track stays unchanged."""
 
 import hashlib
 import json
@@ -24,27 +24,26 @@ from verify_submission_artifacts import ArtifactVerificationError, load_release_
 
 WEAR_NOTES = [
     {"language": "en-US", "text": (
-        "Tap the Tile's budget card to open the budget; the Open button is gone. The app icon at the top replaces "
-        "the Tile name and matches the app's icon. If the budget chosen for the Tile is removed, the Tile shows "
-        "the first budget."
+        "Setting up a budget on the watch shows each field's name. Long budget names shrink to fit instead of "
+        "breaking mid-word. The exact amount shows six decimals; tap it to see every digit."
     )},
     {"language": "zh-TW", "text": (
-        "點資訊方塊上的預算卡片就會開啟這筆預算，不再有「開啟」按鈕。最上方只顯示 App 圖示，不再重複資訊方塊名稱，"
-        "圖示也和 App 一致。資訊方塊選的預算被移除時，改顯示第一筆預算。"
+        "在手錶上設定預算時，每個欄位都會顯示名稱。較長的預算名稱會縮小字體顯示，不會從字中間斷開。"
+        "精確金額顯示到小數點後 6 位，點一下可看完整數字。"
     )},
 ]
 PHONE_ALPHA = "alpha"
 PHONE_INTERNAL = "internal"
 WEAR_INTERNAL = "wear:internal"
-WEAR_VERSION_NAME = "1.0.9"
-# Wear OS 1.0.9 changes only the Tile, so it ships alone beside phone 1.0.10.
-TRACKS = {WEAR_INTERNAL: 200010}
+WEAR_VERSION_NAME = "1.0.10"
+# Wear OS 1.0.10 changes only watch screens, so it ships alone beside phone 1.0.10.
+TRACKS = {WEAR_INTERNAL: 200011}
 FORM_FACTORS = {WEAR_INTERNAL: "wear"}
 SIGNED_DIGEST_PARAMETERS = {WEAR_INTERNAL: "SIGNED_WEAR_SHA256"}
 # The alpha-status run of android/cloud-cost-widgets/release #2 (2026-11-24) read phone Alpha 100009 and phone
-# Internal 100011 as published, and #7 (2026-11-25) committed Wear OS Internal 200009 (1.0.8). The phone tracks
+# Internal 100011 as published, and #9 (2026-11-25) committed Wear OS Internal 200010 (1.0.9). The phone tracks
 # are guarded and left unchanged.
-PREDECESSORS = {WEAR_INTERNAL: 200009}
+PREDECESSORS = {WEAR_INTERNAL: 200010}
 UNCHANGED_PHONE = {PHONE_ALPHA: 100009, PHONE_INTERNAL: 100011}
 RELEASE_NOTES = {WEAR_INTERNAL: WEAR_NOTES}
 # Build #22's edit inventory also listed 1.0.4 on both Open testing tracks. Play Console shows the phone track

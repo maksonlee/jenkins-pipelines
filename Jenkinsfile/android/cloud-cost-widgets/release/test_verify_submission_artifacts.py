@@ -8,7 +8,7 @@ from unittest.mock import patch
 import verify_submission_artifacts as verifier
 
 
-WEAR_FILE = 'wear-1.0.9-200010.aab'
+WEAR_FILE = 'wear-1.0.10-200011.aab'
 
 
 class SubmissionArtifactTest(unittest.TestCase):
@@ -37,7 +37,7 @@ class SubmissionArtifactTest(unittest.TestCase):
             'bundletool_sha256': verifier.BUNDLETOOL_SHA,
             'bundles': [
                 {
-                    'package': 'com.maksonlee.cloudcost.aws', 'version_name': '1.0.9', 'version_code': '200010',
+                    'package': 'com.maksonlee.cloudcost.aws', 'version_name': '1.0.10', 'version_code': '200011',
                     'min_sdk': '30', 'target_sdk': '35', 'form_factor': 'wear', 'sha256': self.digests['wear'],
                     'upload_certificate_sha256': self.upload_certificate, 'file': WEAR_FILE,
                 },
@@ -161,5 +161,5 @@ class SubmissionArtifactTest(unittest.TestCase):
         self.assertEqual(report['source_commit'], self.source_commit)
         self.assertEqual(report['source_pipeline_commit'], self.pipeline_commit)
         self.assertEqual(report['source_build'], 19)
-        self.assertEqual(report['version_names'], {'wear': '1.0.9'})
-        self.assertEqual(report['bundle_sha256'], {'200010': self.digests['wear']})
+        self.assertEqual(report['version_names'], {'wear': '1.0.10'})
+        self.assertEqual(report['bundle_sha256'], {'200011': self.digests['wear']})
