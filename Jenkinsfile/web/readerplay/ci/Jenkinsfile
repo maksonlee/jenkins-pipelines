@@ -1,8 +1,9 @@
 @Library('jenkins-shared-lib') _
 
 // CI for maksonlee/readerplay main: the Node unit tests, then every browser script one at a time against the
-// repository's own local server. The container has no network, and the checkout is a full clone because the tests
-// read earlier release commits. The optional seven-minute FreeCell deal check and the script that fetches an
+// repository's own local server. The container sits on an internal Docker network: it has no route to the internet,
+// but it has a network interface, without which Chromium reports itself offline and the pages never show their
+// "ready for offline use" state. The checkout is a full clone because the tests read earlier release commits. The optional seven-minute FreeCell deal check and the script that fetches an
 // external site are not run.
 pipeline {
     agent { label 'ssh-agent-with-docker' }
@@ -38,7 +39,10 @@ echo "readerplay main: $(git rev-parse HEAD)"
         stage('Tests') {
             steps {
                 script {
-                    def args = buildContainer.resourceArgs() + ['--network none', '--init', '--shm-size=1g']
+                    def network = "readerplay-ci-${env.BUILD_NUMBER}"
+                    sh "docker network create --internal ${network}"
+                    try {
+                    def args = buildContainer.resourceArgs() + ["--network ${network}", '--init', '--shm-size=1g']
                     docker.image(buildImages.playwright()).inside(args.join(' ')) {
                         sh '''#!/bin/bash
 set -euo pipefail
@@ -57,6 +61,9 @@ for script in tests/*-browser.cjs; do
   node "$script"
 done
 '''
+                    }
+                    } finally {
+                        sh "docker network rm ${network}"
                     }
                 }
             }
