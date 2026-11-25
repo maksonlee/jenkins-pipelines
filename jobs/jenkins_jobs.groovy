@@ -18,8 +18,8 @@ def projects = [
     [folder: 'android/learn-chess', roles: ['ci', 'release'], repo: 'learn-chess', type: 'android'],
     [folder: 'android/learn-go-board-game', roles: ['ci', 'release'], repo: 'learn-go-board-game', type: 'android'],
     [folder: 'android/cloud-cost-widgets', roles: ['ci', 'release'], repo: 'cloud-cost-widgets', type: 'android'],
-    [folder: 'android/veil-android', roles: ['ci'], repo: 'veil-android', type: 'android'],
-    [folder: 'android/termstay', roles: ['ci'], repo: 'termstay', type: 'android'],
+    [folder: 'android/veil-android', roles: ['ci', 'release'], repo: 'veil-android', type: 'android'],
+    [folder: 'android/termstay', roles: ['ci', 'release'], repo: 'termstay', type: 'android'],
     [folder: 'flutter/taiwan-bus-app', roles: ['ci', 'release'], repo: 'taiwan-bus-app', type: 'flutter'],
     [folder: 'flutter/share-notes', roles: ['ci', 'release'], repo: 'share-notes', type: 'flutter'],
     [folder: 'flutter/classic-calculator', roles: ['ci', 'release'], repo: 'classic-calculator', type: 'flutter'],
@@ -42,6 +42,8 @@ def descriptions = [
 
 // Jobs with their own Jenkinsfile instead of androidRelease or flutterRelease.
 def jobDescriptions = [
+    'android/veil-android/release': 'Manual Google Play release for maksonlee/veil-android with its own Jenkinsfile: unsigned bundle, signing outside Gradle, verification, then a manual approval before the upload.',
+    'android/termstay/release': 'Manual Google Play release for the Android client of maksonlee/termstay with its own Jenkinsfile: the repository release script builds and signs, then a manual approval before it publishes.',
     'web/piano-practice/ci': 'CI for maksonlee/piano-practice: builds and tests the site and archives the release bundle. Triggered by GitHub pushes.',
     'android/termstay/ci': 'CI for the Android client of maksonlee/termstay with its own Jenkinsfile: the repository\'s setup script and tool/build-android.ps1 -Abi x86_64 (native library, WebView page, debug APK and lint) with the repository\'s own toolchains. Triggered by GitHub pushes; uses no signing material.',
     'android/veil-android/ci': 'CI for maksonlee/veil-android with its own Jenkinsfile: the documented full gate (checks, debug lint, debug, unsigned release and instrumentation APKs) with the Rust toolchain its native crate requires. Triggered by GitHub pushes; uses no signing material.',

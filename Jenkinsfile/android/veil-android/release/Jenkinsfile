@@ -1,0 +1,251 @@
+@Library('jenkins-shared-lib') _
+
+// Google Play closed-testing release for maksonlee/veil-android (com.maksonlee.veil).
+//
+// The project's release build is unsigned on purpose and takes its Play version code from the command line, so it
+// cannot use androidRelease. This job follows the repository's documented procedure: the release unit tests and
+// release lint, then the bundle, each in its own JVM, offline with strict dependency verification; signing outside
+// Gradle with the shared upload key; proof that signing changed nothing but the signature files; the repository's
+// own bundle inspection; and, only with PUBLISH_TO_PLAY and after a manual approval, one Play edit with the bundle
+// and the release notes. Emulator flows and the phone check stay outside the job.
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout()
+        buildDiscarder(logRotator(numToKeepStr: '50', artifactNumToKeepStr: '20'))
+    }
+
+    parameters {
+        string(name: 'GIT_REF', defaultValue: 'main', trim: true,
+                description: 'main, or a full commit SHA already on main')
+        string(name: 'VERSION_CODE', defaultValue: '', trim: true,
+                description: 'Play version code, above every code ever uploaded for this app')
+        booleanParam(name: 'PUBLISH_TO_PLAY', defaultValue: false,
+                description: 'Upload after the manual approval; unchecked only builds, signs and verifies')
+        choice(name: 'PLAY_TRACK', choices: ['alpha'], description: 'alpha is Closed testing - Alpha')
+        choice(name: 'PLAY_RELEASE_STATUS', choices: ['completed', 'draft'], description: 'Release status on the track')
+    }
+
+    environment {
+        PACKAGE = 'com.maksonlee.veil'
+        RELEASE_DIR = 'release'
+        BUNDLETOOL_JAR = '/home/administrator/jenkins/android-cache/tools/bundletool-all-1.18.3.jar'
+        BUNDLETOOL_SHA256 = 'a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29'
+        UPLOAD_KEY_VAULT_PATH = 'secret/jenkins/mobile/shared/upload-key'
+        PLAY_SERVICE_VAULT_PATH = 'secret/jenkins/mobile/shared/play-service'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    if (!(params.GIT_REF ==~ /main|[0-9a-f]{40}/)) {
+                        error('GIT_REF must be main or a full commit SHA')
+                    }
+                    if (!(params.VERSION_CODE ==~ /[1-9][0-9]{0,6}/)) {
+                        error('VERSION_CODE must be a positive number')
+                    }
+                    if (!(params.PLAY_TRACK in ['alpha']) || !(params.PLAY_RELEASE_STATUS in ['completed', 'draft'])) {
+                        error('Choose a supported track and release status')
+                    }
+                    env.VERSION_CODE = params.VERSION_CODE
+                }
+                deleteDir()
+                dir('pipeline-source') {
+                    checkout scm
+                }
+                dir('source') {
+                    git branch: 'main', credentialsId: 'vault-github-ssh',
+                            url: 'git@github.com:maksonlee/veil-android.git'
+                    withEnv(["GIT_REF=${params.GIT_REF}", "PUBLISH_TO_PLAY=${params.PUBLISH_TO_PLAY}"]) {
+                        sh '''#!/bin/bash
+set -euo pipefail
+if [[ "$GIT_REF" == main ]]; then
+  commit=$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')
+else
+  commit=$(git rev-parse --verify "$GIT_REF^{commit}")
+  git merge-base --is-ancestor "$commit" refs/remotes/origin/main
+fi
+git checkout --quiet --detach "$commit"
+test -z "$(git status --porcelain)"
+printf '%s\\n' "$commit" > ../release-commit.txt
+install -d /home/administrator/jenkins/android-cache/rust/veil-android/cargo
+# The notes Play will show for this version, one file per language.
+python3 -I - "$VERSION_CODE" "$PUBLISH_TO_PLAY" > ../.play-release-notes.json <<'PY'
+import json, pathlib, sys
+notes = {}
+for language in ('en-US', 'zh-TW'):
+    path = pathlib.Path('distribution/google-play') / language / f'release-notes-v{sys.argv[1]}.txt'
+    if not path.is_file() or not path.read_text(encoding='utf-8').strip():
+        if sys.argv[2] == 'true':
+            raise SystemExit(f'Missing release notes: {path}')
+        print(f'No {path} yet; an upload of this version will need it', file=sys.stderr)
+        continue
+    notes[language] = path.read_text(encoding='utf-8').strip()
+    if len(notes[language]) > 500:
+        raise SystemExit(f'{path} exceeds 500 characters')
+    print(f'{language}: {len(notes[language])} characters', file=sys.stderr)
+json.dump(notes, sys.stdout, ensure_ascii=False)
+PY
+'''
+                    }
+                }
+                script {
+                    env.RELEASE_COMMIT = readFile('release-commit.txt').trim()
+                    currentBuild.description = "veil-android v${params.VERSION_CODE} ${env.RELEASE_COMMIT.take(12)}"
+                }
+            }
+        }
+
+        stage('Test, lint and build the unsigned bundle') {
+            options { timeout(time: 120, unit: 'MINUTES') }
+            steps {
+                script {
+                    def image = sh(returnStdout: true,
+                            script: 'docker build --quiet pipeline-source/Jenkinsfile/android/veil-android/ci').trim()
+                    def cacheRoot = '/home/administrator/jenkins/android-cache'
+                    def insideArgs = [
+                            "-v ${cacheRoot}/rust/veil-android/cargo:/home/ubuntu/.cargo",
+                            "-v ${cacheRoot}/flutter-android-sdk:/home/ubuntu/Android:ro",
+                            '-e HOME=/home/ubuntu',
+                            '-e CARGO_HOME=/home/ubuntu/.cargo'
+                    ].join(' ')
+                    dir('source') {
+                        docker.image(image).inside(insideArgs) {
+                            sh '''#!/bin/bash
+set -euo pipefail
+cargo fetch --locked --manifest-path native/message-crypto/Cargo.toml
+'''
+                        }
+                        def common = ['--dependency-verification', 'strict',
+                                      '-Pkotlin.compiler.execution.strategy=in-process',
+                                      "-PveilPlayVersionCode=${params.VERSION_CODE}"]
+                        // Separate JVMs, as the repository's release procedure requires.
+                        [
+                            [':app:testReleaseUnitTest', [':app:lintRelease']],
+                            [':app:bundleRelease', []]
+                        ].each { step ->
+                            gradleRelease(step[0], [
+                                    requiresSigning: false,
+                                    image: image,
+                                    insideArgs: insideArgs,
+                                    mountAndroidCache: false,
+                                    publishPlayListings: false,
+                                    maxWorkers: 1,
+                                    extraArgs: step[1] + common
+                            ])
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Sign and verify') {
+            options { timeout(time: 20, unit: 'MINUTES') }
+            steps {
+                script {
+                    ['android/release/sign-aab.sh', 'android/release/compare_bundle_entries.py',
+                     'android/release/verify-aab.sh'].each { name ->
+                        writeFile file: ".ci/${name.tokenize('/').last()}", text: libraryResource(name)
+                    }
+                    withEnv(['UNSIGNED_AAB=source/app/build/outputs/bundle/release/app-release.aab',
+                             "SIGNED_AAB=${env.RELEASE_DIR}/veil-v${params.VERSION_CODE}.aab"]) {
+                        withVault([vaultSecrets: [[
+                            path: env.UPLOAD_KEY_VAULT_PATH, engineVersion: 2,
+                            secretValues: [
+                                [envVar: 'UPLOAD_JKS_B64', vaultKey: 'upload_jks_b64'],
+                                [envVar: 'STORE_PASSWORD', vaultKey: 'store_password'],
+                                [envVar: 'KEY_PASSWORD', vaultKey: 'key_password'],
+                                [envVar: 'KEY_ALIAS', vaultKey: 'key_alias']
+                            ]
+                        ]]]) {
+                            sh 'bash .ci/sign-aab.sh'
+                        }
+                        withEnv(["RELEASE_AAB=${env.RELEASE_DIR}/veil-v${params.VERSION_CODE}.aab",
+                                 "RELEASE_PACKAGE=${env.PACKAGE}", 'RELEASE_FORBIDDEN_AAB_ENTRY=',
+                                 'RELEASE_VERIFY_SIGNER=false']) {
+                            sh '''#!/bin/bash
+set -euo pipefail
+sha256sum "$UNSIGNED_AAB" | cut -d' ' -f1 > "$RELEASE_DIR/unsigned-aab.sha256"
+python3 -I .ci/compare_bundle_entries.py "$UNSIGNED_AAB" "$SIGNED_AAB" | tee "$RELEASE_DIR/entry-comparison.txt"
+bash .ci/verify-aab.sh
+grep -qx "versionCode=$VERSION_CODE" "$RELEASE_DIR/release-manifest.txt"
+# The repository's own inspection of the exact bytes that would be uploaded.
+python3 source/scripts/verify-play-internal.py --bundle "$SIGNED_AAB" --bundletool "$BUNDLETOOL_JAR" \\
+  --version-code "$VERSION_CODE" --output "$RELEASE_DIR/artifact-inspection.json"
+cat "$RELEASE_DIR/release-manifest.txt"
+cat "$SIGNED_AAB.sha256"
+'''
+                        }
+                    }
+                    def manifest = [:]
+                    readFile("${env.RELEASE_DIR}/release-manifest.txt").readLines().each { line ->
+                        def separator = line.indexOf('=')
+                        if (separator > 0) {
+                            manifest[line.substring(0, separator)] = line.substring(separator + 1)
+                        }
+                    }
+                    env.RELEASE_VERSION_NAME = manifest.versionName
+                    env.RELEASE_SIGNER_SHA256 = manifest.signerSha256
+                    env.RELEASE_AAB_SHA256 = readFile("${env.RELEASE_DIR}/veil-v${params.VERSION_CODE}.aab.sha256").tokenize()[0]
+                    if (!(env.RELEASE_AAB_SHA256 ==~ /[0-9a-f]{64}/) || !(env.RELEASE_SIGNER_SHA256 ==~ /[0-9A-Fa-f:]{64,95}/) ||
+                            !(env.RELEASE_VERSION_NAME ==~ /[0-9A-Za-z._-]{1,40}/)) {
+                        error('Unexpected release identifiers')
+                    }
+                    archiveArtifacts artifacts: "${env.RELEASE_DIR}/*", fingerprint: true
+                    archiveArtifacts artifacts: 'source/app/build/outputs/mapping/release/mapping.txt', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Approve Google Play upload') {
+            when { expression { params.PUBLISH_TO_PLAY } }
+            options { timeout(time: 60, unit: 'MINUTES') }
+            steps {
+                input message: "Upload ${env.PACKAGE} ${env.RELEASE_VERSION_NAME} (${params.VERSION_CODE}) from " +
+                        "${env.RELEASE_COMMIT}, AAB SHA-256 ${env.RELEASE_AAB_SHA256}, signed by certificate SHA-256 " +
+                        "${env.RELEASE_SIGNER_SHA256}, to Google Play ${params.PLAY_TRACK} as ${params.PLAY_RELEASE_STATUS}? " +
+                        'The emulator flows are not run by this job, and an upload replaces a release that is still in review.'
+            }
+        }
+
+        stage('Publish to Google Play') {
+            when { expression { params.PUBLISH_TO_PLAY } }
+            options { timeout(time: 30, unit: 'MINUTES') }
+            steps {
+                script {
+                    ['play_api.py', 'play_version_preflight.py', 'play_upload.py'].each { name ->
+                        writeFile file: ".ci/flutter/${name}", text: libraryResource("flutter/${name}")
+                    }
+                    withEnv([
+                        "FLUTTER_CI_TOOLS=${pwd()}/.ci/flutter",
+                        "FLUTTER_ARTIFACTS=${env.RELEASE_DIR}/*.aab",
+                        "PLAY_PACKAGE_NAME=${env.PACKAGE}",
+                        "PLAY_VERSION_NAME=${env.RELEASE_VERSION_NAME}",
+                        "PLAY_VERSION_CODE=${params.VERSION_CODE}",
+                        "PLAY_TRACK=${params.PLAY_TRACK}",
+                        "PLAY_RELEASE_STATUS=${params.PLAY_RELEASE_STATUS}",
+                        "EXPECTED_AAB_SHA256=${env.RELEASE_AAB_SHA256}"
+                    ]) {
+                        withVault([vaultSecrets: [[
+                            path: env.PLAY_SERVICE_VAULT_PATH, engineVersion: 2,
+                            secretValues: [[envVar: 'PLAY_SERVICE_JSON_B64', vaultKey: 'json_b64']]
+                        ]]]) {
+                            sh libraryResource('flutter/play-preflight.sh')
+                            sh libraryResource('flutter/play-upload.sh')
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        cleanup {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}

@@ -50,6 +50,9 @@ class AndroidReleaseContractTest(unittest.TestCase):
             result = subprocess.run([BASH, "-n"], input=script.encode(), capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr.decode())
         loaded = set(re.findall(r"libraryResource\('android/release/([^']+)'\)", STEP))
+        # Scripts the step does not load must be loaded by a release Jenkinsfile, by name.
+        for job in ROOT.glob("Jenkinsfile/android/*/release/Jenkinsfile"):
+            loaded |= set(re.findall(r"'android/release/([^']+\.sh)'", job.read_text(encoding="utf-8")))
         self.assertEqual(loaded, {p.name for p in SCRIPTS.glob("*.sh")})
 
     def test_no_release_job_puts_signing_passwords_on_the_gradle_command_line(self):
@@ -81,7 +84,8 @@ class AndroidReleaseContractTest(unittest.TestCase):
         for job in jobs:
             text = job.read_text(encoding="utf-8")
             self.assertNotIn("secret/jenkins/mobile/app/", text, job)
-            if "androidRelease(" not in text:
+            # termstay's own script reads its own key from a path kept outside this repository.
+            if "androidRelease(" not in text and job.parent.parent.name != "termstay":
                 self.assertIn(shared, text, job)
 
     def test_play_credentials_are_read_only_after_the_approval_input(self):

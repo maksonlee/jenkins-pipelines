@@ -76,7 +76,8 @@ ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$PROXY_H
   'sudo -n /usr/bin/systemctl is-active --quiet haproxy && sudo -n /usr/sbin/haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null && sudo -n /usr/bin/cat /etc/haproxy/haproxy.cfg' |
   source/deploy/home-proxy/verify-active-config.sh - > /dev/null
 echo 'HAProxy edge contract: OK'
-(cd source && python -m unittest discover -s tests 2>&1 | tail -4)
+(cd source && python -m unittest discover -s tests > ../backend-tests.log 2>&1) || { tail -60 backend-tests.log; exit 1; }
+grep -E '^(Ran [0-9]+ tests|OK)' backend-tests.log
 deployed=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$DEPLOY_HOST" \\
   'cat /opt/taiwan-bus-app/DEPLOYED_REVISION')
 [[ "$deployed" =~ ^[A-Za-z0-9._+-]{1,80}$ ]] || { echo 'Unexpected DEPLOYED_REVISION' >&2; exit 1; }
