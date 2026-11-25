@@ -3,7 +3,7 @@
 // verify-only builds the release from a commit on main (production dependencies, security audit, manifest) and
 // reads what is live. stage-only also unpacks it beside the live release, builds Laravel's caches there and runs
 // `nginx -t`; the site does not change. activate-production then asks for approval, renames the `current` link,
-// checks the public site and renames the link back if a check fails.
+// reloads PHP-FPM, checks the public site and renames the link back if a check fails.
 def jsonField(String file, String key) {
     withEnv(["JSON_FILE=${file}", "JSON_KEY=${key}"]) {
         return sh(returnStdout: true, script: '''#!/bin/bash

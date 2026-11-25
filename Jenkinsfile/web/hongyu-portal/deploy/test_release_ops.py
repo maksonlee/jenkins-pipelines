@@ -131,6 +131,8 @@ class ReleaseOpsTest(unittest.TestCase):
         activated = self.origin.activate(candidate['releaseId'], COMMIT)
         self.assertEqual(activated, {'state': 'activated', 'releaseId': candidate['releaseId'], 'previousRelease': 'live-1'})
         self.assertEqual(self.live(), candidate['releaseId'])
+        self.assertEqual([command for command, _ in self.commands[-2:]],
+                         [['systemctl', 'reload', ops.PHP_SERVICE], ['systemctl', 'is-active', '--quiet', ops.PHP_SERVICE]])
         self.assertEqual(self.origin.activate(candidate['releaseId'], COMMIT)['state'], 'unchanged')
         self.assertEqual(self.origin.rollback(candidate['releaseId'], 'live-1')['state'], 'rolled-back')
         self.assertEqual(self.live(), 'live-1')
@@ -142,6 +144,17 @@ class ReleaseOpsTest(unittest.TestCase):
         with self.assertRaisesRegex(ops.ReleaseError, 'no longer belongs'):
             self.origin.rollback(candidate['releaseId'], 'old-env')
         self.assertEqual(self.live(), other['releaseId'])
+
+    def test_a_failed_php_reload_puts_the_previous_release_back(self):
+        candidate, archive = self.packaged()
+        self.stage(candidate, archive)
+
+        def failing(command, **options):
+            raise ops.ReleaseError('reload failed')
+        self.origin.run = failing
+        with self.assertRaisesRegex(ops.ReleaseError, 'reload failed'):
+            self.origin.activate(candidate['releaseId'], COMMIT)
+        self.assertEqual(self.live(), 'live-1')
 
     def test_activate_refuses_a_release_that_was_modified_after_staging(self):
         candidate, archive = self.packaged()

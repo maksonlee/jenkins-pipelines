@@ -2,8 +2,8 @@
 
 Locally (`package`) it turns a prepared release tree into a tarball with a manifest and a release ID derived from
 the commit and the manifest. On the origin it runs as root over SSH (`status`, `stage`, `activate`, `rollback`):
-staging unpacks the release beside the others without touching the live site, activation renames one symlink, and
-a rollback renames it back while the failed release still owns it.
+staging unpacks the release beside the others without touching the live site, activation renames one symlink and reloads PHP-FPM,
+and a rollback renames it back while the failed release still owns it.
 """
 
 import fcntl
@@ -26,6 +26,7 @@ RELEASE_ID = re.compile(r'[0-9a-f]{12}-[0-9a-f]{12}')
 WRITABLE = ('storage', 'bootstrap/cache')
 MAX_ARCHIVE_BYTES = 200 * 1024 * 1024
 ARTISAN_CACHES = ('config:cache', 'route:cache', 'view:cache')
+PHP_SERVICE = 'php8.3-fpm'
 
 
 class ReleaseError(Exception):
@@ -210,6 +211,11 @@ class Origin:
         os.symlink(target, temporary)
         os.replace(temporary, self.current)
 
+    def reload_php(self):
+        # PHP-FPM caches resolved paths and compiled files, so it serves the previous release until it reloads.
+        self.run(['systemctl', 'reload', PHP_SERVICE])
+        self.run(['systemctl', 'is-active', '--quiet', PHP_SERVICE])
+
     def activate(self, identifier, commit):
         destination = self.release(identifier)
         with self.locked():
@@ -219,6 +225,11 @@ class Origin:
             if previous == destination:
                 return {'state': 'unchanged', 'releaseId': identifier, 'previousRelease': identifier}
             self.switch(destination)
+            try:
+                self.reload_php()
+            except BaseException:
+                self.switch(previous)
+                raise
             return {'state': 'activated', 'releaseId': identifier, 'previousRelease': previous.name}
 
     def rollback(self, identifier, previous):
@@ -231,6 +242,7 @@ class Origin:
                 return {'state': 'not-needed', 'current': restored.name}
             require(live == failed, 'current no longer belongs to this deployment; not changing it')
             self.switch(restored)
+            self.reload_php()
             return {'state': 'rolled-back', 'current': restored.name, 'failedRelease': identifier}
 
 

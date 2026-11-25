@@ -46,8 +46,8 @@ Jobs that do not follow the layout yet:
 - `web/hongyu-portal/deploy`: its own Jenkinsfile and origin helper (`release_ops.py`, sent over SSH on every run).
   It builds the release from a commit on `main` with production dependencies and a security audit. `verify-only`
   stops there and reports what is live; `stage-only` also unpacks the release beside the live one, builds
-  Laravel's caches and runs `nginx -t`; `activate-production` asks for approval, renames the `current` link, checks
-  the public site and renames the link back if a check fails. It logs in with the agent's own SSH key.
+  Laravel's caches and runs `nginx -t`; `activate-production` asks for approval, renames the `current` link, reloads
+  PHP-FPM, checks the public site and renames the link back if a check fails. It logs in with the agent's own SSH key.
 - `backstage/homelab-backstage-main-ci`: builds the homelab-backstage image and pushes it to Harbor.
 
 These jobs are listed in `jobs/jenkins_jobs.groovy` too, so the seed can recreate them.
