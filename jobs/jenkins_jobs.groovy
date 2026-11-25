@@ -28,6 +28,8 @@ def projects = [
     [folder: 'web/hongyu-portal', roles: ['ci'], repo: 'hongyu-portal', type: 'web'],
     [folder: 'web/veil-backend', roles: ['ci'], repo: 'veil-backend', type: 'web'],
     [folder: 'web/piano-practice', roles: ['ci'], repo: 'piano-practice', type: 'web'],
+    // The folder only: its deploy job is a standalone job below, and the Android app lives in flutter/share-notes.
+    [folder: 'web/share-notes', roles: [], repo: 'share-notes', type: 'web'],
 ]
 
 def descriptions = [
@@ -58,6 +60,7 @@ def standaloneJobs = [
     [job: 'web/piano-practice/deploy', description: 'Manual deployment of a piano-practice CI release bundle to the piano-practice origin: verify-only, stage-only or activate-production.'],
     [job: 'backstage/homelab-backstage-main-ci', description: 'CI for maksonlee/homelab-backstage: builds the image and pushes it to Harbor. Triggered by GitHub pushes.'],
     [job: 'web/hongyu-portal/deploy', description: 'Manual deployment of maksonlee/hongyu-portal to its origin: verify-only, stage-only or activate-production.'],
+    [job: 'web/share-notes/deploy', description: 'Manual deployment of the maksonlee/share-notes web app to its origin: verify-only, stage-only or activate-production.'],
     [job: 'artifactory/artifactory-cleanup', description: 'Weekly cleanup of the Artifactory android-snapshots repository: every app keeps its newest version folders.'],
 ]
 

@@ -25,6 +25,9 @@ python3 -B -m unittest discover -s Jenkinsfile/web/piano-practice/deploy -p 'tes
 echo '== hongyu-portal deploy tests'
 python3 -B -m unittest discover -s Jenkinsfile/web/hongyu-portal/deploy -p 'test_*.py'
 
+echo '== share-notes web deploy tests'
+python3 -B -m unittest discover -s Jenkinsfile/web/share-notes/deploy -p 'test_*.py'
+
 echo '== Groovy syntax'
 work=$(mktemp -d "${TMPDIR:-/tmp}/groovy-check.XXXXXX")
 trap 'rm -rf "$work"' EXIT

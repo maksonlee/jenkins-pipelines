@@ -14,7 +14,7 @@ PER_PROJECT_ROLES = ("ci", "release")
 
 def entries():
     return [
-        (folder, [r.strip().strip("'") for r in roles.split(",")], repo, kind)
+        (folder, [r.strip().strip("'") for r in roles.split(",") if r.strip()], repo, kind)
         for folder, roles, repo, kind in ENTRY.findall(DSL)
     ]
 

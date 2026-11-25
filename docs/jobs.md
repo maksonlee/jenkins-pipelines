@@ -48,6 +48,13 @@ Jobs that do not follow the layout yet:
   stops there and reports what is live; `stage-only` also unpacks the release beside the live one, builds
   Laravel's caches and runs `nginx -t`; `activate-production` asks for approval, renames the `current` link, reloads
   PHP-FPM, checks the public site and renames the link back if a check fails. It logs in with the agent's own SSH key.
+- `web/share-notes/deploy`: its own Jenkinsfile and origin helper for the Share Notes web app, which is static
+  files in one directory. It runs the Flutter tests and builds the web app from a commit on `master` in the Flutter
+  image, with the build identity from the repository's `tool/build_flutter.py`. `verify-only` stops there and
+  reports what is live; `stage-only` also unpacks the build beside the site; `activate-production` asks for
+  approval, copies the live files aside, syncs the release in by content, compares the public files with the built
+  ones and syncs the copy back if a check fails. It does not manage the nginx configuration or run the browser
+  tests in `tool/device/`. The Android app keeps `flutter/share-notes/{ci,release}`.
 - `backstage/homelab-backstage-main-ci`: builds the homelab-backstage image and pushes it to Harbor.
 
 These jobs are listed in `jobs/jenkins_jobs.groovy` too, so the seed can recreate them.
