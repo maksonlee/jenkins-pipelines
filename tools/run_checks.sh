@@ -28,6 +28,9 @@ python3 -B -m unittest discover -s Jenkinsfile/web/hongyu-portal/deploy -p 'test
 echo '== share-notes web deploy tests'
 python3 -B -m unittest discover -s Jenkinsfile/web/share-notes/deploy -p 'test_*.py'
 
+echo '== veil-backend deploy tests'
+python3 -B -m unittest discover -s Jenkinsfile/web/veil-backend/deploy -p 'test_*.py'
+
 echo '== Groovy syntax'
 work=$(mktemp -d "${TMPDIR:-/tmp}/groovy-check.XXXXXX")
 trap 'rm -rf "$work"' EXIT

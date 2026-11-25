@@ -1,0 +1,235 @@
+// Manual deployment of the maksonlee/veil-backend server binary to its origin.
+//
+// verify-only cross-builds the aarch64 release binary from a commit on main and reads what is live. stage-only
+// also copies the binary to the origin as a plain file; it is never started there, because the server applies its
+// database migrations when it starts. activate-production takes the staged release named by EXPECTED_RELEASE
+// without rebuilding it, asks for approval, then backs up the database, installs the binary, restarts the service
+// and checks its health; an unhealthy start puts the previous binary back. Migrations are not undone by that.
+// The nginx site, the public pages, the configuration and Vault are not managed here.
+def jsonField(String file, String key) {
+    withEnv(["JSON_FILE=${file}", "JSON_KEY=${key}"]) {
+        return sh(returnStdout: true, script: '''#!/bin/bash
+set -euo pipefail
+python3 -c 'import json, os; value = json.load(open(os.environ["JSON_FILE"]))[os.environ["JSON_KEY"]]; print(",".join(value) if isinstance(value, list) else value)'
+''').trim()
+    }
+}
+
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout()
+        buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10'))
+    }
+
+    parameters {
+        string(name: 'GIT_REF', defaultValue: 'main', trim: true,
+                description: 'main, or a full commit SHA already on main (not used by activate-production)')
+        choice(name: 'MODE', choices: ['verify-only', 'stage-only', 'activate-production'],
+                description: 'Build and compare only, also stage the binary at the origin, or switch production to a staged release')
+        string(name: 'EXPECTED_RELEASE', defaultValue: '', trim: true,
+                description: 'Required to activate: the release ID a stage-only run printed')
+    }
+
+    environment {
+        TOOLS = 'pipeline-source/Jenkinsfile/web/veil-backend/deploy'
+        ORIGIN = 'ubuntu@app.maksonlee.com'
+        HEALTH = 'https://veil.maksonlee.com/v2/health'
+        EVIDENCE = 'deploy-evidence'
+        CARGO_CACHE = '/home/administrator/jenkins/rust-cache/veil-backend/cargo'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    if (!(params.GIT_REF ==~ /main|[0-9a-f]{40}/)) {
+                        error('GIT_REF must be main or a full commit SHA')
+                    }
+                    if (!(params.MODE in ['verify-only', 'stage-only', 'activate-production'])) {
+                        error('Choose a supported mode')
+                    }
+                    if (params.MODE == 'activate-production' && !(params.EXPECTED_RELEASE ==~ /[0-9a-f]{12}-[0-9a-f]{12}/)) {
+                        error('Enter the release ID from a stage-only run')
+                    }
+                    env.DEPLOY_MODE = params.MODE
+                }
+                deleteDir()
+                dir('pipeline-source') {
+                    checkout scm
+                }
+                sh 'mkdir -p "$EVIDENCE"'
+            }
+        }
+
+        stage('Build the aarch64 binary') {
+            when { expression { params.MODE != 'activate-production' } }
+            steps {
+                dir('source') {
+                    git branch: 'main', credentialsId: 'vault-github-ssh',
+                            url: 'git@github.com:maksonlee/veil-backend.git'
+                    withEnv(["GIT_REF=${params.GIT_REF}"]) {
+                        sh '''#!/bin/bash
+set -euo pipefail
+if [[ "$GIT_REF" == main ]]; then
+  commit=$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')
+else
+  commit=$(git rev-parse --verify "$GIT_REF^{commit}")
+  git merge-base --is-ancestor "$commit" refs/remotes/origin/main
+fi
+git checkout --quiet --detach "$commit"
+test -z "$(git status --porcelain)"
+printf '%s\\n' "$commit" > ../release-commit.txt
+'''
+                    }
+                }
+                timeout(time: 45, unit: 'MINUTES') {
+                    sh '''#!/bin/bash
+set -euo pipefail
+commit=$(cat release-commit.txt)
+mkdir -p "$CARGO_CACHE"
+image=$(docker build --quiet "$TOOLS")
+run=(docker run --rm --init --cpus=4 --memory=6g --user "$(id -u):$(id -g)"
+     --mount "type=bind,src=$WORKSPACE/source,dst=/app" --workdir /app/server
+     --mount "type=bind,src=$CARGO_CACHE,dst=/cargo" --env CARGO_HOME=/cargo --env HOME=/tmp)
+# Only the fetch has network access; the build runs offline from the locked dependencies.
+"${run[@]}" "$image" cargo fetch --locked --target aarch64-unknown-linux-gnu
+"${run[@]}" --network none \\
+  --env CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \\
+  --env CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc --env AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar \\
+  "$image" bash -euo pipefail -c '
+    cargo build --release --locked --offline --jobs 2 --target aarch64-unknown-linux-gnu
+    aarch64-linux-gnu-objdump -T target/aarch64-unknown-linux-gnu/release/veil-server > target/veil-server.symbols
+  '
+python3 "$TOOLS/release_ops.py" package source/server/target/aarch64-unknown-linux-gnu/release/veil-server \\
+  "$commit" source/server/migrations source/server/target/veil-server.symbols "$EVIDENCE" > /dev/null
+cat "$EVIDENCE/candidate.json"
+ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN" \\
+  'sudo -n python3 - status' < "$TOOLS/release_ops.py" > "$EVIDENCE/origin-status.json"
+python3 - "$EVIDENCE" <<'PY'
+import json, sys
+candidate = json.load(open(f'{sys.argv[1]}/candidate.json'))
+status = json.load(open(f'{sys.argv[1]}/origin-status.json'))
+print(f"Candidate {candidate['releaseId']} from {candidate['commit']}, glibc {candidate['glibc']}, "
+      f"{len(candidate['migrations'])} migrations; live binary {status['liveSha256'][:12]} "
+      f"(release {status['liveRelease'] or 'not recorded'}), healthy: {status['healthy']}; "
+      f"same binary: {status['liveSha256'] == candidate['binarySha256']}; already staged: {candidate['releaseId'] in status['staged']}")
+PY
+'''
+                }
+            }
+        }
+
+        stage('Stage at the origin') {
+            when { expression { params.MODE == 'stage-only' } }
+            steps {
+                script {
+                    env.RELEASE_ID = jsonField("${env.EVIDENCE}/candidate.json", 'releaseId')
+                    env.RELEASE_COMMIT = jsonField("${env.EVIDENCE}/candidate.json", 'commit')
+                    env.BINARY_SHA256 = jsonField("${env.EVIDENCE}/candidate.json", 'binarySha256')
+                    env.MIGRATIONS = jsonField("${env.EVIDENCE}/candidate.json", 'migrations')
+                    if (!(env.RELEASE_ID ==~ /[0-9a-f]{12}-[0-9a-f]{12}/) || !(env.RELEASE_COMMIT ==~ /[0-9a-f]{40}/) ||
+                            !(env.BINARY_SHA256 ==~ /[0-9a-f]{64}/) || !(env.MIGRATIONS ==~ /[0-9a-z_.,]{1,2000}/)) {
+                        error('Unexpected release identifiers')
+                    }
+                }
+                timeout(time: 10, unit: 'MINUTES') {
+                    sh '''#!/bin/bash
+set -euo pipefail
+ssh_origin=(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN")
+remote="/tmp/veil-server-$RELEASE_ID"
+scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes \\
+  source/server/target/aarch64-unknown-linux-gnu/release/veil-server "$ORIGIN:$remote"
+trap '"${ssh_origin[@]}" "rm -f $remote"' EXIT
+"${ssh_origin[@]}" "sudo -n python3 - stage $RELEASE_ID $RELEASE_COMMIT $remote $BINARY_SHA256 $MIGRATIONS" \\
+  < "$TOOLS/release_ops.py" > "$EVIDENCE/staged.json"
+cat "$EVIDENCE/staged.json"
+'''
+                }
+            }
+        }
+
+        stage('Approve the production switch') {
+            when { expression { params.MODE == 'activate-production' } }
+            steps {
+                withEnv(["RELEASE_ID=${params.EXPECTED_RELEASE}"]) {
+                    sh '''#!/bin/bash
+set -euo pipefail
+ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN" \\
+  "sudo -n python3 - show $RELEASE_ID" < "$TOOLS/release_ops.py" > "$EVIDENCE/staged-release.json"
+cat "$EVIDENCE/staged-release.json"
+python3 - "$EVIDENCE/staged-release.json" > "$EVIDENCE/migration-note.txt" <<'PY'
+import json, sys
+release = json.load(open(sys.argv[1]))
+new, live = release['migrations'], release.get('liveMigrations')
+if live is None:
+    print(f"It carries {len(new)} migrations; which of them the live server already applied is not recorded.")
+else:
+    added = [name for name in new if name not in live]
+    print(f"It adds {len(added)} migration(s) ({' '.join(added)})." if added else "It adds no migration.")
+PY
+'''
+                }
+                script {
+                    env.RELEASE_ID = params.EXPECTED_RELEASE
+                    def commit = jsonField("${env.EVIDENCE}/staged-release.json", 'commit')
+                    def binary = jsonField("${env.EVIDENCE}/staged-release.json", 'binarySha256')
+                    def live = jsonField("${env.EVIDENCE}/staged-release.json", 'liveSha256')
+                    def note = readFile("${env.EVIDENCE}/migration-note.txt").trim()
+                    if (!(commit ==~ /[0-9a-f]{40}/) || !(binary ==~ /[0-9a-f]{64}/) || !(live ==~ /[0-9a-f]{64}/) ||
+                            !(note ==~ /[A-Za-z0-9 _.;()-]{1,600}/)) {
+                        error('Unexpected staged release data')
+                    }
+                    timeout(time: 30, unit: 'MINUTES') {
+                        input message: "Replace the live veil-server binary (SHA-256 ${live.take(12)}) with release " +
+                                "${env.RELEASE_ID}: commit ${commit}, binary SHA-256 ${binary}? ${note} The database is " +
+                                'backed up first and the service restarts. If it does not become healthy the previous ' +
+                                'binary is put back, but applied migrations are not undone.'
+                    }
+                }
+            }
+        }
+
+        stage('Switch production and check it') {
+            when { expression { params.MODE == 'activate-production' } }
+            steps {
+                timeout(time: 15, unit: 'MINUTES') {
+                    sh '''#!/bin/bash
+set -euo pipefail
+ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN" \\
+  "sudo -n python3 - activate $RELEASE_ID" < "$TOOLS/release_ops.py" > "$EVIDENCE/activation.json"
+cat "$EVIDENCE/activation.json"
+status=$(curl --silent --show-error --max-time 20 --output /dev/null --write-out '%{http_code}' "$HEALTH")
+printf '%s %s\\n' "$status" "$HEALTH" | tee "$EVIDENCE/public-checks.txt"
+[[ "$status" == 200 ]]
+'''
+                }
+            }
+        }
+    }
+
+    post {
+        unsuccessful {
+            script {
+                if (fileExists("${env.EVIDENCE}/activation.json") &&
+                        jsonField("${env.EVIDENCE}/activation.json", 'state') == 'activated') {
+                    sh '''#!/bin/bash
+set -euo pipefail
+ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$ORIGIN" \\
+  "sudo -n python3 - rollback $RELEASE_ID" < "$TOOLS/release_ops.py" > "$EVIDENCE/rollback.json"
+cat "$EVIDENCE/rollback.json"
+'''
+                }
+            }
+        }
+        always {
+            archiveArtifacts artifacts: 'deploy-evidence/*.json,deploy-evidence/*.txt', allowEmptyArchive: true
+        }
+        cleanup {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}

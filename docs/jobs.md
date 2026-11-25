@@ -55,6 +55,14 @@ Jobs that do not follow the layout yet:
   approval, copies the live files aside, syncs the release in by content, compares the public files with the built
   ones and syncs the copy back if a check fails. It does not manage the nginx configuration or run the browser
   tests in `tool/device/`. The Android app keeps `flutter/share-notes/{ci,release}`.
+- `web/veil-backend/deploy`: its own Jenkinsfile, image (the CI toolchain plus the aarch64 cross-compiler) and
+  origin helper. `verify-only` cross-builds the release binary from a commit on `main`, checks the glibc version
+  it needs and reports what is live. `stage-only` also copies it to the origin as a non-executable file; a staged
+  binary is never started, because the server applies its migrations when it starts. `activate-production` takes
+  the staged release named by `EXPECTED_RELEASE` without rebuilding, asks for approval (the message says which
+  migrations it adds), then runs the database backup unit, installs the binary, restarts the service and checks
+  health on loopback and in public. An unhealthy start puts the previous binary back; migrations are not undone.
+  nginx, the public pages, the configuration and Vault are not managed.
 - `backstage/homelab-backstage-main-ci`: builds the homelab-backstage image and pushes it to Harbor.
 
 These jobs are listed in `jobs/jenkins_jobs.groovy` too, so the seed can recreate them.

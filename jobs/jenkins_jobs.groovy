@@ -61,6 +61,7 @@ def standaloneJobs = [
     [job: 'backstage/homelab-backstage-main-ci', description: 'CI for maksonlee/homelab-backstage: builds the image and pushes it to Harbor. Triggered by GitHub pushes.'],
     [job: 'web/hongyu-portal/deploy', description: 'Manual deployment of maksonlee/hongyu-portal to its origin: verify-only, stage-only or activate-production.'],
     [job: 'web/share-notes/deploy', description: 'Manual deployment of the maksonlee/share-notes web app to its origin: verify-only, stage-only or activate-production.'],
+    [job: 'web/veil-backend/deploy', description: 'Manual deployment of the maksonlee/veil-backend server binary to its origin: verify-only, stage-only or activate-production.'],
     [job: 'artifactory/artifactory-cleanup', description: 'Weekly cleanup of the Artifactory android-snapshots repository: every app keeps its newest version folders.'],
 ]
 
