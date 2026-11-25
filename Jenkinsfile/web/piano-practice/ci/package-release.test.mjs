@@ -9,7 +9,7 @@ import { packageRelease } from './package-release.mjs'
 
 const releaseId = '0123456789abcdef0123'
 const commit = 'a'.repeat(40)
-const ciJob = 'web/piano-practice-main-ci'
+const ciJob = 'web/piano-practice/ci'
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex')
 
 async function fixture(t) {
@@ -74,6 +74,8 @@ test('rejects foreign release identity and output inside dist', async (t) => {
   const options = await fixture(t)
   await assert.rejects(packageRelease({ ...options, commit: 'main' }), /Git commit SHA/)
   await assert.rejects(packageRelease({ ...options, ciJob: 'other' }), /fixed CI job/)
+  const former = await packageRelease({ ...options, output: join(options.root, 'former'), ciJob: 'web/piano-practice-main-ci' })
+  assert.equal(former.ciJob, 'web/piano-practice-main-ci')
   await assert.rejects(packageRelease({ ...options, buildNumber: 1.5 }), /positive CI build number/)
   await assert.rejects(packageRelease({ ...options, output: join(options.dist, '..release') }), /outside dist/)
   await writeFile(join(options.dist, 'index.html'), '<link rel="canonical" href="https://elsewhere.example/">')

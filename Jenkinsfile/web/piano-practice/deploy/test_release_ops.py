@@ -66,7 +66,7 @@ def make_package(destination, name, *, entry_override=None, special_entry=None, 
         "repository": ops.REPOSITORY,
         "branch": "main",
         "commit": "9" * 40,
-        "ciJob": ops.CI_JOB,
+        "ciJob": ops.CI_JOBS[0],
         "ciBuild": BUILD,
         "releaseId": release,
         "publicOrigin": ops.ORIGIN,
@@ -109,6 +109,28 @@ class ReleaseChecks(unittest.TestCase):
         make_package(package, "test")
         with self.assertRaisesRegex(ops.ReleaseError, "provenance"):
             self.extracted(package, BUILD + 1)
+
+    def test_both_ci_job_names_are_accepted_and_any_other_is_rejected(self):
+        self.assertEqual(ops.CI_JOBS, ("web/piano-practice/ci", "web/piano-practice-main-ci"))
+        for index, job in enumerate(ops.CI_JOBS):
+            package = self.root / f"package-{index}"
+            make_package(package, "test", meta_override={"ciJob": job})
+            self.assertEqual(ops.load_package(package, BUILD)[0]["ciJob"], job)
+        for job in ("web/piano-practice-deploy", "web/other/ci", ""):
+            package = self.root / f"foreign-{len(job)}"
+            make_package(package, "test", meta_override={"ciJob": job})
+            with self.subTest(job=job), self.assertRaisesRegex(ops.ReleaseError, "provenance"):
+                ops.load_package(package, BUILD)
+
+    def test_local_check_rejects_an_artifact_from_the_other_ci_job(self):
+        package = self.root / "package"
+        make_package(package, "test", meta_override={"ciJob": "web/piano-practice-main-ci"})
+        base = ["release_ops.py", "--build", str(BUILD), "--artifacts", str(package)]
+        with patch.object(ops.sys, "argv", base + ["--output", str(self.root / "a"), "--ci-job", "web/piano-practice/ci"]):
+            with self.assertRaisesRegex(ops.ReleaseError, "different CI job"):
+                ops.local()
+        with patch.object(ops.sys, "argv", base + ["--output", str(self.root / "b"), "--ci-job", "web/piano-practice-main-ci"]):
+            self.assertEqual(ops.local()["ciJob"], "web/piano-practice-main-ci")
 
     def test_archive_hash_mismatch_fails_before_unpacking(self):
         package = self.root / "package"

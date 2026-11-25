@@ -17,7 +17,9 @@ import tempfile
 
 ARCHIVE = "piano-practice-dist.tar.gz"
 ARTIFACTS = ("release.json", "checksums.json", ARCHIVE)
-CI_JOB = "web/piano-practice-main-ci"
+# web/piano-practice-main-ci built every release before the jobs moved to web/piano-practice/; its artifacts
+# must stay deployable, because the rollback targets on the origin were built by it.
+CI_JOBS = ("web/piano-practice/ci", "web/piano-practice-main-ci")
 REPOSITORY = "https://github.com/maksonlee/piano-practice.git"
 ORIGIN = "https://piano.maksonlee.com/"
 SITE = Path("/var/www/piano-practice")
@@ -136,7 +138,7 @@ def load_package(directory, build):
     require(type(metadata["schemaVersion"]) is int and metadata["schemaVersion"] == 1, "Unsupported release schema")
     require(
         metadata["repository"] == REPOSITORY and metadata["branch"] == "main"
-        and metadata["ciJob"] == CI_JOB and type(metadata["ciBuild"]) is int and metadata["ciBuild"] == build
+        and metadata["ciJob"] in CI_JOBS and type(metadata["ciBuild"]) is int and metadata["ciBuild"] == build
         and metadata["publicOrigin"] == ORIGIN,
         "Artifact provenance differs from the selected CI build",
     )
@@ -484,6 +486,7 @@ def local():
     parser.add_argument("--artifacts", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--expected-release")
+    parser.add_argument("--ci-job", choices=CI_JOBS)
     args = parser.parse_args()
     require(0 < args.build <= 999_999_999, "Invalid CI build number")
     meta, _, entries, directories, archive = load_package(args.artifacts, args.build)
@@ -491,6 +494,7 @@ def local():
         args.expected_release is None or args.expected_release == meta["releaseId"],
         "Artifact differs from the confirmed release ID",
     )
+    require(args.ci_job is None or args.ci_job == meta["ciJob"], "Artifact was built by a different CI job")
     with tempfile.TemporaryDirectory(dir=args.output.parent, prefix=".piano-local-") as staging:
         tree = Path(staging) / "release"
         tree.mkdir()

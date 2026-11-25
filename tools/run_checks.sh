@@ -20,7 +20,7 @@ python3 "$c/tests/contract_test.py" "$c/Jenkinsfile"
 p=Jenkinsfile/unity/math-runner-play-internal
 python3 -B -m unittest "$p/tests/test_publish.py" "$p/tests/test_artifactory_adapter.py"
 echo '== piano-practice deploy tests'
-python3 -B -m unittest discover -s Jenkinsfile/web/piano-practice-deploy -p 'test_*.py'
+python3 -B -m unittest discover -s Jenkinsfile/web/piano-practice/deploy -p 'test_*.py'
 
 echo '== Groovy syntax'
 work=$(mktemp -d "${TMPDIR:-/tmp}/groovy-check.XXXXXX")
@@ -29,7 +29,7 @@ mkdir "$work/src"
 cp vars/*.groovy jobs/*.groovy "$work/src/"
 count=0
 while IFS= read -r file; do
-  name=$(printf '%s' "${file%/Jenkinsfile}" | tr '/.-' '___')
+  name=$(printf '%s' "${file%/Jenkinsfile}" | sed 's|/|__|g' | tr '.-' '__')
   grep -v '^@Library' "$file" > "$work/src/$name.groovy"
   count=$((count + 1))
 done < <(git ls-files | grep -E '(^|/)Jenkinsfile$')

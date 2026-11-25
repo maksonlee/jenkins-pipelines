@@ -21,7 +21,7 @@ Never point a job at a mutable tag.
 
 **Images that do not come from `buildImages`:**
 
-- `Jenkinsfile/web/piano-practice-main-ci/Dockerfile` (Node 24 + Playwright, both bases by digest) is built on every
+- `Jenkinsfile/web/piano-practice/ci/Dockerfile` (Node 24 + Playwright, both bases by digest) is built on every
   run by the piano CI and deploy jobs.
 - `Jenkinsfile/web/hongyu-portal/ci/Dockerfile` (the Playwright base plus PHP 8.3 and Composer, bases by digest) is
   built on every run by the hongyu-portal CI. Its Playwright browsers are cached in

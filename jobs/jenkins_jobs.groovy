@@ -27,6 +27,7 @@ def projects = [
     [folder: 'web/readerplay', roles: ['ci'], repo: 'readerplay', type: 'web'],
     [folder: 'web/hongyu-portal', roles: ['ci'], repo: 'hongyu-portal', type: 'web'],
     [folder: 'web/veil-backend', roles: ['ci'], repo: 'veil-backend', type: 'web'],
+    [folder: 'web/piano-practice', roles: ['ci'], repo: 'piano-practice', type: 'web'],
 ]
 
 def descriptions = [
@@ -39,6 +40,7 @@ def descriptions = [
 
 // Jobs with their own Jenkinsfile instead of androidRelease or flutterRelease.
 def jobDescriptions = [
+    'web/piano-practice/ci': 'CI for maksonlee/piano-practice: builds and tests the site and archives the release bundle. Triggered by GitHub pushes.',
     'android/termstay/ci': 'CI for the Android client of maksonlee/termstay with its own Jenkinsfile: the repository\'s setup script and tool/build-android.ps1 -Abi x86_64 (native library, WebView page, debug APK and lint) with the repository\'s own toolchains. Triggered by GitHub pushes; uses no signing material.',
     'android/veil-android/ci': 'CI for maksonlee/veil-android with its own Jenkinsfile: the documented full gate (checks, debug lint, debug, unsigned release and instrumentation APKs) with the Rust toolchain its native crate requires. Triggered by GitHub pushes; uses no signing material.',
     'android/gst-stream-wall/ci': 'CI for maksonlee/gst-stream-wall with its own Jenkinsfile: unit tests, debug lint and the shell debug APK in the release job\'s image and Rust toolchain. Triggered by GitHub pushes; uses no release signing material.',
@@ -51,8 +53,9 @@ def standaloneJobs = [
     [job: 'admin/pipelines-ci', description: 'Offline checks of maksonlee/jenkins-pipelines after every push to main: Python tests and a Groovy syntax check of the library, the Job DSL and all Jenkinsfiles.'],
     [job: 'unity/math-runner-android-build-in-docker', description: 'Builds, verifies, archives and fingerprints the signed Math Runner Android App Bundle in the sealed Unity worker image.'],
     [job: 'unity/math-runner-play-internal', description: 'Publishes a verified Math Runner AAB from the build job to Google Play Internal testing after a manual approval.'],
-    [job: 'web/piano-practice-main-ci', description: 'CI for maksonlee/piano-practice: builds and tests the site and archives the release bundle. Triggered by GitHub pushes.'],
-    [job: 'web/piano-practice-deploy', description: 'Manual deployment of a web/piano-practice-main-ci release bundle to the piano-practice origin.'],
+    [job: 'web/piano-practice-main-ci', description: 'Former name of web/piano-practice/ci; kept until it is retired.'],
+    [job: 'web/piano-practice-deploy', description: 'Former name of web/piano-practice/deploy; kept until it is retired.'],
+    [job: 'web/piano-practice/deploy', description: 'Manual deployment of a piano-practice CI release bundle to the piano-practice origin: verify-only, stage-only or activate-production.'],
     [job: 'backstage/homelab-backstage-main-ci', description: 'CI for maksonlee/homelab-backstage: builds the image and pushes it to Harbor. Triggered by GitHub pushes.'],
     [job: 'artifactory/artifactory-cleanup', description: 'Weekly cleanup of the Artifactory android-snapshots repository: every app keeps its newest version folders.'],
 ]

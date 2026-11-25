@@ -7,7 +7,8 @@ import { pathToFileURL } from 'node:url'
 
 const repository = 'https://github.com/maksonlee/piano-practice.git'
 const publicOrigin = 'https://piano.maksonlee.com/'
-const sourceJob = 'web/piano-practice-main-ci'
+// The job's former name stays valid while both jobs exist.
+const sourceJobs = ['web/piano-practice/ci', 'web/piano-practice-main-ci']
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex')
 const jsonBytes = (value) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`)
 
@@ -29,7 +30,7 @@ async function releaseFiles(dist, prefix = '') {
 
 export async function packageRelease({ dist, output, commit, ciJob, buildNumber }) {
   assert.match(commit ?? '', /^[0-9a-f]{40}$/, 'Expected a full lowercase Git commit SHA.')
-  assert.equal(ciJob, sourceJob, 'Only the fixed CI job may package this release.')
+  assert(sourceJobs.includes(ciJob), 'Only the fixed CI job may package this release.')
   assert.match(String(buildNumber), /^[1-9]\d*$/, 'Expected a positive CI build number.')
   const ciBuild = Number(buildNumber)
   assert(Number.isSafeInteger(ciBuild), 'Build number exceeds the safe integer range.')

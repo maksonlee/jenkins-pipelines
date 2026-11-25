@@ -37,7 +37,11 @@ contracts. Update them in the same change as the behavior they describe.
   `flutter/flutter-android-build`) were deleted on 2026-11-24; their Jenkinsfiles remain in git history.
 - **Exceptions on purpose:**
   - `unity/math-runner-*`: job names are part of its evidence and seal.
-  - `web/piano-practice-*`: the origin helper `release_ops.py` accepts only `ciJob == web/piano-practice-main-ci`.
+  - `web/piano-practice/{ci,deploy}`: their own Jenkinsfiles. `release_ops.py`, which also runs installed as root on
+    the origin, and `package-release.mjs` accept the CI job names `web/piano-practice/ci` and the former
+    `web/piano-practice-main-ci`, because the releases on the origin were built under the former name. The former
+    jobs `web/piano-practice-main-ci` and `web/piano-practice-deploy` stay until the owner retires them. After a
+    change to `release_ops.py`, reinstall it on the origin (see the deploy README).
   - `android/gst-stream-wall/release`: its own qualified Jenkinsfile.
   - `android/cloud-cost-widgets/release`: its own Jenkinsfile with alpha-status, internal-preflight and
     internal-submit modes and its own Play tools. Merged from `codex/cloud-cost-widgets-release` on 2026-11-24;
@@ -70,7 +74,7 @@ python3 "$c/tests/validate.py" "$c/Jenkinsfile" "$c/bootstrap-unity-personal.sh"
 python3 "$c/tests/contract_test.py" "$c/Jenkinsfile"
 p=Jenkinsfile/unity/math-runner-play-internal
 python3 -B -m unittest "$p/tests/test_publish.py" "$p/tests/test_artifactory_adapter.py"
-python3 -B -m unittest discover -s Jenkinsfile/web/piano-practice-deploy -p 'test_*.py'
+python3 -B -m unittest discover -s Jenkinsfile/web/piano-practice/deploy -p 'test_*.py'
 git diff --check
 ```
 
