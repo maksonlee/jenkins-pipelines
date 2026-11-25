@@ -8,6 +8,16 @@ The job is enabled. The original Artifactory-backed [verification preview #4](ht
 
 Builds #4 and #5 loaded pipeline repository commit `042de73759c8c70e56171307fa82546299206f81` and source build #1 from product commit `8602e68745213fbc93e63281e39a1f5111466977`. Builds #6 and #7 loaded pipeline commit `7fd64455ff25026e4e3de86791b8704a0fb4904c` and signed source build #2 from product commit `88167cf916937bfb7ba7eb290bacdba99833cb98`. Build #1's Artifactory import was a one-time protected API seed; build #2 exercised the source-job `rtUpload` stage and seven byte readbacks. This README update is after those runtime inputs. Earlier Copy Artifact preview #1 failed because its source permission lacked a leading slash, #2 succeeded after that permission fix, and old draft #3 was aborted at input before Play Vault or Play writes when the artifact route changed. The unused source Copy Artifact permission has since been removed; Copy Artifact itself remains installed on Jenkins.
 
+## Approval without the executor (2026-11-25)
+
+The pipeline no longer holds the agent's only executor while it waits for approval: the validation, fetch and
+verification stages run as one group on the agent, the approval stage has no agent, and the publish stage takes
+the agent again. `publish.py` and `PUBLISHER_SHA256` are unchanged, and the publish stage still rechecks the
+publisher, `verified.json` and the AAB against the values recorded before the approval.
+[Verification preview #10](https://jenkins.maksonlee.com/job/unity/job/math-runner-play-internal/10/) ran the new
+structure for source build #1 with `PUBLISH_TO_PLAY=false` and succeeded; it archived `verified.json` and skipped
+both Play stages. No build has gone through the approval and publish stages in this structure yet.
+
 ## Guarded draft replacement
 
 The guarded replacement route ran for code 2 in publisher #7, with both
