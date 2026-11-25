@@ -123,9 +123,10 @@ cargo fetch --locked --manifest-path native/message-crypto/Cargo.toml
                         def common = ['--dependency-verification', 'strict',
                                       '-Pkotlin.compiler.execution.strategy=in-process',
                                       "-PveilPlayVersionCode=${params.VERSION_CODE}"]
-                        // Separate JVMs, as the repository's release procedure requires.
+                        // Separate JVMs, as the repository's release procedure requires. One unit test reads the
+                        // merged debug manifest, which a fresh workspace does not have yet.
                         [
-                            [':app:testReleaseUnitTest', [':app:lintRelease']],
+                            [':app:processDebugMainManifest', [':app:testReleaseUnitTest', ':app:lintRelease']],
                             [':app:bundleRelease', []]
                         ].each { step ->
                             gradleRelease(step[0], [
