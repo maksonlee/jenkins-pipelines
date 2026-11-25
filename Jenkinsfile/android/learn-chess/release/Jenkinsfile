@@ -8,8 +8,9 @@ androidRelease(
         ':core:chess:test', ':core:lesson:test', ':tools:content-validator:run',
         ':app:testDebugUnitTest', ':app:lintDebug'
     ],
-    tracks: ['internal'],
-    // A draft app accepts only draft releases; use completed after Google has published the first one.
-    releaseStatuses: ['draft', 'completed'],
-    approvalNote: 'The Play app for this package must already exist in the Play Console, or the upload fails.'
+    // alpha is Closed testing - Alpha, where the app is released; internal still holds 1.0.0.
+    tracks: ['alpha', 'internal'],
+    releaseStatuses: ['completed', 'draft'],
+    approvalNote: 'Check the Play Console first: an upload replaces a release that is still in review, ' +
+        'and this job cannot detect or refuse that.'
 )
