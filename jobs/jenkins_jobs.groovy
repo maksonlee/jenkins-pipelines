@@ -16,7 +16,7 @@ def projects = [
     [folder: 'android/taiwandrive', roles: ['ci', 'release'], repo: 'taiwandrive', type: 'android'],
     [folder: 'android/gst-stream-wall', roles: ['ci', 'release'], repo: 'gst-stream-wall', type: 'android'],
     [folder: 'android/learn-chess', roles: ['ci'], repo: 'learn-chess', type: 'android'],
-    [folder: 'android/learn-go-board-game', roles: ['ci'], repo: 'learn-go-board-game', type: 'android'],
+    [folder: 'android/learn-go-board-game', roles: ['ci', 'release'], repo: 'learn-go-board-game', type: 'android'],
     [folder: 'android/cloud-cost-widgets', roles: ['ci', 'release'], repo: 'cloud-cost-widgets', type: 'android'],
     [folder: 'android/veil-android', roles: ['ci'], repo: 'veil-android', type: 'android'],
     [folder: 'android/termstay', roles: ['ci'], repo: 'termstay', type: 'android'],

@@ -110,6 +110,9 @@ this order:
    GPP `publishReleaseBundle --artifact-dir=<that dir> --track=<track> --release-status=<status>`. The command-line
    options override the project's `play {}` block. GPP 4.0.0's default release status is `completed`.
 
+`approvalNote` appends one fixed sentence to the approval message. `learn-go-board-game` uses it to warn that an
+upload replaces a release that is still in review, which GPP cannot detect.
+
 With `publishListingsWithRelease: true` the job runs `publishReleaseApps` instead, which also publishes the store
 listing from the same commit. Only the four apps that always did this keep it. The library never switches tasks on
 its own (`publishPlayListings: false`).
@@ -127,7 +130,7 @@ its own (`publishPlayListings: false`).
 | `android/termstay/ci` | own Jenkinsfile and image (Ubuntu 26.04 with the packages its DEVELOPMENT.md lists): the repository's setup script and `tool/build-android.ps1 -Abi x86_64`, with its own toolchains cached on the agent |
 | `android/veil-android/ci` | own Jenkinsfile and image (Android image plus Rust 1.98.0 with four Android targets): the documented full gate with one worker, strict dependency verification and in-process Kotlin |
 | `android/learn-chess/ci` | `nativeAndroidCi`, traced evidence, emulator device suite, honors `[skip ci]` |
-| `android/learn-go-board-game/ci` | core, lesson and content-validator tests, app unit tests, debug lint, debug APKs |
+| `android/learn-go-board-game/{ci,release}` | core, lesson and content-validator tests, app unit tests, debug lint, debug APKs; release adds release lint, alpha only, bundle and release notes only (the listing is not published), approval warns about a release in review |
 | `android/cloud-cost-widgets/ci` | `nativeAndroidCi` for the phone and Wear OS apps; Kotlin compiled in-process |
 | `android/gst-stream-wall/release` | own Jenkinsfile (Rust/GStreamer image, upload, promotion and listing modes) |
 | `android/cloud-cost-widgets/release` | own Jenkinsfile and Play tools (phone and Wear OS bundles; alpha-status, internal-preflight and internal-submit modes) |

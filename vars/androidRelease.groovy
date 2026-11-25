@@ -144,7 +144,8 @@ def call(Map cfg) {
                         "SHA-256 ${env.RELEASE_SIGNER_SHA256}" +
                         (config.verifyUploadCertificate ? ' (matches Vault certificate_sha256)' : '') + ', to Google Play ' +
                         "${params.PLAY_TRACK} as ${params.PLAY_RELEASE_STATUS}" +
-                        (config.publishListingsWithRelease ? ', together with the store listing from this commit?' : '?')
+                        (config.publishListingsWithRelease ? ', together with the store listing from this commit?' : '?') +
+                        (config.approvalNote ? " ${config.approvalNote}" : '')
                 }
             }
 
@@ -200,6 +201,8 @@ def androidReleaseConfig(Map cfg) {
         forbiddenAabEntry        : cfg.forbiddenAabEntry as String,
         buildTimeoutMinutes      : (cfg.buildTimeoutMinutes ?: 90) as int,
         approvalTimeoutMinutes   : (cfg.approvalTimeoutMinutes ?: 60) as int,
+        // A fixed sentence appended to the approval message, for a project-specific warning.
+        approvalNote             : (cfg.approvalNote ?: '') as String,
         bundletoolJar            : '/home/administrator/jenkins/android-cache/tools/bundletool-all-1.18.3.jar',
         bundletoolSha256         : 'a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29'
     ]
@@ -209,6 +212,9 @@ def androidReleaseConfig(Map cfg) {
     config.evidence = ['*.aab', '*.aab.sha256', 'signature-verification.txt', 'release-manifest.txt', 'bundletool-validate.txt']
         .collect { "${config.releaseDir}/${it}" }.join(',')
 
+    if (!(config.approvalNote ==~ /^[A-Za-z0-9 .,;:()\/-]{0,300}$/)) {
+        error 'androidRelease: approvalNote may hold only letters, digits, spaces and basic punctuation'
+    }
     if (!(config.repo ==~ /^[A-Za-z0-9._-]+$/)) {
         error "androidRelease: invalid repo '${config.repo}'"
     }

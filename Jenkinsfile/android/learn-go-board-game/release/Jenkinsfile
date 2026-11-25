@@ -1,0 +1,18 @@
+@Library('jenkins-shared-lib') _
+
+// Google Play closed-testing release for maksonlee/learn-go-board-game (com.maksonlee.learngoboardgame).
+// The job uploads the bundle and the release notes only. The store listing under docs/play is not published here.
+androidRelease(
+    repo: 'learn-go-board-game',
+    packageName: 'com.maksonlee.learngoboardgame',
+    // The same gate as the repository's tools/Invoke-ReleaseBuild.ps1, without the device tests.
+    verifyTasks: [
+        ':core:go:test', ':core:lesson:test', ':tools:content-validator:run',
+        ':app:testDebugUnitTest', ':app:lintDebug', ':app:lintRelease'
+    ],
+    // alpha is the app's only track in use (closed testing).
+    tracks: ['alpha'],
+    releaseStatuses: ['completed', 'draft'],
+    approvalNote: 'Check the Play Console first: an upload replaces a release that is still in review, ' +
+        'and this job cannot detect or refuse that.'
+)
