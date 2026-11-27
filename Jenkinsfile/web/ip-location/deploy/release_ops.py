@@ -451,10 +451,21 @@ def prepare_certificate():
 def assert_origin_tls(certificate):
     """Exercise the existing Nginx PROXY/TLS listener without waiting for public DNS or SNI routing."""
     context = ssl.create_default_context()
-    with socket.create_connection((LOOPBACK, 8443), timeout=8) as connection:
-        connection.sendall(b"PROXY TCP4 192.0.2.23 127.0.0.1 12345 8443\r\n")
-        with context.wrap_socket(connection, server_hostname=HOST) as tls:
-            require(tls.getpeercert(binary_form=True) == certificate, "Origin TLS did not present the dedicated certificate")
+    # A graceful reload signals the master before the new workers can accept TLS.
+    deadline = time.monotonic() + 12
+    while True:
+        remaining = deadline - time.monotonic()
+        try:
+            with socket.create_connection((LOOPBACK, 8443), timeout=min(8, max(0.1, remaining))) as connection:
+                connection.sendall(b"PROXY TCP4 192.0.2.23 127.0.0.1 12345 8443\r\n")
+                with context.wrap_socket(connection, server_hostname=HOST) as tls:
+                    require(tls.getpeercert(binary_form=True) == certificate,
+                            "Origin TLS did not present the dedicated certificate")
+            return
+        except (OSError, ValueError):
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.25)
 
 
 @contextmanager

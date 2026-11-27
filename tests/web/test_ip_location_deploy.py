@@ -8,7 +8,7 @@ import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 PROJECT = Path(__file__).resolve().parents[2] / "Jenkinsfile/web/ip-location/deploy"
@@ -162,6 +162,30 @@ class DeploymentTest(unittest.TestCase):
         self.assertIn("worker verify-only", before)
         self.assertIn("input message:", before)
         self.assertIn('worker "$IPLOC_MODE"', after)
+
+    def test_origin_tls_waits_for_new_nginx_worker_with_matching_sni(self):
+        tls = MagicMock()
+        tls.getpeercert.return_value = b"dedicated certificate"
+        context = MagicMock()
+        context.wrap_socket.side_effect = [ops.ssl.SSLError("unrecognized name"), tls]
+        tls.__enter__.return_value = tls
+        with patch.object(ops.ssl, "create_default_context", return_value=context), \
+                patch.object(ops.socket, "create_connection", return_value=MagicMock()), \
+                patch.object(ops.time, "monotonic", side_effect=(0, 0, 0, 1)), \
+                patch.object(ops.time, "sleep") as sleep:
+            ops.assert_origin_tls(b"dedicated certificate")
+        self.assertEqual(context.wrap_socket.call_count, 2)
+        self.assertEqual(context.wrap_socket.call_args.kwargs, {"server_hostname": "ip.maksonlee.com"})
+        sleep.assert_called_once()
+
+    def test_origin_tls_stops_if_reloaded_workers_never_serve_candidate(self):
+        context = MagicMock()
+        context.wrap_socket.side_effect = ops.ssl.SSLError("unrecognized name")
+        with patch.object(ops.ssl, "create_default_context", return_value=context), \
+                patch.object(ops.socket, "create_connection", return_value=MagicMock()), \
+                patch.object(ops.time, "monotonic", side_effect=(0, 0, 12)), \
+                self.assertRaisesRegex(ops.ssl.SSLError, "unrecognized name"):
+            ops.assert_origin_tls(b"dedicated certificate")
 
 
 if __name__ == "__main__":
