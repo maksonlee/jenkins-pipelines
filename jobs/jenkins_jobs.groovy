@@ -27,6 +27,7 @@ def projects = [
     [folder: 'web/readerplay', roles: ['ci'], repo: 'readerplay', type: 'web'],
     [folder: 'web/hongyu-portal', roles: ['ci'], repo: 'hongyu-portal', type: 'web'],
     [folder: 'web/veil-backend', roles: ['ci'], repo: 'veil-backend', type: 'web'],
+    [folder: 'web/ip-location', roles: ['ci', 'release'], repo: 'ip-location', type: 'web'],
     [folder: 'web/piano-practice', roles: ['ci'], repo: 'piano-practice', type: 'web'],
     // The folder only: its deploy job is a standalone job below, and the Android app lives in flutter/share-notes.
     [folder: 'web/share-notes', roles: [], repo: 'share-notes', type: 'web'],
@@ -37,11 +38,14 @@ def descriptions = [
     'android/release': 'Manual Google Play release for maksonlee/%s: release-branch commit only, tests and lint, signed AAB verification, then a manual approval before the verified AAB is uploaded.',
     'flutter/ci'    : 'CI for maksonlee/%s: quality gates and a debug AAB uploaded to Artifactory snapshots. Triggered by GitHub pushes; uses no release signing material.',
     'web/ci'        : 'CI for maksonlee/%s: the repository\'s tests in a container without network access. Triggered by GitHub pushes.',
+    'web/release'   : 'Manual release for maksonlee/%s: builds and smoke-tests a Linux release archive.',
     'flutter/release': 'Manual Google Play release for maksonlee/%s: release-branch commit only, quality gates, signed release AAB, then a manual approval before any Play access.',
 ]
 
 // Jobs with their own Jenkinsfile instead of androidRelease or flutterRelease.
 def jobDescriptions = [
+    'web/ip-location/ci': 'Rust and browser checks for the reviewed IP Location default branch, triggered by GitHub pushes.',
+    'web/ip-location/release': 'Manual Linux arm64 IP Location release. Builds, smoke-tests, archives and fingerprints a release bundle.',
     'android/veil-android/release': 'Manual Google Play release for maksonlee/veil-android with its own Jenkinsfile: unsigned bundle, signing outside Gradle, verification, then a manual approval before the upload.',
     'android/termstay/release': 'Manual Google Play release for the Android client of maksonlee/termstay with its own Jenkinsfile: the repository release script builds and signs, then a manual approval before it publishes.',
     'web/piano-practice/ci': 'CI for maksonlee/piano-practice: builds and tests the site and archives the release bundle. Triggered by GitHub pushes.',

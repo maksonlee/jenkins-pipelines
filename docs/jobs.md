@@ -91,6 +91,20 @@ Jobs that do not follow the layout yet:
 
 These jobs are listed in `jobs/jenkins_jobs.groovy` too, so the seed can recreate them.
 
+### IP Location
+
+The `web/ip-location/ci` job checks the locked Rust workspace and runs the frontend browser
+fixtures. It fetches dependencies in its project container before running checks with container
+networking disabled. The `web/ip-location/release` job is manual. It runs the app's
+`scripts/build-release.sh`, archives and fingerprints the Linux arm64 bundle and its checksum,
+and grants archive access to the matching deploy job. `GIT_REF` accepts `main` or a full commit
+SHA already on `main`.
+
+Both jobs check out `maksonlee/ip-location` with the existing `vault-github-ssh` credential and
+Git host-key verification. Prime CI once after seeding, then route the private app's push webhook
+to Jenkins using the normal GitHub plugin setup. The jobs use the `ssh-agent-with-docker` agent,
+a dedicated pinned build image, and dependency registries for setup.
+
 ## Helpers for jobs with their own Jenkinsfile
 
 A job that cannot use one of the pipeline steps still takes the common parts from the library instead of copying

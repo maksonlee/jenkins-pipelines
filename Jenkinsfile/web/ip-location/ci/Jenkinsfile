@@ -1,0 +1,48 @@
+@Library('jenkins-shared-lib') _
+
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        skipDefaultCheckout()
+        timestamps()
+        disableConcurrentBuilds()
+        timeout(time: 45, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+    }
+
+    triggers {
+        githubPush()
+    }
+
+    stages {
+        stage('Checkout reviewed source') {
+            steps {
+                deleteDir()
+                dir('pipeline-source') {
+                    checkout changelog: false, poll: false, scm: scm
+                }
+                script {
+                    env.IP_LOCATION_COMMIT = checkoutReleaseCommit(repo: 'ip-location', branch: 'main', gitRef: 'main')
+                }
+            }
+        }
+
+        stage('Check Rust and the browser UI') {
+            steps {
+                script {
+                    ipLocationBuild.run('ci')
+                }
+            }
+        }
+    }
+
+    post {
+        unsuccessful {
+            archiveArtifacts artifacts: 'source/web/test-results/**', allowEmptyArchive: true
+        }
+        cleanup {
+            deleteDir()
+        }
+    }
+}

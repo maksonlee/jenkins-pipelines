@@ -1,0 +1,50 @@
+@Library('jenkins-shared-lib') _
+
+pipeline {
+    agent { label 'ssh-agent-with-docker' }
+
+    options {
+        skipDefaultCheckout()
+        timestamps()
+        disableConcurrentBuilds()
+        timeout(time: 60, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '15'))
+        copyArtifactPermission('/web/ip-location/deploy')
+    }
+
+    parameters {
+        string(name: 'GIT_REF', defaultValue: 'main', trim: true,
+               description: 'main or a full commit SHA already on main.')
+    }
+
+    stages {
+        stage('Checkout reviewed source') {
+            steps {
+                deleteDir()
+                dir('pipeline-source') {
+                    checkout changelog: false, poll: false, scm: scm
+                }
+                script {
+                    env.IP_LOCATION_COMMIT = checkoutReleaseCommit(repo: 'ip-location', branch: 'main',
+                                                                  gitRef: params.GIT_REF ?: 'main')
+                }
+            }
+        }
+
+        stage('Build and smoke-test the Linux arm64 release') {
+            steps {
+                script {
+                    ipLocationBuild.run('release')
+                    def bundle = "source/artifacts/ip-location-" + env.IP_LOCATION_COMMIT + "-arm64.tar.gz"
+                    archiveArtifacts artifacts: bundle + ',' + bundle + '.sha256', fingerprint: true
+                }
+            }
+        }
+    }
+
+    post {
+        cleanup {
+            deleteDir()
+        }
+    }
+}
