@@ -62,6 +62,7 @@ def standaloneJobs = [
     [job: 'unity/math-runner-android-build-in-docker', description: 'Builds, verifies, archives and fingerprints the signed Math Runner Android App Bundle in the sealed Unity worker image.'],
     [job: 'unity/math-runner-play-internal', description: 'Publishes a verified Math Runner AAB from the build job to Google Play Internal testing after a manual approval.'],
     [job: 'web/piano-practice/deploy', description: 'Manual deployment of a piano-practice CI release bundle to the piano-practice origin: verify-only, stage-only or activate-production.'],
+    [job: 'web/ip-location/deploy', description: 'Manual IP Location deployment of a verified ARM64 release artifact after approval.'],
     [job: 'backstage/homelab-backstage-main-ci', description: 'CI for maksonlee/homelab-backstage: builds the image and pushes it to Harbor. Triggered by GitHub pushes.'],
     [job: 'web/hongyu-portal/deploy', description: 'Manual deployment of maksonlee/hongyu-portal to its origin: verify-only, stage-only or activate-production.'],
     [job: 'web/share-notes/deploy', description: 'Manual deployment of the maksonlee/share-notes web app to its origin: verify-only, stage-only or activate-production.'],

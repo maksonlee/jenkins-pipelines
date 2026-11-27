@@ -105,6 +105,12 @@ Git host-key verification. Prime CI once after seeding, then route the private a
 to Jenkins using the normal GitHub plugin setup. The jobs use the `ssh-agent-with-docker` agent,
 a dedicated pinned build image, and dependency registries for setup.
 
+`web/ip-location/deploy` takes `RELEASE_BUILD`, `COMMIT`, `ARCHIVE_SHA256` and `VERSION` from the
+reviewed successful release. It checks the ARM64 package, its checksum sidecar and release
+metadata in every mode. It archives the candidate identity and pipeline commit. The two
+origin modes prompt for approval without using an executor. The approval shows the target
+hostname and exact bundle identity. See the [IP Location origin runbook](../Jenkinsfile/web/ip-location/deploy/README.md).
+
 ## Helpers for jobs with their own Jenkinsfile
 
 A job that cannot use one of the pipeline steps still takes the common parts from the library instead of copying

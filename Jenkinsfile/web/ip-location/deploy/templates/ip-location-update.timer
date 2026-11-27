@@ -1,0 +1,12 @@
+[Unit]
+Description=Check for IP Location provider updates daily
+
+[Timer]
+OnCalendar=*-*-* 03:20:00 UTC
+RandomizedDelaySec=45min
+AccuracySec=1min
+Persistent=true
+Unit=ip-location-update.service
+
+[Install]
+WantedBy=timers.target

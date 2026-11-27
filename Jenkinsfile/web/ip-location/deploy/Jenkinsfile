@@ -1,0 +1,153 @@
+def copyReviewedBundle() {
+    def archive = "source/artifacts/ip-location-${env.IPLOC_COMMIT}-arm64.tar.gz"
+    copyArtifacts(projectName: "/${env.RELEASE_JOB}", selector: specific(env.IPLOC_RELEASE_BUILD),
+                  filter: "${archive},${archive}.sha256", target: 'incoming', fingerprintArtifacts: true)
+}
+
+def newJobWithoutParameters() {
+    env.BUILD_NUMBER == '1' && !params.RELEASE_BUILD && !params.COMMIT && !params.ARCHIVE_SHA256 && !params.VERSION
+}
+
+pipeline {
+    agent none
+
+    options {
+        skipDefaultCheckout()
+        timestamps()
+        disableConcurrentBuilds()
+        disableRestartFromStage()
+        timeout(time: 75, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '15'))
+    }
+
+    parameters {
+        choice(name: 'MODE', choices: ['verify-only', 'commission-origin', 'activate-production'],
+               description: 'Verify a release, commission the private origin and TLS, or activate public HTTPS')
+        string(name: 'RELEASE_BUILD', defaultValue: '', trim: true,
+               description: 'Successful web/ip-location/release build number')
+        string(name: 'COMMIT', defaultValue: '', trim: true, description: 'Full reviewed release commit SHA')
+        string(name: 'ARCHIVE_SHA256', defaultValue: '', trim: true, description: 'Reviewed release artifact SHA-256')
+        string(name: 'VERSION', defaultValue: '', trim: true, description: 'Reviewed ip-location version, e.g. 0.1.0')
+    }
+
+    environment {
+        TOOLS = 'pipeline-source/Jenkinsfile/web/ip-location/deploy'
+        RELEASE_JOB = 'web/ip-location/release'
+    }
+
+    stages {
+        stage('Initialize Jenkins parameters') {
+            when { expression { newJobWithoutParameters() } }
+            steps {
+                echo 'Deployment parameters initialized. Select the exact reviewed release in Build with Parameters.'
+            }
+        }
+        stage('Prepare the reviewed Linux ARM64 release') {
+            when { beforeAgent true; expression { !newJobWithoutParameters() } }
+            agent { label 'ssh-agent-with-docker' }
+            stages {
+                stage('Verify the selected artifact') {
+                    steps {
+                        deleteDir()
+                        dir('pipeline-source') {
+                            checkout changelog: false, poll: false, scm: scm
+                        }
+                        script {
+                            if (!(params.MODE in ['verify-only', 'commission-origin', 'activate-production']) ||
+                                    !(params.RELEASE_BUILD ==~ /[1-9][0-9]{0,8}/) || !(params.COMMIT ==~ /[0-9a-f]{40}/) ||
+                                    !(params.ARCHIVE_SHA256 ==~ /[0-9a-f]{64}/) || !(params.VERSION ==~ /[0-9][0-9A-Za-z.+-]{0,39}/)) {
+                                error('Provide the reviewed successful build number, full commit, archive SHA-256 and version.')
+                            }
+                            env.IPLOC_MODE = params.MODE
+                            env.IPLOC_RELEASE_BUILD = params.RELEASE_BUILD
+                            env.IPLOC_COMMIT = params.COMMIT
+                            env.IPLOC_ARCHIVE_SHA256 = params.ARCHIVE_SHA256
+                            env.IPLOC_VERSION = params.VERSION
+                            def release = timeout(time: 2, unit: 'MINUTES') {
+                                waitForBuild(runId: "${env.RELEASE_JOB}#${env.IPLOC_RELEASE_BUILD}",
+                                             propagate: false, propagateAbort: false)
+                            }
+                            if (release.result != 'SUCCESS' || release.number.toString() != env.IPLOC_RELEASE_BUILD) {
+                                error('The selected release build must have result SUCCESS.')
+                            }
+                            env.IPLOC_ARCHIVE = "incoming/source/artifacts/ip-location-${env.IPLOC_COMMIT}-arm64.tar.gz"
+                            copyReviewedBundle()
+                        }
+                        sh '''#!/usr/bin/env bash
+set -euo pipefail
+mkdir deploy-evidence
+git -C pipeline-source rev-parse HEAD > deploy-evidence/pipeline-commit.txt
+python3 "$TOOLS/release_ops.py" worker verify-only "$IPLOC_RELEASE_BUILD" "$IPLOC_COMMIT" \\
+  "$IPLOC_ARCHIVE_SHA256" "$IPLOC_VERSION" --archive "$IPLOC_ARCHIVE" > deploy-evidence/candidate.json
+'''
+                    }
+                }
+                stage('Check public DNS') {
+                    when { expression { params.MODE == 'activate-production' } }
+                    steps {
+                        sh '''#!/usr/bin/env bash
+set -euo pipefail
+python3 "$TOOLS/release_ops.py" edge activate-production "$IPLOC_RELEASE_BUILD" "$IPLOC_COMMIT" \\
+  "$IPLOC_ARCHIVE_SHA256" "$IPLOC_VERSION" > deploy-evidence/public-dns.json
+'''
+                    }
+                }
+                stage('Retain the trusted deployment tools') {
+                    when { expression { params.MODE in ['commission-origin', 'activate-production'] } }
+                    steps {
+                        stash name: 'reviewed-deploy-tools', includes: "${env.TOOLS}/**"
+                    }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'deploy-evidence/*.json,deploy-evidence/*.txt', allowEmptyArchive: true
+                }
+                cleanup {
+                    deleteDir()
+                }
+            }
+        }
+
+        stage('Approve origin changes') {
+            when { expression { params.MODE in ['commission-origin', 'activate-production'] && !newJobWithoutParameters() } }
+            steps {
+                script {
+                    def summary = params.MODE == 'commission-origin' ?
+                        'Install/start the private DB-IP-capable service and updater timer. Prepare the dedicated origin DNS-01 certificate and HTTPS vhost.' :
+                        'Activate the public service after the reviewed DNS-only CNAME and HAProxy SNI route are in place.'
+                    timeout(time: 30, unit: 'MINUTES') {
+                        input message: "${summary} Target: https://ip.maksonlee.com. ${env.RELEASE_JOB} #${env.IPLOC_RELEASE_BUILD}, " +
+                            "commit ${env.IPLOC_COMMIT}, version ${env.IPLOC_VERSION}, archive SHA-256 ${env.IPLOC_ARCHIVE_SHA256}."
+                    }
+                }
+            }
+        }
+
+        stage('Apply approved changes and verify') {
+            when { beforeAgent true; expression { params.MODE in ['commission-origin', 'activate-production'] && !newJobWithoutParameters() } }
+            agent { label 'ssh-agent-with-docker' }
+            steps {
+                deleteDir()
+                unstash 'reviewed-deploy-tools'
+                script {
+                    copyReviewedBundle()
+                }
+                sh '''#!/usr/bin/env bash
+set -euo pipefail
+mkdir deploy-evidence
+python3 "$TOOLS/release_ops.py" worker "$IPLOC_MODE" "$IPLOC_RELEASE_BUILD" "$IPLOC_COMMIT" \\
+  "$IPLOC_ARCHIVE_SHA256" "$IPLOC_VERSION" --archive "$IPLOC_ARCHIVE" > deploy-evidence/deployment.json
+'''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'deploy-evidence/deployment.json', allowEmptyArchive: true
+                }
+                cleanup {
+                    deleteDir()
+                }
+            }
+        }
+    }
+}

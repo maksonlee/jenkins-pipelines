@@ -1,0 +1,31 @@
+[Unit]
+Description=IP Location web service
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ip-location
+Group=ip-location
+WorkingDirectory=/opt/ip-location/current
+ExecStart=/opt/ip-location/current/ip-location serve --config /etc/ip-location/config.toml
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0077
+Environment=RUST_LOG=ip_location=info
+SyslogIdentifier=ip-location
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadOnlyPaths=/etc/ip-location /var/lib/ip-location
+InaccessiblePaths=-/etc/ip-location/secrets
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

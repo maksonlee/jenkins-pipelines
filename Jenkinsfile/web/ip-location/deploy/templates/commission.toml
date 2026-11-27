@@ -1,0 +1,63 @@
+# Install a copy reviewed for the target host as /etc/ip-location/config.toml.
+# Keep secrets out of this file.
+schema_version = 1
+
+[server]
+listen = "127.0.0.1:38171"
+public_base_url = "https://ip.maksonlee.com"
+static_dir = "/opt/ip-location/current/web"
+
+[server.proxy]
+# Enable ONLY after the selected proxy overwrites X-Forwarded-For with one
+# validated client address and the application remains bound to loopback.
+# First release supports one trusted proxy hop, not an arbitrary header chain.
+trust_x_forwarded_for = false
+trusted_proxy_cidrs = []
+# Reviewed single-host production example:
+# trust_x_forwarded_for = true
+# trusted_proxy_cidrs = ["127.0.0.1/32"]
+
+[data]
+root = "/var/lib/ip-location"
+manifest_poll_seconds = 5
+
+[selection]
+location_order = ["dbip", "maxmind"]
+network_order = ["dbip", "maxmind"]
+improve_partial_location = true
+
+[providers.dbip]
+enabled = true
+# Freshness policy, measured from each MMDB build timestamp, not download time.
+warn_age_days = 45
+max_age_days = 75
+
+[providers.maxmind]
+enabled = false
+warn_age_days = 7
+max_age_days = 14
+# update-data reads IPLOC_MAXMIND_ACCOUNT_ID_FILE and
+# IPLOC_MAXMIND_LICENSE_KEY_FILE, paths supplied by the credential drop-in.
+# serve reads eligible local datasets and MUST NOT require download credentials.
+
+[circuit_breaker]
+failure_threshold = 3
+open_seconds = 60
+
+[limits]
+ip_input_max_chars = 64
+lookup_requests_per_minute = 60
+lookup_burst = 10
+lookup_concurrency = 32
+
+[map]
+# Public, allowlisted browser settings only. Never put download credentials here.
+enabled = false
+# Set these only after choosing a permitted tile service:
+# tile_url_template = "https://YOUR_TILE_SERVICE/{z}/{x}/{y}.png"
+# attribution = "Required attribution for the chosen map data and tile provider"
+# max_zoom = 10
+
+# Operational, freshness and licensing eligibility are separate checks.
+# An earlier legal expiry always overrides the max_age_days policy.
+# Provider manifests live at data.root/providers/<provider>/current.json.

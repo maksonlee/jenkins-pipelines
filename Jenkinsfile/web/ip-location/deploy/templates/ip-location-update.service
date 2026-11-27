@@ -1,0 +1,25 @@
+[Unit]
+Description=Refresh IP Location provider data
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ip-location
+Group=ip-location
+WorkingDirectory=/opt/ip-location/current
+ExecStart=/opt/ip-location/current/ip-location update-data --config /etc/ip-location/config.toml
+TimeoutStartSec=20min
+UMask=0077
+SyslogIdentifier=ip-location-update
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadOnlyPaths=/etc/ip-location
+ReadWritePaths=/var/lib/ip-location
+InaccessiblePaths=-/etc/ip-location/secrets
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
