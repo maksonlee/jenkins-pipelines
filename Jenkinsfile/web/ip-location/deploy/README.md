@@ -40,21 +40,58 @@ unprivileged `ip-location` account.
 Releases are staged under `/opt/ip-location/releases/<commit>-<release-build>`. The root-owned
 `/opt/ip-location/current` link records the active slot. A failed activation restores its
 previous link, config and service state. The database stays under `/var/lib/ip-location`.
+On later deployments and rollbacks, the candidate verifies the installed data before the
+release switch. Eligible local data can be deployed during a provider download outage.
+If no database file exists for any enabled provider, the candidate performs a bootstrap
+through the existing updater unit and its credentials before verification. A temporary
+runtime override selects this executable and the previous timer state is restored after
+the bootstrap. If some data exists but fails verification, diagnose it before retrying.
 Check `systemctl status ip-location.service ip-location-update.timer` and the updater journal
 on the origin for diagnosis. A newly issued valid certificate can stay on disk for a retry.
 
+## Change the installed unit or vhost templates
+
+The deploy job checks root ownership, permissions and the reviewed contents of existing unit
+files and the dedicated vhost. When a reviewed template changes, arrange a maintenance window
+with the origin operator. Compare the installed file with the previously deployed template and
+review local differences before proceeding. Back up only the affected files with ownership and
+modes preserved, and record the service and timer state. Install the reviewed replacement as
+`root:root` with mode `0644`. Leave the shared Nginx listener and proxy configuration, dedicated
+site symlink, service credential drop-ins and the app config in place.
+
+For systemd changes, run `systemd-analyze verify` on the three IP Location units and
+`systemctl daemon-reload`, then restart the affected running units or timer as the reviewed
+change requires. For Nginx changes, run `nginx -t` before `systemctl reload nginx`. Check the
+service, timer, local readiness and public HTTPS, then run the approved deploy with the reviewed
+templates. If validation fails, restore the backup and repeat the relevant validation and
+reload or restart. Recheck the prior readiness and public HTTPS before ending the window.
+
+## Enable and validate MaxMind
+
 DB-IP-only commissioning provides working lookup with reduced provider redundancy. Once
 authorized MaxMind files can be downloaded, install the application repo's existing systemd
-credential drop-in using protected account ID and key files. Enable `providers.maxmind` in the
-root-controlled configuration. Run `systemctl daemon-reload`, start `ip-location-update.service`,
-then run this independent acceptance check as the service account before recording both suppliers
-as verified. Test provider failover and recovery separately in isolation.
+credential drop-in using protected, root-owned account ID and key files. Enable
+`providers.maxmind` in the root-controlled configuration. Reload units and start the updater.
+Once the independent data check passes, restart the web service so it reads the new settings.
 
 ```sh
+sudo systemctl daemon-reload
+sudo systemctl start ip-location-update.service
 sudo -u ip-location /opt/ip-location/current/ip-location verify-data \
   --config /etc/ip-location/config.toml --require-all-providers
+sudo systemctl restart ip-location.service
 ```
 
-Later deploys respect the enabled provider settings and require both independent checks if
-MaxMind is enabled. The scheduled updater's first actual timer-run result is a separate
-operational check.
+Check the restarted service's journal for validated MaxMind City and ASN generations. Verify
+local readiness and public lookup for IPv4 and IPv6, and exercise provider failover and recovery
+with actual authorized data in isolation. Record two-supplier acceptance after those serving
+checks pass. Later deploys preserve the enabled provider settings and require both independent
+checks if MaxMind is enabled.
+
+## Check the scheduled update
+
+Check `systemctl list-timers ip-location-update.timer` and the updater journal after the next
+scheduled trigger. Compare the timer's last-trigger time with the updater's timestamp and exit
+status, then run `verify-data` for the enabled providers. A successful deploy or manually started
+update does not establish scheduled operation. Investigate an overdue trigger or unsuccessful
+update while the serving databases are still eligible.

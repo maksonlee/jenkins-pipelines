@@ -95,8 +95,13 @@ class DeploymentTest(unittest.TestCase):
         units.mkdir()
         data.mkdir()
         (data / "published-current").write_text("preserve")
+        updater_started = []
 
         def command(*args, **kwargs):
+            if args == ("systemctl", "start", ops.UPDATE):
+                self.assertEqual(switch.call_args.args, (slot,))
+                self.assertTrue(config.is_file())
+                updater_started.append(True)
             return {"runuser": "ip-location 0.1.0", "systemd-analyze": ""}.get(args[0], "not-found")
 
         def atomic_file(path, content, *args):
@@ -114,6 +119,7 @@ class DeploymentTest(unittest.TestCase):
                 self.assertRaisesRegex(ValueError, "City missing"):
             ops.activate(self.identity, slot, {}, templates)
         self.assertEqual([call.args[0] for call in switch.call_args_list], [slot, None])
+        self.assertEqual(updater_started, [True])
         self.assertFalse(config.exists())
         self.assertEqual(list(units.iterdir()), [])
         self.assertEqual((data / "published-current").read_text(), "preserve")
@@ -124,22 +130,34 @@ class DeploymentTest(unittest.TestCase):
         slot = self.root / "candidate"
         units, config = self.root / "units", self.root / "config.toml"
         units.mkdir()
-        config.write_bytes(self.profile)
+        profile = self.profile.replace(b'/var/lib/ip-location', str(self.root).encode())
+        config.write_bytes(profile)
         templates = {path.name: path.read_text() for path in (PROJECT / "templates").iterdir()}
         for name in (ops.WEB, ops.UPDATE, ops.TIMER):
-            (units / name).write_text(templates[name])
+            (units / name).write_bytes(templates[name].encode())
+        database = self.root / "providers" / "dbip" / "location" / ("a" * 64) / "database.mmdb"
+        database.parent.mkdir(parents=True)
+        database.touch()
 
         def atomic_file(path, content, *args):
             path.write_bytes(content)
 
         def command(*args, **kwargs):
+            if args == ("systemctl", "start", ops.UPDATE):
+                self.fail("Existing data should allow activation without a provider download")
             return "ip-location 0.1.0" if args[0] == "runuser" else "active"
+
+        def verify_data(binary, maxmind):
+            self.assertEqual(binary, slot / "ip-location")
+            self.assertFalse(maxmind)
+            switch.assert_not_called()
+            return []
 
         def fail_public():
             self.assertIn(b'listen = "127.0.0.1:38170"', config.read_bytes())
             raise ValueError("client IP mismatch")
 
-        with patch.multiple(ops, UNITS=units, CONFIG=config), patch.object(ops, "checked_metadata"), \
+        with patch.multiple(ops, UNITS=units, CONFIG=config, DATA=self.root), patch.object(ops, "checked_metadata"), \
                 patch.object(ops, "current_release", return_value=previous), \
                 patch.object(ops, "service_account", return_value=(1000, 1000)), \
                 patch.object(ops, "prepare_directory"), patch.object(ops, "command", side_effect=command), \
@@ -147,11 +165,46 @@ class DeploymentTest(unittest.TestCase):
                 patch.object(ops, "verify_systemd_identity"), \
                 patch.object(ops, "service_state", return_value=(True, True)), patch.object(ops, "restore_state"), \
                 patch.object(ops, "assert_http"), patch.object(ops, "local_health") as health, \
-                patch.object(ops, "verify_data", return_value=[]), self.assertRaisesRegex(ValueError, "client IP mismatch"):
+                patch.object(ops, "verify_data", side_effect=verify_data), self.assertRaisesRegex(ValueError, "client IP mismatch"):
             ops.activate(self.identity, slot, {}, templates, fail_public)
         self.assertEqual([call.args[0] for call in switch.call_args_list], [slot, previous])
-        self.assertEqual(config.read_bytes(), self.profile)
+        self.assertEqual(config.read_bytes(), profile)
         health.assert_called_once_with("http://127.0.0.1:38171")
+
+    def test_empty_slot_bootstrap_uses_candidate_and_restores_timer_after_updater_failure(self):
+        runtime = self.root / "runtime"
+        runtime.mkdir()
+        override = runtime / f"{ops.UPDATE}.d" / "90-ip-location-bootstrap.conf"
+        candidate = self.root / "candidate" / "ip-location"
+        lifecycle = []
+
+        def command(*args, **kwargs):
+            lifecycle.append(args)
+            if args == ("systemctl", "show", "-p", "ActiveState", "--value", ops.UPDATE):
+                return "inactive"
+            if args == ("systemctl", "show", "-p", "ExecStart", "--value", ops.UPDATE):
+                invocation = f"{candidate} update-data --config {ops.CONFIG}"
+                self.assertEqual(override.read_text(), f"[Service]\nExecStart=\nExecStart={invocation}\n")
+                return f"{{ argv[]={invocation} ; ignore_errors=no }}"
+            if args == ("systemctl", "start", ops.UPDATE):
+                raise ValueError("updater returned failure")
+            return ""
+
+        def prepare_directory(path, mode):
+            path.mkdir(mode=mode)
+
+        def atomic_file(path, content, *args):
+            path.write_bytes(content)
+
+        with patch.object(ops, "RUNTIME_UNITS", runtime), patch.object(ops, "command", side_effect=command), \
+                patch.object(ops, "prepare_directory", side_effect=prepare_directory), \
+                patch.object(ops, "atomic_file", side_effect=atomic_file), \
+                self.assertRaisesRegex(ValueError, "updater returned failure"):
+            ops.bootstrap_empty_slot(candidate, timer_active=True)
+
+        self.assertFalse(override.exists())
+        self.assertEqual(lifecycle[0], ("systemctl", "stop", ops.TIMER))
+        self.assertEqual(lifecycle[-2:], [("systemctl", "daemon-reload"), ("systemctl", "start", ops.TIMER)])
 
     def test_deploy_job_checks_release_and_approval_before_origin_access(self):
         pipeline = (PROJECT / "Jenkinsfile").read_text()

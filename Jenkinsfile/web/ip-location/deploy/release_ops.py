@@ -40,6 +40,7 @@ INSTALL = Path("/opt/ip-location")
 CONFIG = Path("/etc/ip-location/config.toml")
 DATA = Path("/var/lib/ip-location")
 UNITS = Path("/etc/systemd/system")
+RUNTIME_UNITS = Path("/run/systemd/system")
 NGINX = Path("/etc/nginx")
 CERTBOT = Path("/etc/letsencrypt")
 WEB = "ip-location.service"
@@ -380,6 +381,43 @@ def verify_data(binary, maxmind):
     return checks
 
 
+def has_local_databases(maxmind):
+    providers = ("dbip", "maxmind") if maxmind else ("dbip",)
+    return any(
+        path.is_file()
+        for provider in providers
+        for path in (DATA / "providers" / provider).glob("*/*/database.mmdb")
+    )
+
+
+def bootstrap_empty_slot(binary, timer_active):
+    """Run the candidate in the existing updater sandbox without switching the public release."""
+    directory = RUNTIME_UNITS / f"{UPDATE}.d"
+    override = directory / "90-ip-location-bootstrap.conf"
+    prepare_directory(directory, 0o755)
+    require(not os.path.lexists(override), "A previous IP Location data bootstrap override needs review")
+    if timer_active:
+        command("systemctl", "stop", TIMER)
+    installed = False
+    try:
+        state = command("systemctl", "show", "-p", "ActiveState", "--value", UPDATE)
+        require(state in ("inactive", "failed"), "An IP Location dataset update is already running")
+        invocation = f"{binary} update-data --config {CONFIG}"
+        atomic_file(override, f"[Service]\nExecStart=\nExecStart={invocation}\n".encode(), 0o644)
+        installed = True
+        command("systemctl", "daemon-reload")
+        actual = command("systemctl", "show", "-p", "ExecStart", "--value", UPDATE)
+        require(actual.count("argv[]=") == 1 and f"argv[]={invocation} ;" in actual,
+                "The updater did not load the candidate bootstrap override")
+        command("systemctl", "start", UPDATE, timeout=1220)
+    finally:
+        if installed:
+            override.unlink()
+            command("systemctl", "daemon-reload")
+        if timer_active:
+            command("systemctl", "start", TIMER)
+
+
 def service_state(unit):
     enabled = command("systemctl", "is-enabled", unit, allowed=(0, 1, 3, 4))
     active = command("systemctl", "is-active", unit, allowed=(0, 3, 4))
@@ -550,7 +588,10 @@ def activate(args, slot, candidate, templates, external=None):
         verify_systemd_identity()
         states = {unit: service_state(unit) for unit in (WEB, TIMER)}
         require(previous is not None or not any(active for _, active in states.values()), "Unexpected running IP Location unit")
-        command("systemctl", "start", UPDATE, timeout=1220)
+        if previous is None:
+            command("systemctl", "start", UPDATE, timeout=1220)
+        elif not has_local_databases(maxmind):
+            bootstrap_empty_slot(binary, states[TIMER][1])
         checks = verify_data(binary, maxmind)
 
         if previous is not None:
