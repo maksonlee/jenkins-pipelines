@@ -2,7 +2,7 @@
 
 // Manual deployment of the maksonlee/taiwan-bus-app backend to its home host.
 //
-// The repository's deploy/home-osm/deploy.sh is the only installer: it checks the HAProxy edge contract, runs the
+// The repository's deploy/home-osm/deploy.sh is the only installer: it checks the proxy's edge contract, runs the
 // backend tests, uploads a stage, snapshots the live release, stops the services, applies migrations, restarts,
 // verifies and rolls back on failure. This job runs it from a clean checkout of a commit on main, after a manual
 // approval. verify-only runs the same edge check and tests and reports what is deployed, without touching the host.
@@ -56,10 +56,11 @@ set -euo pipefail
 python3 -m venv venv
 venv/bin/python -m pip install --quiet --disable-pip-version-check -r source/requirements-dev.txt -c source/constraints.txt
 export PATH="$WORKSPACE/venv/bin:$PATH"
-ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$PROXY_HOST" \\
-  'sudo -n /usr/bin/systemctl is-active --quiet haproxy && sudo -n /usr/sbin/haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null && sudo -n /usr/bin/cat /etc/haproxy/haproxy.cfg' |
+# The repository reads the configuration of whatever fronts the proxy (nginx since 2026-11-28, HAProxy before) and
+# checks it; commits older than that day have no read-active-config.sh and fail here.
+source/deploy/home-proxy/read-active-config.sh "$PROXY_HOST" |
   source/deploy/home-proxy/verify-active-config.sh - > /dev/null
-echo 'HAProxy edge contract: OK'
+echo 'Edge contract: OK'
 (cd source && python -m unittest discover -s tests > ../backend-tests.log 2>&1) || { tail -60 backend-tests.log; exit 1; }
 grep -E '^(Ran [0-9]+ tests|OK)' backend-tests.log
 deployed=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=12 "$DEPLOY_HOST" \\

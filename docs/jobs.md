@@ -78,7 +78,8 @@ Jobs that do not follow the layout yet:
   health on loopback and in public. An unhealthy start puts the previous binary back; migrations are not undone.
   nginx, the public pages, the configuration and Vault are not managed.
 - `flutter/taiwan-bus-app/backend-deploy`: runs the repository's own `deploy/home-osm/deploy.sh` from a clean
-  checkout of a commit on `main`, with the agent's SSH key. `verify-only` checks the HAProxy edge contract, runs
+  checkout of a commit on `main`, with the agent's SSH key. `verify-only` checks the proxy's edge contract (the
+  repository's `deploy/home-proxy/read-active-config.sh` and `verify-active-config.sh`: nginx since 2026-11-28), runs
   the backend tests in a fresh virtual environment and compares the commit with the host's `DEPLOYED_REVISION`.
   `deploy-production` then asks for approval and runs the script, which stops the backend for about a minute,
   applies migrations and rolls back by itself. There is no stage-only mode, because the script has none.
