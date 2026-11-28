@@ -162,13 +162,15 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 def fetch(origin, path, expected=200, headers=None):
+    """Return the body of a response whose status is `expected`, an int or a tuple of allowed ints."""
+    allowed = expected if isinstance(expected, tuple) else (expected,)
     opener = build_opener(ProxyHandler({}), NoRedirect())
     try:
         response = opener.open(Request(origin + path, headers=headers or {}), timeout=5)
     except HTTPError as error:
         response = error
     with response:
-        require(response.status == expected, f"Unexpected HTTP {response.status} for {origin}{path.split('?')[0]}")
+        require(response.status in allowed, f"Unexpected HTTP {response.status} for {origin}{path.split('?')[0]}")
         body = response.read(5 * 1024 * 1024 + 1)
         require(len(body) <= 5 * 1024 * 1024, "Oversized smoke response")
         return body
@@ -226,8 +228,12 @@ def assert_http(origin, candidate, public=False):
     require(hashlib.sha256(fetch(origin, asset)).hexdigest() == hashes.get(f"web{asset}"),
             "Serving a different UI entry than the release")
     require(json.loads(fetch(origin, "/api/v1/config"))["schema_version"] == "1.0", "Invalid public API configuration")
+    # The public path passes the origin's ModSecurity, which refuses some sensitive file names such as /config.toml
+    # (CRS 930130) with 403 before they reach the app. Either way nothing is served. The private listener has no WAF
+    # and must give the app's own 404.
+    hidden = (403, 404) if public else 404
     for forbidden in ("/api/v1/deploy-probe-unknown", "/config.toml", "/release.json", "/ip-location"):
-        fetch(origin, forbidden, 404)
+        fetch(origin, forbidden, hidden)
     for address in ("1.1.1.1", "2606:4700:4700::1111"):
         result = json.loads(fetch(origin, "/api/v1/lookup?" + urlencode({"ip": address})))
         require(result["status"] == "ok" and result["ip"] == address and

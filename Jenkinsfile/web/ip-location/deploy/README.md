@@ -31,7 +31,10 @@ unprivileged `ip-location` account.
    after the DNS/HAProxy changes. The service moves to `127.0.0.1:38170` and trusts one
    address supplied only by the local Nginx hop. The Jenkins worker checks the public
    certificate on each published address, matching release files, hidden health and
-   administrative paths, and both address families for public lookup. It compares
+   administrative paths, and both address families for public lookup. The origin's
+   ModSecurity may refuse a hidden file name such as `/config.toml` with 403 before it
+   reaches the app, so the public check accepts 403 or 404 there; the private listener
+   must give the app's 404. It compares
    `/api/v1/me` with the same-family address of this QA client measured independently
    over verified HTTPS, with and without a spoofed forwarding header. The client address
    stays in memory. The origin waits for verification from the worker and restores the

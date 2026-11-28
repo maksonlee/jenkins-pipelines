@@ -9,6 +9,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs, urlsplit
 
 
 PROJECT = Path(__file__).resolve().parents[2] / "Jenkinsfile/web/ip-location/deploy"
@@ -230,6 +231,52 @@ class DeploymentTest(unittest.TestCase):
         self.assertEqual(context.wrap_socket.call_count, 2)
         self.assertEqual(context.wrap_socket.call_args.kwargs, {"server_hostname": "ip.maksonlee.com"})
         sleep.assert_called_once()
+
+    def test_public_hidden_files_may_be_refused_by_the_waf_but_the_private_listener_needs_404(self):
+        index = b'<script type="module" src="/assets/script-12345678.js"></script>'
+        script = b"javascript"
+        candidate = {"files": {"web/index.html": ops.hashlib.sha256(index).hexdigest(),
+                               "web/assets/script-12345678.js": ops.hashlib.sha256(script).hexdigest()}}
+        client = "8.8.4.4"
+
+        class Response(io.BytesIO):
+            def __init__(self, status, body=b""):
+                super().__init__(body)
+                self.status = status
+
+        def site(config_status):
+            def respond(request, timeout):
+                url = urlsplit(request.full_url)
+                public = url.hostname == ops.HOST
+                if url.path in ("/health", "/health/live", "/health/ready"):
+                    return Response(404 if public else 200)
+                if url.path == "/config.toml":
+                    return Response(config_status)
+                if url.path in ("/api/v1/deploy-probe-unknown", "/release.json", "/ip-location"):
+                    return Response(404)
+                if url.path == "/api/v1/lookup":
+                    ip = parse_qs(url.query)["ip"][0]
+                    component = {"status": "ok", "source": {"provider": "dbip"}}
+                    return Response(200, json.dumps({
+                        "status": "ok", "ip": ip, "ip_version": ops.ipaddress.ip_address(ip).version,
+                        "location": component, "network": component}).encode())
+                bodies = {"/": index, "/assets/script-12345678.js": script,
+                          "/api/v1/config": b'{"schema_version": "1.0"}', "/api/v1/me": json.dumps({"ip": client}).encode()}
+                return Response(200, bodies[url.path])
+            return MagicMock(open=respond)
+
+        private = f"http://{ops.LOOPBACK}:{ops.PRIVATE_PORT}"
+        with patch.object(ops, "external_client_ip", return_value=ops.ipaddress.ip_address(client)):
+            with patch.object(ops, "build_opener", return_value=site(403)):
+                ops.assert_http(ops.PUBLIC_URL, candidate, public=True)
+                with self.assertRaisesRegex(ValueError, f"Unexpected HTTP 403 for {private}/config.toml"):
+                    ops.assert_http(private, candidate)
+            with patch.object(ops, "build_opener", return_value=site(404)):
+                ops.assert_http(ops.PUBLIC_URL, candidate, public=True)
+                ops.assert_http(private, candidate)
+            with patch.object(ops, "build_opener", return_value=site(200)), \
+                    self.assertRaisesRegex(ValueError, f"Unexpected HTTP 200 for {ops.PUBLIC_URL}/config.toml"):
+                ops.assert_http(ops.PUBLIC_URL, candidate, public=True)
 
     def test_origin_tls_stops_if_reloaded_workers_never_serve_candidate(self):
         context = MagicMock()
